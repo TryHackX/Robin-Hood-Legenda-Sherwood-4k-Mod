@@ -19,6 +19,7 @@
 #include "test_harness.h"
 #include "settings_menu.h"
 #include "ui_scale.h"
+#include "view_zoom.h"
 #include "watchdog.h"
 #include "ddm/ddm.h"
 #include "ddm/ddm_hd.h"
@@ -245,6 +246,7 @@ namespace {
         // Phase 4: Widescreen/HD/1440p/4K Memory Patching, CPU Affinity, LAA/SSE2 Memory & Audio Fixes
         WidescreenPatch::Initialize();
         UiScale::Install();
+        ViewZoom::Install();        // after UiScale: it checks the original bytes of CenterCameraOn
         SettingsMenu::Install();
         CpuOptimizer::Initialize();
         MemoryOpt::Initialize();

@@ -236,13 +236,13 @@ Do sprawdzenia przy okazji: czy miganie ikon akcji ma teraz właściwe tempo; po
      lewym lub prawym, płynnie w każdej klatce (`MapDragCamera=1`, panel F10), ✔ odprawa z kilkoma stronami (pergamin
      zostawał mały od 2. strony), ✔ **opcje gry: prawdziwy procesor i pamięć** (pełna nazwa procesora
      i pamięć ponad 4 GB zamiast „GenuineIntel” i „4095 Mb”).
-   - ☐ **Zoom** (zgłoszenie 2026-11-14 ~18:30): czarny pas przy oddaleniu 1,0 na poziomach węższych niż 2560 px
-     (skutek dopuszczenia oddalenia 2,0 → 1,0 na każdym poziomie), brak przybliżenia ponad 2,0, tylko dwa kroki.
-     Silnik rysuje postacie tylko przy 0,5 / 1 / 2 (osobne gałęzie, `docs\OBJECT_RENDER.md`), więc płynny zoom = lupa
-     w prezenterze: zdjęcie świata przed rysowaniem okien (piksele różne od zdjęcia = interfejs, zostaje 1×), świat
-     powiększany w shaderze, myszka dla świata przeliczana (`ScreenToWorld` 0x004DEE70 i inne miejsca wyboru obiektów —
-     do sprawdzenia), kadr przesuwany proporcjonalnie do położenia kamery (brzegi mapy osiągalne), poziom silnika
-     1,0 poniżej 2,0 i 2,0 (HD) od 2,0 w górę. Dopasowanie „bez pasa” = lupa ×(2560/szerokość mapy) przy 1,0.
+   - ✔ **Płynny zoom — lupa** (zgłoszenie 2026-11-14 ~18:30: czarny pas przy oddaleniu, brak przybliżenia ponad
+     2,0, tylko dwa kroki; „Tak, rób zoom”): `SmoothZoom=1`, kroki 115 %, od „poziom wypełnia ekran” do 4,0; świat
+     powiększany w prezenterze, interfejs 1×, myszka przeliczana, brzegi poziomu osiągalne, minimapa pokazuje
+     fragment. Opis: `docs\HD_MODE.md` §7 „Płynny zoom”. ☐ zoom kółkiem względem kursora, ☐ tło menu Esc przy
+     powiększeniu lupy.
+   - ✔ **Wydanie na GitHubie** (2026-11-14): v1.0.0 (README po angielsku), paczki grafiki HD jako osobne wydanie
+     (7 plików ZIP < 2 GB; magazyn postaci w dwóch częściach — mod czyta `sprites.dat` + `sprites.dat.2`).
 5. ◐ Klatki pośrednie animacji postaci (prośba użytkownika; „jak się nie uda, trudno"): eksperyment zakończony
    powodzeniem — RIFE v4.26 daje dobre klatki (`docs\HD_MODE.md` §5a). ☐ Wdrożenie w grze jako przełącznik
    (generowanie par + podmiana w klatkach między tikami) — po decyzji użytkownika. 2026-11-14 użytkownik zapytał, czy

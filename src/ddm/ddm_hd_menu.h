@@ -34,8 +34,11 @@ namespace DDM::HD::Menu {
     // BGRA: the backdrop without the dialog's own pictures (the frozen level picture, darkened as
     // the game does it), alpha = 255 where the game's backdrop shows the level, 0 where it holds
     // a picture of the dialog (the briefing's parchment) - those stay enlarged.
+    // show: what is shown where the backdrop shows (the world magnified as the smooth zoom showed
+    // it); nullptr = bgra itself. bgra stays what the frame is compared with.
     struct Backdrop {
         const uint32_t* bgra = nullptr;
+        const uint32_t* show = nullptr;
         int w = 0, h = 0;
         unsigned generation = 0;    // changes with the backdrop's content
     };

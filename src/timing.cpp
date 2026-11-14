@@ -14,6 +14,7 @@
 #include "ddm/ddm.h"
 #include "ddm/ddm_hd.h"
 #include "widescreen_patch.h"
+#include "view_zoom.h"
 
 #include <MinHook.h>
 #include <emmintrin.h>
@@ -352,7 +353,15 @@ namespace Timing {
                     }
                 }
             }
-            return o_ClampScrollDelta(pEngine, edx);
+            if (!pEngine || reinterpret_cast<uintptr_t>(_ReturnAddress()) != g_addrEngineClampScrollRet) {
+                return o_ClampScrollDelta(pEngine, edx);
+            }
+            // smooth zoom: what the camera cannot scroll any more (level edge) moves the shown part
+            auto* vel = reinterpret_cast<float*>(pEngine + 0x48B8);
+            const float wantX = vel[0], wantY = vel[1];
+            const uint8_t r = o_ClampScrollDelta(pEngine, edx);
+            if (wantX != vel[0] || wantY != vel[1]) ViewZoom::OnScrollClamped(wantX - vel[0], wantY - vel[1]);
+            return r;
         }
 
         // Precise hybrid wait for a given number of microseconds using Sleep(1) + _mm_pause()
@@ -466,6 +475,7 @@ namespace Timing {
 
             DDM::HD::OnGameTick();                 // HD background variants: hot keys, switches
             WidescreenPatch::OnGameTick(pEngine);  // HD view: levels start at the 2.0 zoom
+            ViewZoom::OnGameTick(pEngine);         // smooth zoom: level start, the engine's zoom level
 
             // Some maps are smaller than a high-resolution view; the engine then shows the map in
             // the top-left corner and black around it. Note it once per map / zoom change.

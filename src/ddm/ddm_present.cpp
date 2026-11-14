@@ -5,6 +5,7 @@
 #include "../settings_menu.h"
 #include "../test_harness.h"
 #include "../ui_scale.h"
+#include "../view_zoom.h"
 #include "ddm_hd_menu.h"
 
 #include <d3d11.h>
@@ -49,13 +50,25 @@ namespace {
         float mode;      // 0 = nearest, 1 = sharp bilinear, 2 = bilinear
         float layer;     // 1 = HD menu pictures (ddm_hd_menu.h) in t1 (originals) and t2 (HD)
                          // 2 = a mission's dialog: its backdrop (t3) at its own size
+                         // 3 = smooth zoom (view_zoom.h): the world (t4) magnified, the interface not
         float cropX, cropY;                  // where the texture's top-left pixel lies in the frame
         float fullX, fullY, fullW, fullH;    // the whole frame's rectangle on the output (layer 2)
+        float lupaM, lupaWorldH;             // layer 3: magnification, frame rows that hold the world
+        float lupaX, lupaY;                  // layer 3: frame position at the output's top-left corner
     };
 
-    // backdrop of a dialog in a mission (same format as the frame texture, frame-sized)
+    // the world before the mission's windows were drawn (layer 3), same format as the frame texture
+    ID3D11Texture2D*          g_snapTex = nullptr;
+    ID3D11ShaderResourceView* g_snapSrv = nullptr;
+    int g_snapW = 0, g_snapH = 0;
+
+    // backdrop of a dialog in a mission (same format as the frame texture, frame-sized); the shown
+    // version (the world magnified as the smooth zoom showed it) in a second texture
     ID3D11Texture2D*          g_backdropTex = nullptr;
     ID3D11ShaderResourceView* g_backdropSrv = nullptr;
+    ID3D11Texture2D*          g_backShowTex = nullptr;
+    ID3D11ShaderResourceView* g_backShowSrv = nullptr;
+    bool                      g_backShowOn = false;
     int      g_backdropW = 0, g_backdropH = 0;
     unsigned g_backdropGen = 0;
     std::vector<uint32_t> g_backdropRow8888;
@@ -81,23 +94,48 @@ namespace {
     // RGB565 value as recorded), the HD picture is shown instead.
     // Layer 2 (a dialog in a mission): where the enlarged frame shows a pixel of the dialog's
     // backdrop, the backdrop is shown at its own size instead - only the dialog is enlarged.
+    // Layer 3 (smooth zoom): where the frame pixel equals the world as it was before the windows
+    // were drawn, the output shows the world magnified (from the copy, so the interface is not
+    // magnified with it); elsewhere the frame pixel itself - the interface at its place.
     const char kPS[] =
         "Texture2D tex : register(t0);\n"
         "Texture2D<uint> layerOrig : register(t1);\n"
         "Texture2D layerHd : register(t2);\n"
         "Texture2D backdrop : register(t3);\n"
+        "Texture2D world : register(t4);\n"
+        "Texture2D backShow : register(t5);\n"
         "SamplerState smpPoint : register(s0);\n"
         "SamplerState smpLinear : register(s1);\n"
-        "cbuffer C : register(b0) { float2 texSize; float2 outSize; float mode; float layer; float2 cropOrigin; float4 full; };\n"
+        "cbuffer C : register(b0) { float2 texSize; float2 outSize; float mode; float layer; float2 cropOrigin; float4 full; float4 lupa; };\n"
         "uint Pack565(float3 c) {\n"
         "  return ((((uint)(c.r * 255.0 + 0.5)) >> 3) << 11) | ((((uint)(c.g * 255.0 + 0.5)) >> 2) << 5) | (((uint)(c.b * 255.0 + 0.5)) >> 3);\n"
         "}\n"
+        "float3 Filtered(Texture2D t, float2 texel, float2 scale) {\n"
+        "  if (mode < 0.5) return t.Sample(smpPoint, texel / texSize).rgb;\n"
+        "  if (mode > 1.5) return t.Sample(smpLinear, texel / texSize).rgb;\n"
+        "  float2 s = max(floor(scale), 1.0);\n"
+        "  float2 i = floor(texel); float2 f = texel - i;\n"
+        "  float2 region = 0.5 - 0.5 / s;\n"
+        "  float2 c = f - 0.5;\n"
+        "  float2 ff = (c - clamp(c, -region, region)) * s + 0.5;\n"
+        "  return t.Sample(smpLinear, (i + ff) / texSize).rgb;\n"
+        "}\n"
         "float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target {\n"
-        "  if (layer > 1.5) {\n"
+        "  if (layer > 2.5) {\n"
+        "    float2 fp = uv * texSize;\n"
+        "    if (fp.y < lupa.y) {\n"
+        "      int2 t = int2(min(floor(fp), texSize - 1.0));\n"
+        "      if (Pack565(tex.Load(int3(t, 0)).rgb) == Pack565(world.Load(int3(t, 0)).rgb)) {\n"
+        "        float2 wp = lupa.zw + fp / lupa.x;\n"
+        "        return float4(Filtered(world, wp, outSize / texSize * lupa.x), 1.0);\n"
+        "      }\n"
+        "    }\n"
+        "  } else if (layer > 1.5) {\n"
         "    int2 t = int2(min(floor(uv * texSize), texSize - 1.0));\n"
         "    float4 b = backdrop.Load(int3(t + int2(cropOrigin), 0));\n"
         "    if (b.a > 0.5 && Pack565(tex.Load(int3(t, 0)).rgb) == Pack565(b.rgb)) {\n"
         "      float2 u = (pos.xy - full.xy) / full.zw;\n"
+        "      if (lupa.x > 0.5) return float4(backShow.Sample(smpLinear, u).rgb, 1.0);\n"
         "      return float4(backdrop.Sample(smpLinear, u).rgb, 1.0);\n"
         "    }\n"
         "  } else if (layer > 0.5) {\n"
@@ -210,6 +248,9 @@ namespace {
     void ReleaseBackdrop() {
         SafeRelease(g_backdropSrv);
         SafeRelease(g_backdropTex);
+        SafeRelease(g_backShowSrv);
+        SafeRelease(g_backShowTex);
+        g_backShowOn = false;
         g_backdropW = g_backdropH = 0;
         g_backdropGen = 0;
     }
@@ -230,7 +271,9 @@ namespace {
             td.Usage = D3D11_USAGE_DEFAULT;
             td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
             if (FAILED(g_dev->CreateTexture2D(&td, nullptr, &g_backdropTex)) ||
-                FAILED(g_dev->CreateShaderResourceView(g_backdropTex, nullptr, &g_backdropSrv))) {
+                FAILED(g_dev->CreateShaderResourceView(g_backdropTex, nullptr, &g_backdropSrv)) ||
+                FAILED(g_dev->CreateTexture2D(&td, nullptr, &g_backShowTex)) ||
+                FAILED(g_dev->CreateShaderResourceView(g_backShowTex, nullptr, &g_backShowSrv))) {
                 ReleaseBackdrop();
                 return false;
             }
@@ -239,8 +282,54 @@ namespace {
         }
         if (g_backdropGen != bd.generation) {
             g_ctx->UpdateSubresource(g_backdropTex, 0, nullptr, bd.bgra, static_cast<UINT>(bd.w * 4), 0);
+            g_backShowOn = bd.show != nullptr;
+            if (g_backShowOn) g_ctx->UpdateSubresource(g_backShowTex, 0, nullptr, bd.show, static_cast<UINT>(bd.w * 4), 0);
             g_backdropGen = bd.generation;
         }
+        return true;
+    }
+
+    void ReleaseSnap() {
+        SafeRelease(g_snapSrv);
+        SafeRelease(g_snapTex);
+        g_snapW = g_snapH = 0;
+    }
+
+    // the world copy of the smooth zoom in a texture like the frame's; true = use it
+    bool PrepareSnap(const ViewZoom::View& v) {
+        if (!g_snapTex || g_snapW != v.w || g_snapH != v.h) {
+            ReleaseSnap();
+            D3D11_TEXTURE2D_DESC td{};
+            td.Width = static_cast<UINT>(v.w);
+            td.Height = static_cast<UINT>(v.h);
+            td.MipLevels = 1;
+            td.ArraySize = 1;
+            td.Format = g_has565 ? DXGI_FORMAT_B5G6R5_UNORM : DXGI_FORMAT_B8G8R8X8_UNORM;
+            td.SampleDesc.Count = 1;
+            td.Usage = D3D11_USAGE_DYNAMIC;
+            td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+            td.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+            if (FAILED(g_dev->CreateTexture2D(&td, nullptr, &g_snapTex)) ||
+                FAILED(g_dev->CreateShaderResourceView(g_snapTex, nullptr, &g_snapSrv))) {
+                ReleaseSnap();
+                return false;
+            }
+            g_snapW = v.w;
+            g_snapH = v.h;
+            Logger::Info("Present: smooth zoom world texture %dx%d.", v.w, v.h);
+        }
+        D3D11_MAPPED_SUBRESOURCE map{};
+        if (FAILED(g_ctx->Map(g_snapTex, 0, D3D11_MAP_WRITE_DISCARD, 0, &map))) return false;
+        auto* dst = static_cast<uint8_t*>(map.pData);
+        const auto* src = reinterpret_cast<const uint8_t*>(v.snap);
+        const size_t row = static_cast<size_t>(v.w) * 2;
+        if (g_has565) {
+            for (int y = 0; y < v.h; ++y) std::memcpy(dst + static_cast<size_t>(y) * map.RowPitch, src + y * row, row);
+        } else {
+            RenderDDraw::ConvertRGB565ToXRGB8888_SSE2(v.snap, static_cast<int>(row), reinterpret_cast<uint32_t*>(dst),
+                                                      static_cast<int>(map.RowPitch), v.w, v.h);
+        }
+        g_ctx->Unmap(g_snapTex, 0);
         return true;
     }
 
@@ -306,6 +395,7 @@ namespace {
     void ReleaseD3D() {
         ReleaseLayer();
         ReleaseBackdrop();
+        ReleaseSnap();
         ReleaseFrameTextures();
         SafeRelease(g_cb);
         SafeRelease(g_smpLinear);
@@ -559,13 +649,18 @@ namespace {
         RECT crop{};
         bool layerOn = false;
         bool backdropOn = false;
+        bool lupaOn = false;
         const int frameW = w, frameH = h;
+        ViewZoom::View lupa;
+        const bool lupaFrame = ViewZoom::TakeView(lupa);           // the mission's world, magnified
         if (UiScale::MenuZoomCrop(w, h, crop)) {
             bits += static_cast<size_t>(crop.top) * pitch + static_cast<size_t>(crop.left) * 2;
             w = crop.right - crop.left;
             h = crop.bottom - crop.top;
             backdropOn = PrepareBackdrop(frameW, frameH);           // a mission's dialog: only it enlarged
             layerOn = !backdropOn && PrepareLayer(crop, w, h);      // HD menu pictures, where there are some
+        } else if (lupaFrame && lupa.w == w && lupa.h == h) {
+            lupaOn = PrepareSnap(lupa);
         }
         if (!EnsureTexture(w, h)) {
             return false;
@@ -600,7 +695,15 @@ namespace {
             c.outW = static_cast<float>(vw);
             c.outH = static_cast<float>(vh);
             c.mode = static_cast<float>(SherwoodConfig::Get().shaderFilter);
-            c.layer = backdropOn ? 2.0f : (layerOn ? 1.0f : 0.0f);
+            c.layer = backdropOn ? 2.0f : (layerOn ? 1.0f : (lupaOn ? 3.0f : 0.0f));
+            if (lupaOn) {
+                c.lupaM = lupa.m;
+                c.lupaWorldH = lupa.worldH;
+                c.lupaX = lupa.cropX;
+                c.lupaY = lupa.cropY;
+            } else if (backdropOn && g_backShowOn) {
+                c.lupaM = 1.0f;     // layer 2: the backdrop's shown version (t5) instead of t3
+            }
             c.cropX = static_cast<float>(crop.left);
             c.cropY = static_cast<float>(crop.top);
             int fx = 0, fy = 0, fw = 0, fh = 0;
@@ -628,9 +731,10 @@ namespace {
         g_ctx->VSSetShader(g_vs, nullptr, 0);
         g_ctx->PSSetShader(g_ps, nullptr, 0);
         g_ctx->PSSetConstantBuffers(0, 1, &g_cb);
-        ID3D11ShaderResourceView* srvs[4] = { g_srv, layerOn ? g_layerOrigSrv : nullptr, layerOn ? g_layerHdSrv : nullptr,
-                                              backdropOn ? g_backdropSrv : nullptr };
-        g_ctx->PSSetShaderResources(0, 4, srvs);
+        ID3D11ShaderResourceView* srvs[6] = { g_srv, layerOn ? g_layerOrigSrv : nullptr, layerOn ? g_layerHdSrv : nullptr,
+                                              backdropOn ? g_backdropSrv : nullptr, lupaOn ? g_snapSrv : nullptr,
+                                              (backdropOn && g_backShowOn) ? g_backShowSrv : nullptr };
+        g_ctx->PSSetShaderResources(0, 6, srvs);
         ID3D11SamplerState* samplers[2] = { g_smpPoint, g_smpLinear };
         g_ctx->PSSetSamplers(0, 2, samplers);
         g_ctx->Draw(3, 0);

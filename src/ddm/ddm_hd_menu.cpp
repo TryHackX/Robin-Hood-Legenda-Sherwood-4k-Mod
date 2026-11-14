@@ -3,6 +3,7 @@
 #include "../config.h"
 #include "../logger.h"
 #include "../ui_scale.h"
+#include "../view_zoom.h"
 #include "../window_manager.h"
 
 #include <windows.h>
@@ -59,6 +60,13 @@ namespace {
     std::vector<uint16_t> g_world;
     int  g_worldW = 0, g_worldH = 0;
     bool g_worldValid = false;
+    // the smooth zoom magnified that level's world (view_zoom.h): its copy without the interface and
+    // the magnification - the backdrop is shown the same way (else the world jumped back to the
+    // engine's zoom behind the in-game menu)
+    std::vector<uint16_t> g_lupaWorld;
+    ViewZoom::View g_lupa;
+    bool g_lupaValid = false;
+    std::vector<uint32_t> g_backdropShow;   // BGRA: what is shown where the backdrop shows (empty = g_backdrop)
 
     uint32_t To8888(uint16_t p) {
         uint32_t r = (p >> 11) & 0x1F, g = (p >> 5) & 0x3F, b = p & 0x1F;
@@ -74,6 +82,7 @@ namespace {
     // result belongs to the dialog; there the darkened level is put in (for the backdrop shown at
     // its size) and alpha says "dialog".
     void BuildBackdrop(const uint16_t* comp, int w, int h) {
+        g_backdropShow.clear();
         g_backdrop.resize(static_cast<size_t>(w) * h);
         const size_t n = static_cast<size_t>(w) * h;
         const bool haveWorld = g_worldValid && g_worldW == w && g_worldH == h;
@@ -108,6 +117,41 @@ namespace {
         }
         Logger::Info("HD menu: dialog backdrop - %.0f %% darkened level (shown at its size), the rest enlarged with the dialog.",
                      100.0 * static_cast<double>(level) / static_cast<double>(n));
+
+        // The level was shown magnified (smooth zoom): where the backdrop shows the world (not the
+        // interface: the frame equals the world copy there), it shows the magnified world, darkened
+        // the way the game darkened it (the colour map just learned), bilinear.
+        g_backdropShow.clear();
+        if (!g_lupaValid || g_lupa.w != w || g_lupa.h != h || level < n / 5 || g_lupa.m <= 1.0f) return;
+        g_backdropShow = g_backdrop;
+        const float m = g_lupa.m;
+        const int worldRows = (std::min)(h, static_cast<int>(g_lupa.worldH));
+        for (int y = 0; y < worldRows; ++y) {
+            const float fy = g_lupa.cropY + (static_cast<float>(y) + 0.5f) / m - 0.5f;
+            const int y0 = (std::max)(0, (std::min)(h - 1, static_cast<int>(fy)));
+            const int y1 = (std::min)(h - 1, y0 + 1);
+            const float wy = (std::max)(0.0f, (std::min)(1.0f, fy - static_cast<float>(y0)));
+            for (int x = 0; x < w; ++x) {
+                const size_t i = static_cast<size_t>(y) * w + x;
+                if (!(g_backdrop[i] & 0xFF000000u) || g_world[i] != g_lupaWorld[i]) continue;   // dialog picture / interface
+                const float fx = g_lupa.cropX + (static_cast<float>(x) + 0.5f) / m - 0.5f;
+                const int x0 = (std::max)(0, (std::min)(w - 1, static_cast<int>(fx)));
+                const int x1 = (std::min)(w - 1, x0 + 1);
+                const float wx = (std::max)(0.0f, (std::min)(1.0f, fx - static_cast<float>(x0)));
+                const uint32_t c00 = To8888(cand[g_lupaWorld[static_cast<size_t>(y0) * w + x0]]);
+                const uint32_t c01 = To8888(cand[g_lupaWorld[static_cast<size_t>(y0) * w + x1]]);
+                const uint32_t c10 = To8888(cand[g_lupaWorld[static_cast<size_t>(y1) * w + x0]]);
+                const uint32_t c11 = To8888(cand[g_lupaWorld[static_cast<size_t>(y1) * w + x1]]);
+                uint32_t out = 0xFF000000u;
+                for (int s = 0; s < 24; s += 8) {
+                    const float a = static_cast<float>((c00 >> s) & 0xFF) * (1.0f - wx) + static_cast<float>((c01 >> s) & 0xFF) * wx;
+                    const float b = static_cast<float>((c10 >> s) & 0xFF) * (1.0f - wx) + static_cast<float>((c11 >> s) & 0xFF) * wx;
+                    out |= static_cast<uint32_t>(a * (1.0f - wy) + b * wy + 0.5f) << s;
+                }
+                g_backdropShow[i] = out;
+            }
+        }
+        Logger::Info("HD menu: dialog backdrop shows the level magnified x%.2f, as the smooth zoom did.", m);
     }
 
     // counters (test harness)
@@ -350,6 +394,7 @@ bool GetBackdrop(Backdrop& out) {
         return false;
     }
     out.bgra = g_backdrop.data();
+    out.show = g_backdropShow.size() == g_backdrop.size() ? g_backdropShow.data() : nullptr;
     out.w = g_backdropW;
     out.h = g_backdropH;
     out.generation = g_backdropGen;
@@ -358,8 +403,16 @@ bool GetBackdrop(Backdrop& out) {
 
 void NoteDialogStart() {
     g_worldValid = false;
+    g_lupaValid = false;
     if (!UiScale::MenuZoomOn() || *reinterpret_cast<void* const*>(0x006C0FA8) == nullptr) return;
     g_worldValid = DDM::CopyFront(g_world, g_worldW, g_worldH);
+    ViewZoom::View v;
+    if (g_worldValid && ViewZoom::LastWorld(v) && v.w == g_worldW && v.h == g_worldH) {
+        g_lupaWorld.assign(v.snap, v.snap + static_cast<size_t>(v.w) * v.h);
+        g_lupa = v;
+        g_lupa.snap = nullptr;
+        g_lupaValid = true;
+    }
 }
 
 int Describe(char* out, int size) {

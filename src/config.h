@@ -28,6 +28,9 @@ struct SherwoodConfig {
     int uiScale = 0;             // internal width >= 2048: 2 = the game's windows (HUD, map, dialogs) drawn x2 from their screen corners
     int mapPosition = 1;         // with uiScale: where the opened map lies - 0 where the game puts it (top, middle), 1 top-right corner
     bool mapDragCamera = true;   // dragging on the opened map's picture moves the camera (the window is moved by its edges)
+    bool smoothZoom = true;      // HD view: any zoom from "the level fills the screen" to zoomMax (view_zoom.h)
+    int zoomStep = 115;          // one zoom step, percent
+    int zoomMax = 400;           // largest zoom, percent (200 = the engine's 2.0)
     bool menuZoom = true;        // Direct3D 11, internal height >= 960: menus and dialogs (laid out for 1024x768) shown on the whole window
     int settingsKey = 0x79;      // virtual key of the mod's settings panel (F10); 0 = no panel
     bool hdMenu = true;          // with menuZoom: upscaled menu pictures (hd\menu\<variant>\) where they exist

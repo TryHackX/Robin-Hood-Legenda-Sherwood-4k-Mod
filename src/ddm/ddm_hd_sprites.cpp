@@ -93,6 +93,69 @@ namespace {
     std::unordered_map<void*, SpriteAnim> g_anim;
     uint32_t g_tick = 1;             // counts the game ticks' own frames
 
+    // A store's data file, possibly in parts: a file of a GitHub release must be under 2 GB, so
+    // the HD packs (tools\hd\..\make_hd_packs.py) cut a large data file into "<name>",
+    // "<name>.2", "<name>.3"... The offsets of the index run over the parts as over one file.
+    struct DataFile {
+        static constexpr int kMaxParts = 8;
+        HANDLE   part[kMaxParts] = {};
+        uint64_t start[kMaxParts] = {};
+        uint64_t size[kMaxParts] = {};
+        int      count = 0;
+        bool open() const { return count > 0; }
+    };
+
+    void CloseData(DataFile& d) {
+        for (int i = 0; i < d.count; ++i) CloseHandle(d.part[i]);
+        d = DataFile{};
+    }
+
+    bool OpenData(DataFile& d, const std::string& path) {
+        CloseData(d);
+        const DWORD share = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE; // a generator may be appending
+        uint64_t total = 0;
+        for (int i = 0; i < DataFile::kMaxParts; ++i) {
+            const std::string name = i == 0 ? path : path + "." + std::to_string(i + 1);
+            HANDLE h = CreateFileA(name.c_str(), GENERIC_READ, share, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+            if (h == INVALID_HANDLE_VALUE) break;
+            LARGE_INTEGER sz{};
+            if (!GetFileSizeEx(h, &sz)) {
+                CloseHandle(h);
+                break;
+            }
+            d.part[d.count] = h;
+            d.start[d.count] = total;
+            d.size[d.count] = static_cast<uint64_t>(sz.QuadPart);
+            total += d.size[d.count];
+            ++d.count;
+        }
+        if (d.count > 1) Logger::Info("HD sprites: %s in %d parts (%.0f MB).", path.c_str(), d.count, static_cast<double>(total) / 1048576.0);
+        return d.count > 0;
+    }
+
+    // `size` bytes from `offset` over the parts (a frame may cross from one part into the next)
+    bool ReadAt(const DataFile& d, uint64_t offset, void* out, uint32_t size) {
+        auto* dst = static_cast<uint8_t*>(out);
+        for (int i = 0; i < d.count && size > 0; ++i) {
+            const int last = d.count - 1;
+            if (offset >= d.start[i] + d.size[i] && i < last) continue;
+            const uint64_t inPart = offset - d.start[i];
+            // the last part takes what lies beyond it too (a generator may be appending to it)
+            const uint64_t avail = i < last ? d.size[i] - inPart : static_cast<uint64_t>(size);
+            const DWORD n = static_cast<DWORD>((std::min)(static_cast<uint64_t>(size), avail));
+            LARGE_INTEGER pos{};
+            pos.QuadPart = static_cast<LONGLONG>(inPart);
+            DWORD got = 0;
+            if (!SetFilePointerEx(d.part[i], pos, nullptr, FILE_BEGIN) || !ReadFile(d.part[i], dst, n, &got, nullptr) || got != n) {
+                return false;
+            }
+            dst += n;
+            offset += n;
+            size -= n;
+        }
+        return size == 0;
+    }
+
 #pragma pack(push, 1)
     struct BetweenEntry {            // 32 bytes, sorted by (a, b), a < b
         uint32_t a, b;
@@ -103,7 +166,7 @@ namespace {
     };
 #pragma pack(pop)
     std::vector<BetweenEntry> g_between;
-    HANDLE g_betweenDat = INVALID_HANDLE_VALUE;
+    DataFile g_betweenDat;
     bool   g_betweenTried = false;
     std::atomic<bool>     g_betweenOn{ false };
     std::atomic<unsigned> g_betweenDrawn{ 0 };
@@ -147,7 +210,7 @@ namespace {
     struct Store {
         std::string             name;
         std::vector<IndexEntry> index;
-        HANDLE                  dat = INVALID_HANDLE_VALUE;
+        DataFile                dat;
         bool                    tried = false;
     };
     Store       g_stores[2];            // [0] variant, [1] common
@@ -155,7 +218,7 @@ namespace {
 
     // upscaled run-time frames, by content key: hd\sprites\_icons\icons.idx / icons.dat
     std::unordered_map<uint64_t, IndexEntry> g_icons;
-    HANDLE g_iconsDat = INVALID_HANDLE_VALUE;
+    DataFile g_iconsDat;
     bool   g_iconsTried = false;
 
     // ---- frames ready to draw
@@ -212,8 +275,7 @@ namespace {
     }
 
     void CloseStore(Store& st) {
-        if (st.dat != INVALID_HANDLE_VALUE) CloseHandle(st.dat);
-        st.dat = INVALID_HANDLE_VALUE;
+        CloseData(st.dat);
         st.index.clear();
         st.tried = false;
     }
@@ -245,8 +307,7 @@ namespace {
         }
         CloseHandle(idx);
         if (ok) {
-            st.dat = CreateFileA((dir + "sprites.dat").c_str(), GENERIC_READ, share, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-            ok = st.dat != INVALID_HANDLE_VALUE;
+            ok = OpenData(st.dat, dir + "sprites.dat");
         }
         if (!ok) {
             st.index.clear();
@@ -260,22 +321,17 @@ namespace {
 
     // Reads one frame of a data file; false if it is not there or damaged. Raw or row spans (see
     // upscale_sprites.py).
-    bool ReadEntry(HANDLE dat, const IndexEntry& e, int wantW, int wantH, std::vector<uint16_t>& px) {
-        if (dat == INVALID_HANDLE_VALUE) return false;
+    bool ReadEntry(const DataFile& dat, const IndexEntry& e, int wantW, int wantH, std::vector<uint16_t>& px) {
+        if (!dat.open()) return false;
         if (e.size == 0 || e.w != wantW || e.h != wantH || (e.size & 1) || e.size > 64u * 1024 * 1024) return false;
         const size_t pixels = static_cast<size_t>(e.w) * e.h;
-        LARGE_INTEGER pos{};
-        pos.QuadPart = static_cast<LONGLONG>(e.offset);
-        DWORD got = 0;
         if (e.size == pixels * 2) {
             px.resize(pixels);
-            return SetFilePointerEx(dat, pos, nullptr, FILE_BEGIN) &&
-                   ReadFile(dat, px.data(), e.size, &got, nullptr) && got == e.size;
+            return ReadAt(dat, e.offset, px.data(), e.size);
         }
         static std::vector<uint16_t> packed;
         packed.resize(e.size / 2);
-        if (!SetFilePointerEx(dat, pos, nullptr, FILE_BEGIN) ||
-            !ReadFile(dat, packed.data(), e.size, &got, nullptr) || got != e.size) {
+        if (!ReadAt(dat, e.offset, packed.data(), e.size)) {
             return false;
         }
         px.assign(pixels, kKey);
@@ -293,7 +349,7 @@ namespace {
 
     bool ReadFrame(Store& st, uint32_t frame, int wantW, int wantH, std::vector<uint16_t>& px) {
         OpenStore(st);
-        if (st.dat == INVALID_HANDLE_VALUE || frame >= st.index.size()) return false;
+        if (!st.dat.open() || frame >= st.index.size()) return false;
         return ReadEntry(st.dat, st.index[frame], wantW, wantH, px);
     }
 
@@ -321,8 +377,7 @@ namespace {
         }
         CloseHandle(idx);
         if (ok) {
-            g_iconsDat = CreateFileA((dir + "icons.dat").c_str(), GENERIC_READ, share, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-            ok = g_iconsDat != INVALID_HANDLE_VALUE;
+            ok = OpenData(g_iconsDat, dir + "icons.dat");
         }
         if (!ok) {
             Logger::Warn("HD sprites: the icon store could not be read - ignored.");
@@ -560,8 +615,7 @@ namespace {
             });
         }
         if (ok) {
-            g_betweenDat = CreateFileA((dir + "between.dat").c_str(), GENERIC_READ, share, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-            ok = g_betweenDat != INVALID_HANDLE_VALUE;
+            ok = OpenData(g_betweenDat, dir + "between.dat");
         }
         if (!ok) {
             g_between.clear();

@@ -106,6 +106,9 @@ void SherwoodConfig::Load(const std::string& iniPath) {
     uiScale            = ReadInt("Display", "UIScale", uiScale, p);
     mapPosition        = ReadInt("Display", "MapPosition", mapPosition, p);
     mapDragCamera      = ReadBool("Display", "MapDragCamera", mapDragCamera, p);
+    smoothZoom         = ReadBool("Display", "SmoothZoom", smoothZoom, p);
+    zoomStep           = ReadInt("Display", "ZoomStep", zoomStep, p);
+    zoomMax            = ReadInt("Display", "ZoomMax", zoomMax, p);
     menuZoom           = ReadBool("Display", "MenuZoom", menuZoom, p);
     settingsKey        = ReadInt("Display", "SettingsKey", settingsKey, p);
     hdMenu             = ReadBool("Display", "HDMenu", hdMenu, p);

@@ -1460,6 +1460,24 @@ bool CopyFront(std::vector<uint16_t>& out, int& w, int& h) {
     return true;
 }
 
+bool CopyBack(std::vector<uint16_t>& out, int& w, int& h) {
+    std::lock_guard<std::recursive_mutex> lock(g.lock);
+    if (!g.primary || !g.primary->back || !g.primary->back->st.bits) return false;
+    const Buf b = g.primary->back->buf();
+    out.resize(static_cast<size_t>(b.w) * b.h);
+    const size_t row = static_cast<size_t>(b.w) * 2;
+    if (b.pitch == static_cast<int>(row)) {
+        std::memcpy(out.data(), b.bits, row * b.h);
+    } else {
+        for (int y = 0; y < b.h; ++y) {
+            std::memcpy(out.data() + static_cast<size_t>(y) * b.w, b.bits + static_cast<size_t>(y) * b.pitch, row);
+        }
+    }
+    w = b.w;
+    h = b.h;
+    return true;
+}
+
 bool SurfaceAlive(uintptr_t serial, const uint8_t* bits) {
     std::lock_guard<std::recursive_mutex> lock(g.lock);
     for (const Surface* s : g.surfaces) {

@@ -359,6 +359,37 @@ kotwicą obrazka, nad którym jest kursor (lista obrazków z ostatniej klatki), 
   z CPUID 0x80000002..4 (skrócona: bez (R), (TM), CPU, „@ …GHz”; łata `mov ebp, nazwa` na 0x00539066) i pamięć z
   `GlobalMemoryStatusEx` (najwyżej 65535 MB). Sprawdzone: pełna nazwa procesora (np. „Intel Core i…, 3600 MHz”) i pamięć ponad 4 GB.
 
+### Płynny zoom — lupa (`SmoothZoom=1`, `ZoomStep=115`, `ZoomMax=400`; `src\view_zoom.cpp`) [Z w tle]
+Silnik rysuje postacie tylko w powiększeniu 0,5 / 1 / 2 (osobne gałęzie kodu), a oddalenie do 1,0 zostawiało czarny pas
+na poziomach węższych niż ekran. Teraz zoom gracza to dowolna wartość od „cały poziom wypełnia ekran” (min =
+max(1, 2560/szer. poziomu, 1440/wys.)) do `ZoomMax`; silnik rysuje w 1,0 (poniżej 2,0) albo 2,0 (grafika HD, od 2,0
+w górę), resztę powiększa prezenter — **tylko świat**:
+- Zdjęcie świata: `ViewZoom::OnWorldDrawn` z haka `WindowManager::Draw` misji (0x00510618), zanim narysują się okna —
+  kopia bufora tylnego (`DDM::CopyBack`, 7,4 MB na klatkę, tylko gdy powiększenie > 1).
+- Shader (warstwa 3): piksel klatki równy pikselowi zdjęcia = świat → próbka zdjęcia w powiększeniu (filtr wg
+  `ShaderFilter`); różny = interfejs (HUD, kursor, napisy, panel F10, licznik FPS) → bez zmian, w swoim miejscu.
+- Zmiana poziomu silnika bez animacji gry: zoom `E+0x475C`, indeks `E+0x4898`, kamera przez `SetCameraPosition`
+  0x004DB7F0 wokół tego samego środka widoku, `E+0x48D0 = 0` (następna aktualizacja rysuje wszystko od nowa).
+  Robione na tiku gry (`OnGameTick`), gdy pokazywany zoom przekroczy 2,0; kadr bierze kamerę i zoom ostatniego
+  renderu (`E+0x4740`, `E+0x4760`), więc przejście jest bez skoku.
+- Haki: `ZoomIn/OutRequest` 0x004DBE40 / 0x004DBDB0 (klawisze, kółko myszy, przyciski — kroki × `ZoomStep`, przystanki
+  na 1,0 i 2,0), `CanZoomIn` 0x004C7CD0 i `CanZoomOut` (widescreen_patch) — przyciski HUD szare tylko na końcach
+  zakresu; odświeżenie przycisków komunikatem 9 jak w `Update` (0x005490A0 / 0x005460C0 / 0x00549110, cel `[E+0x68]`).
+- Myszka: `ScreenToWorld` 0x004DEE70 (16 wywołań — wybór postaci, cel marszu, kształt kursora, start ramki
+  zaznaczenia) przelicza pozycję przez powiększenie; koniec ramki zaznaczenia w klatkach pośrednich też.
+- Brzegi poziomu: pokazany fragment klatki ma przesunięcie (świat px). Przewijanie, którego kamera nie może już zrobić
+  (`ClampScrollDelta`: chciane − dozwolone, w `timing.cpp`), przesuwa fragment; `CenterCameraOn` 0x004C7F60 (klik
+  na minimapie, centrowanie na postaci) ustawia przesunięcie tak, by punkt był na środku. Fragment zawsze w obrębie
+  poziomu w klatce (bez pasów).
+- Minimapa: prostokąt kamery (`DrawRect` z 0x0054B3A5) przeliczany na pokazany fragment, w pełnych pikselach
+  (z ułamkowymi współrzędnymi procedura gry nic nie rysowała).
+- Start poziomu: 2,0 od razu (zastępuje wymuszanie z `WidescreenPatch::OnGameTick`).
+- Sprawdzone w tle (2944×2176): 2,0 → 2,65 → 4,0 → 1,5 (silnik 1,0) → 1,0; interfejs zawsze 1×; klik przy 3,0 —
+  Robin doszedł dokładnie w kliknięte miejsce; przewijanie do lewego brzegu — kamera 0, fragment do krawędzi;
+  minimapa — mniejszy prostokąt, klik centruje; kółko myszy = kroki zoomu (gra sama mapuje kółko na zoom).
+- Do zrobienia: zoom kółkiem względem kursora (teraz względem środka ekranu); tło okien dialogowych (Esc, odprawa)
+  przy powiększeniu innym niż 1,0/2,0 pokazuje świat w powiększeniu silnika.
+
 ### Menu i okna gry na cały ekran (`MenuZoom=1`, Direct3D 11, wysokość wewnętrzna ≥ 960)
 Menu i okna (odprawa, menu Esc, wczytywanie/zapis, opcje) rysuje jedna pętla okien dialogowych gry
 (`WindowManager::Draw` wywołany z 0x0053C565). Ułożone są dla 1024×768 na środku klatki. Gdy ta pętla rysuje, prezenter

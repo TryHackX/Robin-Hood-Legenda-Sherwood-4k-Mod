@@ -1,5 +1,6 @@
 #include "widescreen_patch.h"
 #include "config.h"
+#include "view_zoom.h"
 #include "logger.h"
 #include "pattern.h"
 #include <MinHook.h>
@@ -261,6 +262,9 @@ namespace {
     CanZoomOut_t g_OrigCanZoomOut = nullptr;
 
     uint8_t __fastcall Hook_CanZoomOut(uint8_t* engine, void* edx) {
+        if (ViewZoom::HandlesZoom()) {
+            return ViewZoom::CanZoomOut() ? 1 : 0;      // smooth zoom: down to "the level fills the screen"
+        }
         const uint8_t original = g_OrigCanZoomOut(engine, edx);
         if (original || !engine || !SherwoodConfig::Get().hdView) {
             return original;
@@ -462,6 +466,19 @@ void Shutdown() {
     // Hooks cleaned up globally by MH_Uninitialize
 }
 
+namespace {
+    // RHEngine::ZoomInRequest(Event*) 0x004DBE40: push esi / mov esi,ecx / call CanZoomIn /
+    // test al,al / jz. With the smooth zoom installed the entry is hooked; a call still reaches
+    // the original while the smooth zoom is switched off.
+    bool ZoomInRequestKnown() {
+        static const uint8_t kZoomInProlog[] = { 0x56, 0x8B, 0xF1, 0xE8 };
+        static const bool s_known = ViewZoom::Installed() ||
+                                    (std::memcmp(reinterpret_cast<const void*>(0x004DBE40), kZoomInProlog, sizeof(kZoomInProlog)) == 0 &&
+                                     std::memcmp(reinterpret_cast<const void*>(0x004DBE40 + 8), "\x84\xC0\x74", 3) == 0);
+        return s_known;
+    }
+}
+
 // "HD view". With an internal resolution of 2560x1440 the game's 1.0 zoom shows four times the
 // area the game was made for - more than most levels hold (black band at the side) and with
 // tiny figures. Its 2.0 zoom has the framing of a 1280x720 screen while HUD, texts and cursor
@@ -470,15 +487,11 @@ void Shutdown() {
 // the game's own keys still works where the level is large enough.
 void OnGameTick(unsigned char* engine) {
     const auto& cfg = SherwoodConfig::Get();
-    if (!engine || !cfg.hdView) {
-        return;
+    if (!engine || !cfg.hdView || ViewZoom::HandlesZoom()) {
+        return;     // with the smooth zoom, view_zoom.cpp starts the levels at 2.0
     }
-    // RHEngine::ZoomInRequest(Event*): push esi / mov esi,ecx / call CanZoomIn / test al,al / jz
-    static const uint8_t kZoomInProlog[] = { 0x56, 0x8B, 0xF1, 0xE8 };
     constexpr uintptr_t kAddrZoomInRequest = 0x004DBE40;
-    static const bool s_known = std::memcmp(reinterpret_cast<const void*>(kAddrZoomInRequest), kZoomInProlog, sizeof(kZoomInProlog)) == 0 &&
-                                std::memcmp(reinterpret_cast<const void*>(kAddrZoomInRequest + 8), "\x84\xC0\x74", 3) == 0;
-    if (!s_known) {
+    if (!ZoomInRequestKnown()) {
         return;
     }
     __try {

@@ -2,6 +2,7 @@
 #include "config.h"
 #include "logger.h"
 #include "ui_scale.h"
+#include "view_zoom.h"
 #include "window_manager.h"
 #include "ddm/ddm_hd.h"
 
@@ -35,7 +36,7 @@ namespace {
     // ---- the options --------------------------------------------------------------------
     enum Item {
         kHdBackground, kHdSprites, kBetween, kSmoothSprites, kWater,
-        kUiScale, kMap, kMapDrag, kMenuZoom, kHdMenu,
+        kUiScale, kMap, kMapDrag, kSmoothZoom, kZoomStep, kZoomMax, kMenuZoom, kHdMenu,
         kVSync, kFilter, kScroll, kFps, kMouse,
         kItemCount
     };
@@ -50,6 +51,9 @@ namespace {
             case kUiScale:       return "INTERFEJS W MISJI";
             case kMap:           return "MINIMAPA";
             case kMapDrag:       return "MINIMAPA - PRZECIAGANIE LEWYM";
+            case kSmoothZoom:    return "PLYNNY ZOOM (LUPA)";
+            case kZoomStep:      return "KROK ZOOMU";
+            case kZoomMax:       return "NAJWIEKSZE PRZYBLIZENIE";
             case kMenuZoom:      return "MENU I OKNA GRY";
             case kHdMenu:        return "TLA MENU W HD (AI)";
             case kVSync:         return "SYNCHRONIZACJA PIONOWA (VSYNC)";
@@ -77,6 +81,12 @@ namespace {
                 return UiScale::InterfaceScaled() ? nullptr : "TYLKO Z INTERFEJSEM 2X";
             case kMapDrag:
                 return UiScale::MapDragAvailable() ? nullptr : "NIEZNANA WERSJA GRY";
+            case kSmoothZoom:
+                return ViewZoom::Installed() ? nullptr : "TYLKO W TRYBIE HD (SZEROKOSC OD 2048)";
+            case kZoomStep:
+            case kZoomMax:
+                if (!ViewZoom::Installed()) return "TYLKO W TRYBIE HD (SZEROKOSC OD 2048)";
+                return ViewZoom::Enabled() ? nullptr : "TYLKO Z PLYNNYM ZOOMEM";
             case kMenuZoom:
                 return UiScale::MenuZoomAvailable() ? nullptr : "TYLKO Z DIRECT3D 11";
             case kHdMenu:
@@ -109,6 +119,9 @@ namespace {
             case kUiScale:       std::snprintf(out, n, "%s", UiScale::InterfaceScaled() ? "2X WIEKSZY" : "ORYGINALNY"); break;
             case kMap:           std::snprintf(out, n, "%s", UiScale::MapInCorner() ? "PRAWY GORNY ROG" : "JAK W GRZE (U GORY)"); break;
             case kMapDrag:       std::snprintf(out, n, "%s", UiScale::MapDragCamera() ? "PRZESUWA KAMERE" : "PRZESUWA OKNO (JAK W GRZE)"); break;
+            case kSmoothZoom:    std::snprintf(out, n, "%s", ViewZoom::Enabled() ? "TAK" : "NIE (TYLKO 1X I 2X)"); break;
+            case kZoomStep:      std::snprintf(out, n, "%d%%", ViewZoom::StepPercent()); break;
+            case kZoomMax:       std::snprintf(out, n, "%.1fX", ViewZoom::MaxPercent() / 100.0); break;
             case kMenuZoom:      std::snprintf(out, n, "%s", UiScale::MenuZoomOn() ? "NA CALY EKRAN" : "ORYGINALNE (MALE)"); break;
             case kHdMenu:        yesNo(cfg.hdMenu); break;
             case kVSync:         yesNo(cfg.vsync); break;
@@ -173,6 +186,33 @@ namespace {
                 UiScale::SetMapDragCamera(on);
                 cfg.mapDragCamera = on;
                 WriteIni("Display", "MapDragCamera", on ? 1 : 0);
+                break;
+            }
+            case kSmoothZoom: {
+                const bool on = !ViewZoom::Enabled();
+                ViewZoom::SetEnabled(on);
+                cfg.smoothZoom = on;
+                WriteIni("Display", "SmoothZoom", on ? 1 : 0);
+                break;
+            }
+            case kZoomStep: {
+                static const int kSteps[] = { 110, 115, 125, 150, 200 };
+                int i = 0;
+                for (int k = 0; k < 5; ++k) if (kSteps[k] == ViewZoom::StepPercent()) i = k;
+                i = ((i + dir) % 5 + 5) % 5;
+                ViewZoom::SetStepPercent(kSteps[i]);
+                cfg.zoomStep = kSteps[i];
+                WriteIni("Display", "ZoomStep", cfg.zoomStep);
+                break;
+            }
+            case kZoomMax: {
+                static const int kMax[] = { 300, 400, 600, 800 };
+                int i = 0;
+                for (int k = 0; k < 4; ++k) if (kMax[k] == ViewZoom::MaxPercent()) i = k;
+                i = ((i + dir) % 4 + 4) % 4;
+                ViewZoom::SetMaxPercent(kMax[i]);
+                cfg.zoomMax = kMax[i];
+                WriteIni("Display", "ZoomMax", cfg.zoomMax);
                 break;
             }
             case kMenuZoom: {

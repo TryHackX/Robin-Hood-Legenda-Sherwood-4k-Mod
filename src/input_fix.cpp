@@ -6,6 +6,7 @@
 #include "settings_menu.h"
 #include "test_harness.h"
 #include "ui_scale.h"
+#include "view_zoom.h"
 #include "window_manager.h"
 
 #include <windows.h>
@@ -67,6 +68,7 @@ namespace {
         DiRecord rec = recIn;
         const float cx = *reinterpret_cast<const float*>(0x006C1300);
         const float cy = *reinterpret_cast<const float*>(0x006C1304);
+        if (rec.ofs == 0x08) ViewZoom::NoteWheel();     // the game zooms with the wheel: about the cursor
         if (rec.ofs == 0x0C) {
             if (rec.data & 0x80) {
                 g_leftAsRight = UiScale::OnMapScrollEnd(cx, cy);

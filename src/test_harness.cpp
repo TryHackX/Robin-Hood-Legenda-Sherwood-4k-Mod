@@ -3,6 +3,7 @@
 #include "logger.h"
 #include "settings_menu.h"
 #include "ui_scale.h"
+#include "view_zoom.h"
 #include "window_manager.h"
 #include "ddm/ddm.h"
 #include "ddm/ddm_hd.h"
@@ -299,6 +300,17 @@ namespace {
             std::sscanf(args, "%31s", what);
             static char text[1024];
             SettingsMenu::TestCommand(what, text, sizeof(text));
+            Ack(seq, "ok %s", text);
+        } else if (!std::strcmp(cmd, "lupa")) {
+            // smooth zoom: lupa             (state)
+            //              lupa Z           (jump to the effective zoom Z at the next game tick)
+            float z = 0.0f;
+            if (std::sscanf(args, "%f", &z) == 1 && z > 0.0f) {
+                ViewZoom::TestSetZoom(z);
+                Sleep(400);
+            }
+            char text[320];
+            ViewZoom::Describe(text, sizeof(text));
             Ack(seq, "ok %s", text);
         } else if (!std::strcmp(cmd, "menuhd")) {
             // HD menu pictures: counters and the key of the menu picture seen last

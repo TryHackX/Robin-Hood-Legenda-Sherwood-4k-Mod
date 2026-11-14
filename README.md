@@ -23,17 +23,21 @@ original DirectDraw wrapper, plus optional HD graphics prepared with AI models f
 - **HD mode** (internal width 2048 or more): the game composes the picture at full resolution and shows the map at
   zoom 2.0 (framing of a 1280×720 screen) — interface, texts and cursor stay sharp; the map reaches the bottom edge.
 - **HD map backgrounds**, **HD characters and objects**, **HD icons**, **HD menu backgrounds** — from pictures
-  prepared with AI models (4 variants, switchable while playing), colours matched to the original. These pictures are
-  NOT part of the repository — see "HD graphics" below.
+  prepared with AI models (4 variants, switchable while playing), colours matched to the original. Download them as
+  ready-made packs — see "HD graphics" below.
 - Optional in-between frames for character animations (RIFE model) — animations 2× smoother.
+- **Smooth zoom** (magnifier): zoom in and out in small steps (game keys, mouse wheel, the buttons in the corner),
+  from "the whole level fills the screen" (no black bands) up to 4× closer. The engine renders at 1.0 or 2.0 (HD
+  pictures) and the graphics card magnifies the rest — only the world, the interface keeps its size; clicks land
+  where you see them, the view reaches every edge of the level.
 
 **Interface**
 - Mission interface 2× larger (each window grows from its own screen corner, clicks land where you see them).
 - Minimap in the top-right corner; dragging on it moves the camera, the map window is moved by its edges.
 - Menus and game dialogs (briefing, Esc menu, save/load, options) shown full-screen instead of a small 1024×768 box
   in the middle.
-- **In-game settings panel — F10** (HD graphics, interface, minimap, menus, VSync, filter, FPS counter, cursor
-  speed); changes apply at once and are saved to `SherwoodFix.ini`.
+- **In-game settings panel — F10** (HD graphics, interface, minimap, smooth zoom, menus, VSync, filter, FPS counter,
+  cursor speed); changes apply at once and are saved to `SherwoodFix.ini`.
 - The game's options screen shows the real processor name and memory size (it showed "GenuineIntel" and at most
   4095 MB).
 
@@ -66,24 +70,39 @@ By default the game renders at 2560×1440 (HD mode). On a 1080p monitor set `Wid
 
 ## HD graphics
 
-The HD pictures are made from the original game files, so they are **not distributed** (the game's artwork is
-copyrighted). Anyone can make them from their own copy of the game with the tools in `tools\hd\` (Python 3 +
-PyTorch, an NVIDIA card recommended):
+The HD pictures are ready to download — no AI work on your PC needed. Get the archives from the **HD graphics pack**
+release and unpack each of them **into the game folder** (they contain the `hd\` folder; keep the paths):
+
+| Archive | Contents | |
+|---|---|---|
+| `SherwoodHD-1-postacie-a.zip` + `SherwoodHD-1-postacie-b.zip` | characters and all their animations, icons | both needed |
+| `SherwoodHD-2-tla-dat2.zip` | map backgrounds, roofs, trees, objects, menu backgrounds — variant `dat2` (the default) | needed |
+| `SherwoodHD-3-klatki-posrednie.zip` | in-between frames of character animations (F9) | optional |
+| `SherwoodHD-wariant-aomr.zip`, `-sgi.zip`, `-ultrasharp.zip` | the other background variants (F6 / F7) | optional |
+
+The packs need mod version 1.1.0 or newer (the characters' store comes in two parts). Without HD pictures the mod
+works normally (original graphics, sharply enlarged).
+
+The pictures were made from the original game files with the tools in `tools\hd\` (Python 3 + PyTorch), which can
+also rebuild them from your own copy of the game:
 
 - `extract_maps.py`, `upscale_variants.py` — map backgrounds (variants: `dat2`, `sgi`, `ultrasharp`, `aomr`),
 - `extract_sprites.py`, `upscale_sprites.py`, `upscale_icons.py` — characters, objects, icons,
 - `upscale_menu.py` — menu backgrounds (the mod collects them into `hd\work\menu_frames\` by itself),
-- `make_inbetweens.py` + `rife_net.py` — in-between animation frames.
+- `make_inbetweens.py` + `rife_net.py` — in-between animation frames,
+- `tools\make_hd_packs.py` — packs them into the archives above.
 
-The AI models have to be downloaded from their authors (licences and sources: `docs\UPSCALE_MODELS.md`). The layout
-of the `hd\` folder is described in `hd\CZYTAJ.txt`, the whole HD mode in `docs\HD_MODE.md` (documentation is in
-Polish). Without HD pictures the mod works normally (original graphics, sharply enlarged).
+AI models used (they are not included; licences and sources: `docs\UPSCALE_MODELS.md`): 4xNomos2_hq_dat2 and
+2xAoMR_mosr by Phhofm (CC-BY-4.0), 4x SGI by ChrisNonyminus (GPL-3.0), 4x-UltraSharp by Kim2091 (CC-BY-NC-SA-4.0 —
+the `ultrasharp` variant and the icons are for non-commercial use), RIFE by hzwer et al. (MIT). The layout of the
+`hd\` folder is described in `hd\CZYTAJ.txt`, the whole HD mode in `docs\HD_MODE.md` (documentation is in Polish).
 
 ## Known limitations
 
-- The game engine has only three zoom levels (0.5 / 1 / 2). On levels narrower than 2560 px (e.g. Nottingham),
-  zooming out to 1.0 leaves a black band on the right. A smooth zoom (magnifier in the presenter) is in progress.
-- HD graphics work at zoom 2.0; at 1.0 the original pixels are shown.
+- The engine itself has only three zoom levels (0.5 / 1 / 2); the smooth zoom magnifies its 1.0 or 2.0 picture. Below
+  2.0 the original pixels are shown (HD pictures need 2.0), above 2.0 the HD picture is magnified further.
+- With the smooth zoom between the engine's levels, the backdrop of the Esc menu and the briefing shows the world at
+  the engine's zoom. The mouse wheel zooms about the screen centre (not the cursor).
 - Night levels and fog have not been checked with HD graphics yet.
 
 ## Building from source

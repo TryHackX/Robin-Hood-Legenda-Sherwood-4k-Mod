@@ -4,6 +4,7 @@
 #include "test_harness.h"
 #include "timing.h"
 #include "window_manager.h"
+#include "view_zoom.h"
 #include "ddm/ddm.h"
 #include "ddm/ddm_hd_menu.h"
 
@@ -280,6 +281,7 @@ namespace {
             g_missionFramed = true;
             MenuZoomOff();
             if (InMission()) {
+                ViewZoom::OnWorldDrawn();   // the world is drawn, the windows not yet: smooth zoom's copy
                 FollowMapDrag();        // the dragged map where the cursor is now, in every frame
             } else {
                 g_camDragMap = nullptr;
@@ -499,10 +501,22 @@ namespace {
     PFN_BlendBlit o_BlendBlit = nullptr;
 
     uint32_t __fastcall Hook_DrawRect(void* mgr, void* edx, int id, const float* rect, uint32_t colour, uint32_t flags) {
-        if ((id != 0 && id != 1) || !rect || g_drawDepth <= 0) {
+        if ((id != 0 && id != 1) || !rect) {
             return o_DrawRect(mgr, edx, id, rect, colour, flags);
         }
         float rc[4] = { rect[0], rect[1], rect[2], rect[3] };
+        // the map's camera outline (drawn from 0x0054B3A5): the part the smooth zoom shows
+        const bool view = reinterpret_cast<uintptr_t>(_ReturnAddress()) == 0x0054B3AA && ViewZoom::MapViewRect(rc);
+        if (DDM::TraceActive()) {
+            char text[200];
+            std::snprintf(text, sizeof(text), "UI RECT by %08X id=%d (%.1f,%.1f,%.1f,%.1f) -> (%.1f,%.1f,%.1f,%.1f) view=%d depth=%d",
+                          static_cast<uint32_t>(reinterpret_cast<uintptr_t>(_ReturnAddress())), id, rect[0], rect[1], rect[2], rect[3],
+                          rc[0], rc[1], rc[2], rc[3], view ? 1 : 0, g_drawDepth);
+            DDM::TraceMark(text);
+        }
+        if (g_drawDepth <= 0) {
+            return o_DrawRect(mgr, edx, id, view ? rc : rect, colour, flags);
+        }
         Transform(rc[0], rc[1], rc[2], rc[3]);
         const uint32_t r = o_DrawRect(mgr, edx, id, rc, colour, flags);
         // lines as thick as the rest of the enlarged picture (the routine clips to the surface)
@@ -567,8 +581,11 @@ namespace {
         const float zoom = *reinterpret_cast<const float*>(engine + 0x475C);
         const float saved[2] = { end[0], end[1] };
         if (zoom > 0.01f) {
-            end[0] = cam[0] + *reinterpret_cast<const float*>(0x006C1300) / zoom;
-            end[1] = cam[1] + *reinterpret_cast<const float*>(0x006C1304) / zoom;
+            float x = *reinterpret_cast<const float*>(0x006C1300);
+            float y = *reinterpret_cast<const float*>(0x006C1304);
+            ViewZoom::ScreenToFrame(x, y);      // the smooth zoom shows another part of the frame there
+            end[0] = cam[0] + x / zoom;
+            end[1] = cam[1] + y / zoom;
         }
         o_DrawSelection(engine, edx);
         end[0] = saved[0];

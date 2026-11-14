@@ -1,90 +1,94 @@
-# Robin Hood: Legenda Sherwood — mod 4K / HD (SherwoodEngineFix)
+# Robin Hood: The Legend of Sherwood — 4K / HD mod (SherwoodEngineFix)
 
-Nieoficjalna modyfikacja do **Robin Hood: Legenda Sherwood** (Spellbound, 2002) w wersji **GOG**. Mod to jedna
-biblioteka `winmm.dll` kładziona obok `Game.exe` — gra ładuje ją sama, żadne pliki gry nie są zmieniane.
+An unofficial modification for **Robin Hood: The Legend of Sherwood** (Spellbound, 2002), **GOG** edition. The mod is
+a single `winmm.dll` placed next to `Game.exe` — the game loads it by itself, no game files are changed.
 
-Cel: płynna i ostra gra na dzisiejszych komputerach i monitorach (1080p, 1440p, 4K, 144 Hz), bez zacięć oryginalnego
-wrappera DirectDraw, z opcjonalną grafiką HD przygotowaną modelami AI z oryginalnych plików gry.
+Goal: smooth and sharp gameplay on today's PCs and monitors (1080p, 1440p, 4K, 144 Hz), without the stutter of the
+original DirectDraw wrapper, plus optional HD graphics prepared with AI models from the original game files.
 
-## Co robi
+## Features
 
-**Wydajność i stabilność**
-- Własny DirectDraw w pamięci + prezentacja przez Direct3D 11 (flip-model) zamiast wolnego wrappera — koniec lagów
-  w walce i przy przewijaniu kamery.
-- Okno bez ramek na cały ekran, poprawne Alt+Tab (gra nie zawiesza się po powrocie), VSync, skalowanie obrazu
-  shaderem (ostre piksele / sharp-bilinear / miękki).
-- Klatki pośrednie między tickami gry (gra liczy logikę 25 razy na sekundę): płynne przewijanie mapy, płynny kursor,
-  płynny ruch postaci i pocisków — z częstotliwością monitora; prędkość gry bez zmian.
-- Poprawki wejścia (mysz o wysokiej częstotliwości, ponowne przejęcie myszy po Alt+Tab), dźwięku (zasięg słyszalności
-  na szerokim ekranie), strażnik zawieszeń, usunięte zakleszczenie wątków przy przewijaniu krawędzią ekranu.
+**Performance and stability**
+- Own in-memory DirectDraw + Direct3D 11 presentation (flip model) instead of the slow wrapper — no more lag in
+  fights and while scrolling the camera.
+- Borderless full-screen window, working Alt+Tab (the game no longer freezes after switching back), VSync, image
+  scaling by shader (sharp pixels / sharp bilinear / soft).
+- Extra frames between game ticks (the game runs its logic 25 times per second): smooth map scrolling, smooth cursor,
+  smooth movement of characters and projectiles — at the monitor's refresh rate; game speed unchanged.
+- Input fixes (high polling rate mice, mouse re-acquired after Alt+Tab), audio fixes (hearing range on wide screens),
+  hang watchdog, removed thread deadlock when scrolling with the screen edge.
 
-**Obraz**
-- Wysokie rozdzielczości w menu gry (przyciski 1920×1080, 2560×1440, 3840×2160).
-- **Tryb HD** (od szerokości 2048): gra składa obraz w pełnej rozdzielczości, a mapę pokazuje w powiększeniu 2,0
-  (kadr jak przy 1280×720) — interfejs, napisy i kursor są ostre; mapa sięga do dołu ekranu.
-- **Tła map HD**, **postacie i obiekty HD**, **ikony HD**, **tła menu HD** — z obrazów przygotowanych modelami AI
-  (4 warianty do wyboru w locie), z kolorami dopasowanymi do oryginału. Te obrazy NIE są częścią repozytorium — patrz
-  „Grafika HD” niżej.
-- Opcjonalne klatki pośrednie animacji postaci (model RIFE) — animacje 2× płynniejsze.
+**Graphics**
+- High resolutions in the game's own menu (buttons 1920×1080, 2560×1440, 3840×2160).
+- **HD mode** (internal width 2048 or more): the game composes the picture at full resolution and shows the map at
+  zoom 2.0 (framing of a 1280×720 screen) — interface, texts and cursor stay sharp; the map reaches the bottom edge.
+- **HD map backgrounds**, **HD characters and objects**, **HD icons**, **HD menu backgrounds** — from pictures
+  prepared with AI models (4 variants, switchable while playing), colours matched to the original. These pictures are
+  NOT part of the repository — see "HD graphics" below.
+- Optional in-between frames for character animations (RIFE model) — animations 2× smoother.
 
-**Interfejs**
-- Interfejs misji 2× większy (każde okno rośnie od swojego rogu ekranu, kliknięcia trafiają tam, gdzie je widać).
-- Minimapa w prawym górnym rogu; przeciąganie po niej przesuwa kamerę, okno mapy przesuwa się za brzegi.
-- Menu i okna gry (odprawa, menu Esc, zapis, opcje) na cały ekran zamiast małego okienka 1024×768 na środku.
-- **Panel ustawień moda w grze — klawisz F10** (grafika HD, interfejs, minimapa, menu, VSync, filtr, licznik FPS,
-  prędkość kursora); zmiany działają od razu i zapisują się w `SherwoodFix.ini`.
-- W opcjach gry prawdziwa nazwa procesora i ilość pamięci (gra pokazywała „GenuineIntel” i najwyżej 4095 MB).
+**Interface**
+- Mission interface 2× larger (each window grows from its own screen corner, clicks land where you see them).
+- Minimap in the top-right corner; dragging on it moves the camera, the map window is moved by its edges.
+- Menus and game dialogs (briefing, Esc menu, save/load, options) shown full-screen instead of a small 1024×768 box
+  in the middle.
+- **In-game settings panel — F10** (HD graphics, interface, minimap, menus, VSync, filter, FPS counter, cursor
+  speed); changes apply at once and are saved to `SherwoodFix.ini`.
+- The game's options screen shows the real processor name and memory size (it showed "GenuineIntel" and at most
+  4095 MB).
 
-## Wymagania
+## Requirements
 
-- Robin Hood: Legenda Sherwood z **GOG** (mod rozpoznaje kod `Game.exe` tej wersji; inne wydania nie są obsługiwane —
-  wtedy łatki się nie zakładają, a log to opisuje).
-- Windows 10 lub 11, karta graficzna z Direct3D 11.
+- Robin Hood: The Legend of Sherwood from **GOG** (the mod recognises the code of that `Game.exe`; other editions are
+  not supported — the patches are then not applied, and the log says so).
+- Windows 10 or 11, a graphics card with Direct3D 11.
 
-## Instalacja
+## Installation
 
-1. Pobierz archiwum z zakładki **Releases**.
-2. Skopiuj `winmm.dll` i `SherwoodFix.ini` do folderu gry (tam, gdzie leży `Game.exe`).
-3. Uruchom grę jak zwykle (GOG Galaxy albo skrót).
+1. Download the archive from **Releases**.
+2. Copy `winmm.dll` and `SherwoodFix.ini` into the game folder (where `Game.exe` is).
+3. Start the game as usual (GOG Galaxy or the shortcut).
 
-Odinstalowanie: usuń `winmm.dll` (i ewentualnie `SherwoodFix.ini`, `SherwoodFix.log`).
+Uninstall: delete `winmm.dll` (and optionally `SherwoodFix.ini`, `SherwoodFix.log`).
 
-Domyślnie gra rysuje w 2560×1440 (tryb HD). Na monitorze 1080p ustaw w `SherwoodFix.ini` `Width=1920`, `Height=1080`
-(albo `0` i `0` = rozdzielczość monitora). Wszystkie opcje są opisane po polsku w samym pliku INI.
+By default the game renders at 2560×1440 (HD mode). On a 1080p monitor set `Width=1920`, `Height=1080` in
+`SherwoodFix.ini` (or `0` and `0` = the monitor's resolution). Every option is described in the INI file itself
+(comments in Polish); the most important ones can be changed in the F10 panel.
 
-## Klawisze moda
+## Mod keys
 
-| Klawisz | Działanie |
+| Key | Action |
 |---|---|
-| F10 | panel ustawień moda (w menu, w oknach gry i w misji) |
-| F8 | tło HD ↔ oryginał (szybkie porównanie) |
-| F7 / F6 | następny / poprzedni wariant grafiki HD |
-| F9 | klatki pośrednie animacji postaci (gdy są wygenerowane) |
+| F10 | mod settings panel (in menus, game dialogs and missions) |
+| F8 | HD background ↔ original (quick comparison) |
+| F7 / F6 | next / previous HD graphics variant |
+| F9 | in-between frames of character animations (when generated) |
 
-## Grafika HD
+## HD graphics
 
-Obrazy HD powstają z oryginalnych plików gry, więc **nie są rozpowszechniane** (prawa autorskie do grafiki gry).
-Każdy może je zrobić sam ze swojej kopii gry narzędziami z `tools\hd\` (Python 3 + PyTorch, karta NVIDIA zalecana):
+The HD pictures are made from the original game files, so they are **not distributed** (the game's artwork is
+copyrighted). Anyone can make them from their own copy of the game with the tools in `tools\hd\` (Python 3 +
+PyTorch, an NVIDIA card recommended):
 
-- `extract_maps.py`, `upscale_variants.py` — tła map (warianty: `dat2`, `sgi`, `ultrasharp`, `aomr`),
-- `extract_sprites.py`, `upscale_sprites.py`, `upscale_icons.py` — postacie, obiekty, ikony,
-- `upscale_menu.py` — tła menu (mod sam zbiera je do `hd\work\menu_frames\`),
-- `make_inbetweens.py` + `rife_net.py` — klatki pośrednie animacji.
+- `extract_maps.py`, `upscale_variants.py` — map backgrounds (variants: `dat2`, `sgi`, `ultrasharp`, `aomr`),
+- `extract_sprites.py`, `upscale_sprites.py`, `upscale_icons.py` — characters, objects, icons,
+- `upscale_menu.py` — menu backgrounds (the mod collects them into `hd\work\menu_frames\` by itself),
+- `make_inbetweens.py` + `rife_net.py` — in-between animation frames.
 
-Modele AI trzeba pobrać samemu ze stron ich autorów (licencje i źródła: `docs\UPSCALE_MODELS.md`). Układ folderu `hd\`
-opisuje `hd\CZYTAJ.txt`, a cały tryb HD — `docs\HD_MODE.md`. Bez obrazów HD mod działa normalnie (oryginalna grafika,
-ostro powiększona).
+The AI models have to be downloaded from their authors (licences and sources: `docs\UPSCALE_MODELS.md`). The layout
+of the `hd\` folder is described in `hd\CZYTAJ.txt`, the whole HD mode in `docs\HD_MODE.md` (documentation is in
+Polish). Without HD pictures the mod works normally (original graphics, sharply enlarged).
 
-## Znane ograniczenia
+## Known limitations
 
-- Silnik gry ma tylko trzy poziomy przybliżenia (0,5 / 1 / 2). Na poziomach węższych niż 2560 px (np. Nottingham)
-  oddalenie do 1,0 zostawia czarny pas z prawej strony. Płynny zoom (lupa w prezenterze) jest w planach.
-- Grafika HD działa w powiększeniu 2,0; przy 1,0 widać oryginalne piksele.
-- Poziomy nocne i mgła nie są jeszcze sprawdzone z grafiką HD.
+- The game engine has only three zoom levels (0.5 / 1 / 2). On levels narrower than 2560 px (e.g. Nottingham),
+  zooming out to 1.0 leaves a black band on the right. A smooth zoom (magnifier in the presenter) is in progress.
+- HD graphics work at zoom 2.0; at 1.0 the original pixels are shown.
+- Night levels and fog have not been checked with HD graphics yet.
 
-## Budowanie ze źródeł
+## Building from source
 
-Visual Studio 2022 lub nowsze (C++, CMake), konfiguracja **Win32 / Release**. MinHook jest pobierany przez CMake
+Visual Studio 2022 or newer (C++, CMake), configuration **Win32 / Release**. MinHook is fetched by CMake
 (FetchContent).
 
 ```
@@ -92,18 +96,19 @@ cmake -S src -B src/build -A Win32
 cmake --build src/build --config Release
 ```
 
-Wynik: `src\build\Release\winmm.dll`. Skrypt `tools\deploy.ps1` buduje i kopiuje bibliotekę do folderu gry.
+Output: `src\build\Release\winmm.dll`. The script `tools\deploy.ps1` builds and copies the library into the game
+folder; `tools\make_release.ps1` packs the release archive.
 
-## Dokumentacja
+## Documentation (in Polish)
 
-- `docs\PLAN.md` — plan, przebieg prac i wyniki testów,
-- `docs\HD_MODE.md` — tryb HD, interfejs ×2, menu, panel F10, tryb testowy w tle,
+- `docs\PLAN.md` — plan, course of work and test results,
+- `docs\HD_MODE.md` — HD mode, 2× interface, menus, F10 panel, background test mode,
 - `docs\RE_NOTES.md`, `docs\DDRAW_USAGE.md`, `docs\OBJECT_RENDER.md`, `docs\ZOOM_CAMERA.md`, `docs\HUD_STRIP.md`,
-  `docs\SPRITE_BANK.md` — zweryfikowane adresy i budowa `Game.exe`,
-- `tools\` — dezasembler (`rh.py`), sterowanie grą w trybie testowym w tle, narzędzia HD.
+  `docs\SPRITE_BANK.md` — verified addresses and structure of `Game.exe` (partly in English),
+- `tools\` — disassembler helper (`rh.py`), control of a hidden game instance for background tests, HD tools.
 
-## Zastrzeżenia
+## Disclaimer
 
-Projekt fanowski, niezwiązany ze Spellbound Entertainment, GOG ani właścicielami praw do gry. Repozytorium nie zawiera
-plików gry ani grafiki z niej pochodzącej. Do gry potrzebny jest legalny egzemplarz. Używasz na własną odpowiedzialność
-— zrób kopię zapasową zapisów gry.
+A fan project, not affiliated with Spellbound Entertainment, GOG or the rights holders of the game. The repository
+contains no game files and no graphics derived from them. You need a legal copy of the game. Use at your own risk —
+back up your save games.

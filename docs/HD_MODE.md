@@ -1,0 +1,387 @@
+# Tryb HD — jak działa i jak go budować (stan 2026-11-14)
+
+Legenda: [Z] = zweryfikowane pomiarem/testem w tle, [K] = z kodu gry (dezasemblacja), [N] = niesprawdzone.
+
+## 1. Pomysł
+Gra przy rozdzielczości wewnętrznej 2560×1440 i **własnym powiększeniu 2,0** pokazuje ten sam kadr co 1280×720, ale
+obraz składa natywnie: interfejs, napisy, kursor i stożki widzenia są ostre, a powiększane ×2 są tylko bitmapy
+(tło mapy i sprite'y). Każde takie powiększenie jest miejscem podmiany na grafikę HD. Nie ma skalowania całej klatki.
+
+Ustawienia (`SherwoodFix.ini`, sekcja `[Display]`): `Width=2560 Height=1440 HDView=1 FullHeightView=1 HDBackgrounds=1
+HDVariant=<folder> HDKeyToggle/Next/Prev (kody VK dziesiętnie) HDWater=1 SmoothSprites=1 HDSprites=1 HDInBetween=1
+HDKeyBetween=120 (F9)`.
+
+## 2. Z czego gra składa klatkę w powiększeniu 2,0 [Z: ślad rysowania `tools\hctl.ps1 -Cmd "trace N nazwa"`]
+Kolejność w jednej klatce (`RHGame::RenderFrame`):
+1. `Blt` 1:1 powierzchni świata (2560×1440, `E+0x48CC`) na bufor tylny. Powierzchnia świata jest wypełniana
+   rozciąganiem ×2 z **powierzchni mapy** (`E+0x48C4`, cały poziom, RGB565) — przy pełnym odrysowaniu (stan kamery 5)
+   i paskami po przewinięciu. → **podmiana na tło HD** (`DDM::HD::TryBackgroundBlit`).
+2. Animacje tła i obiekty „na ziemi" (`0x4D0A10` → `0x4A8670`): `Blt` z kluczem ×2 z małej powierzchni, do której gra
+   tuż przedtem zdekodowała klatkę banku. Tu są m.in. **animacje wody** i **dachy budynków** (zdejmowane, gdy postać
+   wchodzi do środka), duże drzewa.
+3. Wielokąty z barwieniem (`0x5EEC00`, jedyne wywołanie `0x461D98`): czyta piksele wprost z powierzchni mapy i miesza
+   z kolorem; w 2,0 procedura `0x62469C` zapisuje bloki 2×2. Hak czyta zamiast tego 4 piksele z obrazu HD.
+4. Postacie i obiekty z cieniem (`0x5EC5F0` → dla skali 2,0 `0x62261C` z kluczem `0x07C0` / `0x6220EC` bez):
+   `(src, dst, szerDst, wysDst, pitchSrc, pitchDst, współczynnik, znacznik)`, cdecl. Piksel równy znacznikowi (cień,
+   `0x001F`) przyciemnia cel (`dst*wsp/256`), inne są kopiowane; oryginał czytał JEDEN piksel celu na blok 2×2 —
+   na tle HD każdy cień robił z ziemi klocki. Hak przyciemnia 4 piksele osobno; z `SmoothSprites=1` filtruje (bilinear
+   z pokryciem z klucza → miękka krawędź sylwetki).
+5. HUD i napisy: `Blt` 1:1 z kluczem; kursor: zapis tła 55×55, rysunek 21×37.
+6. `Flip` → prezentacja D3D11.
+- Stałe skali: `[0x6774F4] = 2.0`, `[0x6775D8] = 0.5`; maski kanałów procedur MMX: `0x6C11C8` = `1F00 1F80 1F00 1F00`.
+- Stan kamery `E+0x48C0`: 1 spoczynek, 2 przewijanie, 3/4 animacja zoomu, 5 pełne odrysowanie (silnik sam ustawia 5 po
+  wczytaniu). Wymuszenie odświeżenia tła po zmianie wariantu = zapis 5, gdy stan to 1 lub 2. [Z]
+
+## 3. Tła HD
+- `tools\hd\extract_maps.py` → `hd\maps_png\<mapa>_<wariant>.png` (20 plików; format `.map`: `u16 w, u16 h, u32 2,
+  u32 rozmiar` + bzip2 surowego RGB565).
+- `tools\hd\upscale_variants.py [--variants …] [--only …] [--redo] [--png] [--colorfix σ]` →
+  `hd\maps\<wariant>\<klucz>.hdmap`. Klucz = FNV-1a 64 po co 7. pikselu oryginału (to samo liczy DLL po powierzchni mapy).
+  `.hdmap`: `"HDMP"`, u32 wersja=1, u32 szer, u32 wys, u32 0, potem RGB565 (z ditheringiem uporządkowanym).
+- `tools\hd\hdmap_to_png.py [--variants … | all] [--only …] [--redo]` → `hd\maps_hd\<wariant>\<mapa>.png`: podglądy PNG
+  robione WPROST z plików `.hdmap` (te same piksele; bez modelu i karty graficznej; 20 map = 680 MB w ~50 s). Folder
+  `hd\maps_hd` służy tylko do oglądania — gra go nie czyta. Po każdym ponownym generowaniu map odświeżyć podglądy
+  (`--redo`): użytkownik ocenia grafikę także po plikach w `hd\` (2026-11-14 leżała tam jako jedyny plik stara próba
+  sprzed korekty kolorów — wyglądała na „jedyną mapę HD" i to ją porównywał z oryginałem; teraz w `hd\maps_hd\_stare\`).
+  Pomiar podglądu nottingham_day: średnie RGB 113,0/86,7/50,3, nasycenie 60,2 % (oryginał 112,7/86,5/50,0; 60,1 %;
+  stary plik 110,7/87,0/52,4; 56,4 %). Opis folderów dla użytkownika: `hd\CZYTAJ.txt`.
+- Warianty (folder → model w `hd\models`): `aomr` 2xAoMR_mosr (0,7 Mpx/s), `sgi` 4x_SGI (0,28), `ultrasharp`
+  4x-UltraSharp (0,27, licencja niekomercyjna), `dat2` 4xNomos2_hq_dat2 (0,04; całość ~45 min). Modele 4× są
+  zmniejszane do 2× filtrem Lanczos. Półprecyzja tylko gdy model ją deklaruje i wynik próbny się zgadza.
+- **Korekta kolorów** (`color_fix`, domyślnie σ=3 px oryginału): `HD += powiększ(rozmyj(oryginał − zmniejsz(HD)))`.
+  Pomiar na nottingham_day przed korektą (średnie RGB; nasycenie): oryginał 112,7/86,5/50,0; 60,1 % — dat2
+  110,2/86,4/51,8; 57,7 % — sgi 112,2/87,0/50,2; 59,7 % — ultrasharp 110,9/86,6/49,5; 60,2 % — aomr 110,3/83,7/44,5;
+  64,8 %. Po korekcie (croisement01): różnica średnich ≤0,15, bloki 32 px: 0,1–0,2. [Z]
+- DLL (`src\ddm\ddm_hd.cpp`): warianty = podfoldery `hd\maps`; pliki mapowane w pamięć (najwyżej 3 naraz); powierzchnia
+  mapy identyfikowana numerem seryjnym; gra blokuje ją co klatkę do odczytu, więc zawartość jest sprawdzana haszem
+  najwyżej co 0,5 s, a po `Blt` do niej — od razu. Zmiana zawartości w trakcie gry → ostrzeżenie w logu i powrót do
+  oryginalnych pikseli dla tego stanu (nie zaobserwowano). [Z]
+
+## 4. Woda [Z]
+Staw w Nottingham = animacja 8 klatek 272×178 (klatki banku 4579–4586, paleta 16), nieprzezroczysta, każda klatka to
+cały staw; dane są kodowane blokami 4×1, więc powiększone dają mozaikę. Na tle HD takie sprite'y są pomijane
+(`HDWater=1`): duży sprite (≥4000 px, ≥3000 nieprzezroczystych), którego piksele różnią się od mapy pod spodem średnio
+o <25/255. Pomiar na Nottingham: woda 8,0–13,7 (10 animacji), wszystko inne 45–82. Decyzje są w logu (`HD: sprite …`).
+Do zrobienia później: animacja wody w HD (klatki przez model odporny na kompresję albo „migotanie" z różnicy klatek).
+
+## 5. Sprite'y HD (wdrożone 2026-11-14, `src\ddm\ddm_hd_sprites.cpp`, `HDSprites=1`)
+- **Skąd wiadomo, co jest na powierzchni** [Z]: hak na dekoder banku `0x504CD0` zapisuje „wskaźnik pikseli powierzchni →
+  numer klatki, tryb barwienia, rozmiar klatki". Dekodery z maską `0x504EB0/0x504F70` kasują wpis (powierzchnia ma
+  wtedy tylko część klatki). Numery klatek ≥ 404 855 to klatki tworzone w locie (małe ikony) — bez wersji HD.
+- **Zasłanianie** [K+Z]: po dekodowaniu obiekt sprite'a (`0x5BBA00`, gałąź `[ebp+0x10]==1`) wycina z powierzchni to, co
+  zasłaniają mury/drzewa — procedury `0x5BBF20(rect*, blokada*, poz*)` `ret 0xC` i `0x5BC3C0(dane*, blokada*, poz*,
+  word)` `ret 0x10` wpisują klucz w zasłonięte piksele. Haki oznaczają wpis jako „wycięty"; klatka HD jest wtedy
+  rysowana tylko tam, gdzie piksel powierzchni (hx/2, hy/2) nie jest kluczem.
+- **Cień** [Z]: w banku znacznik `0x001F`; gra zamienia go przy dekodowaniu na własny kolor (w dzień `0x2964`) i ten
+  kolor podaje procedurze `0x62261C` jako „znacznik" (współczynnik przyciemnienia 102/256). W klatkach HD cień zostaje
+  `0x001F`; przy rysowaniu przez procedurę gry przyciemnia cel, przy rozciąganiu DirectDraw dostaje kolor z powierzchni.
+- **Kontrola zgodności**: po każdym dekodowaniu, przed pierwszym użyciem, porównanie powierzchni z klatką HD w siatce
+  ~12×12 punktów: kształt (przezroczystość) i **kolory** (średnia różnica na kanał ≤ 36/255; w teście na Nottingham
+  największa wśród przyjętych klatek: 9,5). Niezgodność → rysowanie po staremu (raz w logu na klatkę). To jest też
+  bezpiecznik dla wszystkiego, czego nie znam (inne palety, efekty): zły kolor nigdy nie trafi na ekran.
+- **Noc i mgła** [K, NIE sprawdzone w grze]: tryb barwienia 1/2 z dekodera. Mod barwi klatkę HD tym samym wzorem co
+  `0x5046E0`: `kanał = kanał*p/100 + kolor*(100-p)/100` (zieleń liczona na 5 bitach, klucz i kolor cienia bez zmian),
+  noc p=50 z kolorem `0x00E7` (= `0x5EF320(0,0x1E,0x3C)`), mgła p=60 z bielą. Dla klatek blokowych gra używa
+  gotowych zestawów palet 1/2 (`bank+0x2C/+0x3C`), budowanych tymi samymi parametrami: `0x506930(paleta, wzór, tryb)`
+  → `0x504830(paleta, 50, kolor(0,0x1E,0x3C))` albo `(60, 0xFFFF)` [K]. Znacznik cienia w paletach wszystkich trzech
+  zestawów jest zamieniany na kolor cienia poziomu przez `0x5055B0` → `0x504B80(paleta, kolor(0xF))` [K]. Gdyby
+  zaokrąglenia się różniły, kontrola kolorów odrzuci klatki i będą rysowane po staremu.
+- **Magazyny**: `hd\sprites\<wariant>\` (nazwa jak wariant tła) i `hd\sprites\_common\`; `sprites.idx` (16 B na klatkę
+  banku: offset u64, rozmiar u32, szer u16, wys u16) + `sprites.dat` (klatka = surowe RGB565 albo wiersze
+  „u16 pierwszy, u16 liczba, piksele"). Odczyt `ReadFile` przy pierwszym użyciu, pamięć podręczna 128 MB (LRU).
+- **Podział** (arkusz `hd\compare\postacie_sprites.png`): klatki bezstratne (dachy, drzewa, obiekty; 10 134 szt.) —
+  każdym modelem wariantu; klatki blokowe (postacie, animacje; 394 721 szt.) — tylko SGI do `_common`, bo DAT2 i AoMR
+  zamieniają szum kompresji w fakturę, a HAT jest ~10× wolniejszy.
+- Narzędzia: `tools\hd\upscale_sprites.py` (`--kind rle|vq`, `--store`, `--palettes-of plik`, `--ids-file plik`,
+  `--sheet`, `--shard I/N`, `--batch-pixels`, `--skip-store`), `tools\hd\merge_sprite_stores.py` (scalanie magazynów
+  zrobionych równolegle), `tools\hd\sprite_model_test.py` (arkusz porównawczy modeli), `tools\hd\variant_sheet.py`
+  (warianty tła obok siebie + zgodność kolorów), polecenie testowe `frames NAZWA` (które klatki są teraz na
+  powierzchniach sprite'ów).
+- Czasy na karcie 12 GB (2026-11-14): klatki bezstratne (63 Mpx) — sgi/ultrasharp ~8 min, aomr ~12 min, dat2 ~65 min
+  (większość przy zajętej karcie); klatki blokowe (1 051 Mpx) modelem sgi — 4 procesy równolegle, ~80–90 min.
+  Przy małych klatkach wąskim gardłem jest procesor (stąd `--shard`). **Modele z uwagą (DAT, HAT) muszą mieć małe
+  partie** (20 000 px): przy 280 000 px DAT2 zapchał 12 GB karty i przestał się posuwać.
+- **Nie uruchamiać generatora podczas gry**: zajęta karta wydłuża `Present` (pomiar: przy zapchanej pamięci karty gra
+  spadła z 25 do ~8 tików/s; po zwolnieniu wróciła do 25).
+- **Nie zrobione / nie sprawdzone**: poziomy nocne i mgła w praktyce (patrz wyżej), sprite'y rysowane lustrzanie przez
+  DirectDraw (idą po staremu), animacja wody w HD, interfejs, pozostałe 8 lokacji (test tylko na Nottingham w dzień).
+
+### Ikony i znaczniki — klatki tworzone przez grę w locie (2026-11-14) [Z]
+Zgłoszenie użytkownika: „ikonka nad głową Robina jest pixeloza, gdy ma kaptur". Przyczyna: portret w kółku nad wybranym
+bohaterem, „Z" nad śpiącym, gwiazdki, znaki zapytania, ikony przedmiotów, pierścień pod postacią itd. NIE są w pliku
+banku — gra buduje je przy wczytywaniu obrazków interfejsu (`0x00505CE0` dokłada zestaw obrazków na koniec wektora klatek
+`bank+8`: `_First` = `bank+0xC`, `_Last` = `bank+0x10`, 20 B na wpis; `0x00505980` przycina obrazek do zawartości i koduje
+wierszami RLE16). Numery ≥ 404 855 zależą od kolejności wczytywania, więc taka klatka jest rozpoznawana **po treści**:
+FNV-1a 64 po „u16 szer, u16 wys" + dane wierszy (`ContentKey` w `ddm_hd_sprites.cpp`).
+- Magazyn: `hd\sprites\_icons\icons.idx` („HDIC", wersja 1, liczba, 0; wpisy 24 B: klucz u64, offset u64, rozmiar u32,
+  szer u16, wys u16) + `icons.dat` (klatki jak w `sprites.dat`). Wspólny dla wszystkich wariantów.
+- Narzędzie: `tools\hd\upscale_icons.py --model ultrasharp [--sheet …]` (porównanie modeli: `--compare sgi ultrasharp dat2
+  aomr`; arkusze `hd\compare\ikony_oryginalne.png`, `ikony_modele.png`, `ikony_przed_po.png`, `ikony_w_grze_przed_po.png`).
+  Wybrany **UltraSharp**: na portretach 21×28 i ikonach najczystszy; SGI podobny, DAT2 i AoMR dodają szum. Czysta czerń
+  z czarnym otoczeniem zostaje czernią (`keep_black`) — pierścienie i efekty świetlne są mieszane wg jasności.
+- Skąd dane: polecenie testowe `rtdump NAZWA` zapisuje wszystkie klatki „w locie" z pamięci gry (Nottingham: 439 klatek,
+  382 różne); **oraz sam mod podczas zwykłej gry**: klatka „w locie" bez wersji HD jest raz dopisywana do
+  `hd\work\runtime_frames\play_<data>_<czas>.bin` — po kolejnym uruchomieniu `upscale_icons.py` ikony z misji, których
+  nikt nie zrzucał ręcznie, też są w HD. (Ikony nieznane rysowane są jak dotąd — wygładzone ×2.)
+- **Pierścień zaznaczenia i efekty świetlne** idą inną drogą: ogólny blitter gry `0x005E6900` (thiscall, 6 arg.:
+  `srcId, srcRect*, dstId, dstRect*, src2Id, flagi`; tryb = flagi | `[this+0x70]`: `0x20000` 16 bitów, `0x8000`
+  rozciąganie, `0x100/0x200/0x400` rodzaj mieszania, `1` klucz) → dla `0x28201` procedura `0x005E8B10(src, dst, alphaSrc,
+  klucz, szerDst, wysDst, pitchSrc, pitchDst, skalaX, skalaY)`, `ret 0x28`: alfa = min(255, 5 górnych bitów zieleni
+  drugiego źródła × 16), `wynik = src·α/256 + dst·(256−α)/256` na kanał. Hak rysuje klatkę HD tym samym wzorem na każdy
+  piksel HD (oryginał mieszał jeden piksel celu na blok 2×2). Inne tryby rozciągane (`0x28100/0x28101/0x28200/0x284xx`:
+  `0x5E92F0`, `0x5E8F20`, `0x5E8740`, `0x5E84E0`) nie pojawiły się w teście — do obserwacji w śladzie (`GBLT …`).
+- **Raport braków** (polecenie testowe `miss NAZWA [TIKI]`): lista wszystkiego, co w tym czasie zostało powiększone ×2
+  BEZ klatki HD (numer klatki, droga rysowania, powód). Nottingham po zmianach: pusty przy ~10 000 rysowań HD na 50 tików.
+
+### Notatki z rozpoznania (stan sprzed wdrożenia)
+- Bank: `docs\SPRITE_BANK.md`, narzędzia `tools\hd\extract_sprites.py`, `rhs_parse.py`. 404 855 klatek, 1 114 Mpx:
+  bezstratne RLE 10 134 szt. / 63 Mpx (obiekty, dachy, efekty), VQ 4×1 394 721 szt. / 1 051 Mpx (postacie; z tego
+  879 Mpx to klatki <8000 px).
+- Dekoder klatek [K]: `0x504CD0` `__thiscall(bank, blokada*, nrKlatki, kolor/zestaw)`, `ret 0xC`; blokada: `+4` szer,
+  `+6` wys (u16), `+8` pitch, `+0x10` wskaźnik pikseli. RLE: `0x5E3919` (zamienia znacznik `0x001F` na podany kolor)
+  albo `0x5E3730`; VQ: `0x5050A0(src, dst, pitch−2w, w, h, paleta, zestaw)`. Po dekodowaniu, zależnie od trybu poziomu
+  (`0x4D2340(0xF)`: 1 noc, 2 mgła) barwienie `0x5046E0(piksele, liczba, procent, kolor)`. Warianty z maską:
+  `0x504EB0`, `0x504F70` (wołane z `0x5BBAF9/0x5BBB19`).
+- Zamiar: hak na `0x504CD0` zapamiętuje „wskaźnik pikseli → numer klatki”; przy rysowaniu ×2 (krok 2 i 4 wyżej) mod
+  bierze klatkę HD z `hd\sprites\…` i kopiuje 1:1 z kluczem/znacznikiem; barwienie nocy/mgły tą samą funkcją gry.
+- Upscaling sprite'ów: kolory krawędzi rozlane w przezroczystość, alfa i znacznik cienia skalowane osobno, na końcu
+  korekta kolorów jak dla map. Czas: cały bank szybkim modelem ~30–70 min, DAT2 ~8 h.
+
+## 5a. Klatki pośrednie animacji — eksperyment na obrazkach (2026-11-14; wdrożenie w grze: §5b)
+Pytanie użytkownika: czy AI może dorysować klatki między klatkami animacji postaci. Odpowiedź: tak, modelem RIFE.
+- **Model**: RIFE v4.26 (hzwer, MIT). Pobrane za zgodą użytkownika: `RIFEv4.26_0921.zip`, 22 869 906 B, z konta autora
+  `huggingface.co/hzwer/RIFE` → `hd\models_vfi\rife_v4.26_dl\` (sha256 `1fa9b9cd…3f760e`). Użyty jest tylko plik wag
+  `flownet.pkl`, wczytywany `torch.load(weights_only=True)`; kod z archiwum NIE jest uruchamiany — sieć jest napisana
+  od nowa w `tools\hd\rife_net.py` (5,66 mln parametrów, 158 tensorów z pliku; 40 tensorów „teacher/caltime" służy
+  tylko do uczenia). Próby kontrolne: identyczne klatki → wynik bez zmian; kwadrat przesunięty o 16 px → błąd 0,0001
+  (przenikanie 0,0195). Skrypty czytające wagi uruchamiać przez `python -I`.
+- **Jak**: obie klatki HD na wspólnym płótnie (przesunięcia klatek z `.rhs`), nałożone na jednolite tło i powiększone
+  ×4 (sieć uczono na filmach, a postać ma ~56×114 px); sieć liczy pole ruchu i maskę, a kolor, krycie i cień sprite'a
+  są przesuwane tym samym polem → wynik jest znowu klatką sprite'a (figura / cień / przezroczyste).
+- **Test z prawdziwą odpowiedzią** (`interp_survey.py`: co druga klatka animacji usunięta i odtworzona; błąd na figurze,
+  na 255; dolna granica = różnica dwóch klatek tej samej pozy = 9,2):
+
+  | animacja Robina | ruch px | hold (gra) | przenikanie | przepływ OpenCV | RIFE ×2 | RIFE ×4 | RIFE ×8 |
+  |---|---|---|---|---|---|---|---|
+  | 112 chód gęsty | 0,5 | 15,4 | 13,1 | 12,8 | 12,5 | 12,3 | 12,2 |
+  | 128 chód | 0,5 | 15,9 | 14,3 | 14,0 | 13,9 | 13,6 | 13,5 |
+  | 224 | 2,7 | 25,1 | 21,8 | 15,6 | 15,1 | 14,7 | 14,6 |
+  | 320 | 1,1 | 20,6 | 17,5 | 16,2 | 15,6 | 15,5 | 15,3 |
+  | 432 | 3,3 | 28,3 | 24,6 | 20,2 | 19,0 | 18,3 | 18,4 |
+  | 672 | 1,7 | 21,3 | 18,0 | 16,5 | 16,3 | 15,9 | 16,0 |
+  | 752 skok | 12,1 | 31,0 | 29,4 | 27,7 | 23,9 | 23,5 | 23,3 |
+  | 1264 | 6,5 | 25,9 | 24,4 | 22,9 | 21,2 | 20,8 | 20,4 |
+
+  Test jest trudniejszy niż użycie w grze (tam klatka pośrednia leży między DWIEMA KOLEJNYMI klatkami, czyli przy
+  połowie tego ruchu). Wzrokowo: RIFE daje jedną ostrą sylwetkę także przy dużym ruchu, przenikanie i przepływ OpenCV
+  dają podwójne „duchy". ×4 jest prawie tak dobre jak ×8 przy 55 ms zamiast 137 ms na parę (×2: 39 ms).
+- **Zastrzeżenia**: (1) przejście „ostatnia → pierwsza klatka" animacji, która się nie zapętla (np. lądowanie → start
+  skoku), daje bezkształtną plamę — przy generowaniu potrzebny próg jakości (np. niezgodność obu przesuniętych klatek)
+  i/lub generowanie tylko par, które w grze naprawdę po sobie następują; (2) ruch nieliniowy (przykucnięcie) daje
+  wiarygodną, ale inną niż w grze pozę; (3) klatki wygenerowane są nieco gładsze od oryginalnych.
+- **Co to dałoby w grze**: chód i większość animacji zmieniają klatkę co tik (25 kl./s; pole `flags` w `.rhs` to czas
+  trwania kroku w tikach, 0 = jeden tik; `s16` = przesunięcie na krok). Mod rysuje już klatki między tikami (pozycje są
+  interpolowane) — jedna klatka pośrednia na tik to animacja postaci w 50 kl./s. Animacje z długimi krokami (bezczynność:
+  2–15 tików) zyskałyby najmniej z jednej klatki.
+- **Koszt pełnego wdrożenia**: 615 622 różnych par kolejnych klatek we wszystkich animacjach (474 904 po złożeniu par
+  A→B i B→A); ~5–6 GB na dysku; generowanie ok. 1–3 h w kilku procesach (karta ~25 min, reszta procesor); w modzie:
+  pamiętanie poprzedniej klatki każdego sprite'a, magazyn par, podmiana w klatkach między tikami, przełącznik w INI.
+- Narzędzia i obrazy: `tools\hd\rife_net.py`, `interp_test.py` (arkusz + animacja porównawcza), `interp_survey.py`
+  (tabela wyżej, `--sheet`), `interp_demo.py` (animacja 25 vs 50 kl./s i arkusz wszystkich klatek);
+  `hd\compare\chod_25_vs_50.gif`, `skok_25_vs_50.gif`, `chod_wszystkie_klatki.png`, `skok_wszystkie_klatki.png`,
+  `klatki_posrednie*.png`, `chod_klatki_posrednie.gif`.
+
+## 5b. Klatki pośrednie w grze — najpierw próba na Robinie (2026-11-14, `HDInBetween=1`, klawisz F9) [Z w tle]
+Użytkownik po obejrzeniu arkuszy zapytał, czy „będzie gorzej przez ghosty i blury w ruchu" → mała próba zamiast całości.
+- **Dane**: `tools\hd\make_inbetweens.py --files RobinTown.rhs` (potem `--loops`) → `hd\sprites\_between\between.idx`
+  („HDBT", wersja 1, liczba, 0; wpisy 32 B posortowane po (a, b), a < b: `u32 a, u32 b, u64 offset, u32 rozmiar, u16 szer,
+  u16 wys, i16 dxA, dyA, dxB, dyB`; rozmiar 0 = para odrzucona) + `between.dat` (klatki jak w `sprites.dat`). Jedna klatka
+  na parę, używana w obu kierunkach; `dx/dy` = lewy górny róg klatki pośredniej względem lewego górnego rogu klatki A / B.
+  RIFE na obrazach ×4, partiami wg rozmiaru płótna: **22 pary/s** (RobinTown: 9040 par w 6,9 min).
+- **Kontrola jakości** (pomiar na powiększeniu ×4): obie klatki źródłowe przesunięte „do środka" muszą się zgadzać —
+  `colour` = średnia różnica barw na figurze (na 255), `shape` = udział sylwetki, na którym się różnią. Progi z oglądu
+  240 par (`hd\compare\posrednie_proba.png`): zwykłe pary `colour ≤ 32` i `shape ≤ 0,30` (do ~17 czyste, 27–36 miękkie, ale
+  jedna spójna figura; dalej rozmazane). Pary widziane tylko jako „ostatnia → pierwsza klatka" to najczęściej cięcia:
+  próg `≤ 20 / ≤ 0,10`, a w drugim przebiegu (`--loops`) przyjmowane są te, których obie wartości nie przekraczają
+  1,25 × mediany kroków WEWNĄTRZ tej samej animacji (zamknięcie cyklu chodu 293635→293616 miało 20,01 / 0,057).
+  Wynik: RobinTown 6461 par użytecznych z 9040 (53,9 MB); pomiary w `hd\work\between_log.csv`.
+- **Skąd wiadomo, co pokazać** [K+Z]: metoda obiektu sprite'a `0x005BBA00` (`this` = sprite, `ret 4`; pola: `+0x184` nr
+  animacji, `+0x186` nr kroku, `+0x1D0` bank) woła dekoder banku — hak zapamiętuje, który obiekt dekoduje; dla każdego
+  obiektu pamiętana jest klatka z poprzedniego tiku (licznik tików = własne klatki tików, `Timing` → `DDM::HD::OnTickFrame`).
+  **Sprawdzone śladem**: dla stojących postaci krok pozycji rysowania między kolejnymi klatkami = dokładnie 2 × różnica
+  przesunięć `x,y` z `.rhs` (reszta (0,0) we wszystkich 13 sprite'ach; u idącego Robina reszta = jego ruch).
+- **Kiedy** : mod rysuje ~6 obrazów na tik (144 Hz); `Timing::RenderPhase()` = położenie obrazu w tiku (0..1; −1, gdy nie
+  ma klatek dodatkowych). Sprite, który w tym tiku zmienił klatkę A→B i ma parę w magazynie, jest w obrazach o fazie
+  < 0,45 rysowany klatką pośrednią, potem klatką B (pomiar: 3/3 obrazy; przy progu 0,6 było 4/2). Czyli B, M, C, M…
+  po ~20 ms — animacja 50 kroków/s. Pozycje i tak są interpolowane (`SmoothMotion`).
+- **Zasłanianie** : gra wycina z powierzchni sprite'a to, co zasłaniają mury/drzewa (w mieście Robin ma `cut=1` prawie
+  zawsze). Z powierzchni i klatki HD powstaje mapa „zasłonięte/widoczne" (pewna tam, gdzie klatka HD jest pełna;
+  rozszerzana o 6 pikseli na boki) i jest nakładana na klatkę pośrednią (`HiddenMap`).
+- **Wynik w tle**: 938 klatek pośrednich w 25 s chodzenia — 25,0 Hz, 7,0 ms pracy na tik, 143,9 kl./s (bez zmian);
+  test ciągły 3 min PASS. Obraz: `hd\compare\posrednie_w_grze.png` (klatka gry / pośrednia / gry / pośrednia).
+- **Ograniczenia**: tylko pary z plików podanych generatorowi (Robin: `RobinTown.rhs`, `RobinHood.rhs`); przejścia między
+  animacjami i pary odrzucone idą po staremu (jeden krok 40 ms); kroki trwające kilka tików dostają jedną klatkę
+  pośrednią na początku; klatki pośrednie są miększe (szum kompresji obu klatek się uśrednia — najbardziej widać to na
+  płaszczu z kapturem); sprite'y rysowane przez DirectDraw (obiekty, animacje tła) — bez klatek pośrednich.
+- **Całość** — 2026-11-14 użytkownik: „Tak, wszystkie postacie" → patrz §5c.
+
+## 5c. Klatki pośrednie dla wszystkich postaci (2026-11-14)
+- Zakres: 117 plików `DATA\Characters\*.rhs` (`--files Characters/`; animacje z `DATA\Animations\…` to tła i efekty,
+  rysowane przez DirectDraw — klatek pośrednich tam nie ma): 148 577 animacji, **457 552 par** (59 579 tylko jako
+  „ostatnia → pierwsza").
+- **Generator przepisany na kartę graficzną** (`Maker.run`): powiększenie ×4 dwusześcienne (`F.interpolate`), obraz dla
+  sieci, RIFE, przesunięcie płaszczyzn, miary jakości i zmniejszenie ×4 (`avg_pool2d` = średnia z obszaru) — na kartę idzie
+  tylko małe płótno. `--selftest 240` (losowe pary postaci): stara droga (OpenCV na procesorze) 15,9 pary/s, nowa 111 par/s
+  przy **identycznym wyniku** (różnica klatek 0,01 na 255, te same decyzje 240/240). Półprecyzja (`--half`, autocast fp16)
+  była wolniejsza (31–92 pary/s) i różniła się o 0,35 — nieużywana. Pamięć karty: 1,3 GB na proces.
+- **Nowa miara: cienkie elementy** (`thin_kept`): przy szybkim zamachu mieczem/włócznią klatka pośrednia potrafiła zgubić
+  ostrze (została sama rękojeść), a kolor/kształt tego nie widzą — ostrze to mały ułamek sylwetki. Cienkie części = sylwetka
+  minus jej otwarcie elipsą 5×5 (pas węższy niż ~5 px HD); klatka pośrednia musi zachować ≥ 50 % średniej z obu klatek
+  (gdy mają ich ≥ 40 px). Próba 800 par wszystkich postaci (`--survey 800 --sheet-thin 0.7`): 105 par poniżej 0,5, z czego
+  38 (4,8 %) przechodziło pozostałe progi — to były właśnie znikające miecze, włócznie, halabardy. Przy 0,6–0,7 klatki
+  wyglądają dobrze. Próg koloru 32 sprawdzony na tej samej próbie: odrzucane pary tuż nad progiem są zwykle jeszcze
+  poprawne — próg zostaje ostrożny.
+- **Uruchomienie**: `python -I tools\hd\make_inbetweens.py --files Characters/ --jobs 3 --redo` — 3 procesy (części
+  `_between_part0..2`, podział po `(a·31 + b) mod 3`); potem scalenie w `_between_new` → zamiana z `_between` (stary
+  magazyn działa w grze do samego końca), drugi przebieg `--loops`. Przerwane? To samo polecenie kontynuuje (gotowe pary
+  w częściach zostają). Podczas działania gry (`Game.exe`) generator czeka i oddaje pamięć karty.
+- **Pułapka: pamięć karty przy kilku procesach.** Pierwsze podejście (bez limitu): po 5 min razem 11,5 z 12 GB (każdy
+  proces trzymał zapas po płótnach różnych rozmiarów), Windows zaczął przenosić pamięć karty do RAM i dwa procesy stanęły
+  na 8 minut. Teraz każdy proces ma limit `torch.cuda.set_per_process_memory_fraction(0,7/N)` (`--card-share`) i
+  `PYTORCH_CUDA_ALLOC_CONF=garbage_collection_threshold:0.6,max_split_size_mb:64` → razem 5,8–7,8 GB, bez zastojów.
+- **Wynik (2026-11-14, 14:00–14:58)**: 3 procesy po 45–47 min, 47–50 par/s każdy (na początku 73, potem większe płótna);
+  scalenie + drugi przebieg 2 min. **457 198 par, 314 756 użytecznych (69 %), 2,98 GB**; 354 pary pominięte (płótno
+  > 400×400 px albo brak klatki HD).
+- **Sylwetki z samego cienia** (`Blip00.rhs`, 2672 klatki: postacie poza zasięgiem wzroku rysowane jako ciemne
+  sylwetki): pierwszy przebieg odrzucił wszystkie 3168 par (wymagana była kolorowa figura). Teraz miara kształtu porównuje
+  wtedy cienie, a klatka może być samym cieniem → `--retry-shadow`: 3032 z 3168 użytecznych.
+- **Sprawdzone w tle** (Nottingham, ustawienia gracza): ślad rysowania — klatka pośrednia narysowana w 518 z 531 obrazów,
+  w których jej się należała (98 %; Robin, żołnierze, strażnicy, oficerowie, kusznicy, żebrak, mieszczanka, sylwetki,
+  obracające się przedmioty do podniesienia); test ciągły 3 min: 25,0 Hz, 7,0 ms pracy na tik (najgorszy tik 23 ms),
+  143,5 kl./s, 48 199 klatek pośrednich, 0 błędów. Nie sprawdzone: inne poziomy, noc/mgła (barwienie jak dla klatek HD).
+- Narzędzia: `--stats`, `--selftest N`, `--survey N --sheet PLIK [--sheet-range LO HI | --sheet-thin X]`; logi
+  `hd\work\make_inbetweens_all.log`, `make_inbetweens__between_partN.log`, pomiary `hd\work\between_log*.csv`
+  (kolumna `thin_kept`).
+
+## 6. Tryb testowy w tle (żeby nie zabierać użytkownikowi ekranu)
+- `tools\htest.ps1 [-Ini plik] [-MenuOnly]` — start ukrytej gry (`SHERWOODFIX_TEST=1`), pominięcie filmów, „Graj!".
+- `tools\hctl.ps1 -Cmd "a; b" [-Shot nazwa | -ShotOut nazwa] [-Crop x,y,w,h] [-MaxWidth n] [-Wait ms]`.
+  Polecenia: `move`, `moveto`, `click [L|R]`, `down`, `up`, `wheel`, `key DIK [ms]`, `zoomin`, `zoomout`, `shot`,
+  `shotout`, `mem ADR LEN`, `stat`, `hd [next|prev|toggle|NAZWA|off]`, `dbg MASKA` (pomijanie procedur rysujących:
+  1 sprite'y z kluczem, 2 bez, 4 wielokąty, 8 rozciąganie DirectDraw z kluczem, 16 klatka pośrednia w każdym obrazie
+  tiku), `trace N NAZWA` (ślad rysowania z adresami wywołujących; od 2026-11-14 także `GBLT …` = wywołania ogólnego
+  blittera gry z flagami, `SPR …` = każdy sprite z klatką, poprzednią klatką, pozycją i fazą tiku, `BTW …` = narysowana
+  klatka pośrednia), `frames NAZWA`, `miss NAZWA [TIKI]` (co zostało powiększone bez klatki HD), `rtdump NAZWA` (klatki
+  tworzone przez grę w locie → plik dla `upscale_icons.py`), `between on|off|toggle`, `quit`. `stat` pokazuje też
+  `between=` i `hdBetween=` (liczba narysowanych klatek pośrednich). Od 2026-11-14 (§7): `uiwins` (okna misji:
+  vtable, prostokąt, co każde narysowało → `tools\out\harness\uiwins.txt`), `settings open|close|up|down|left|right|
+  click|state` (panel F10; `state` = wartości wszystkich opcji). Ślad ma też `UI DRAW begin/end` (skąd wywołany
+  `WindowManager::Draw`), `UI BLEND`, `POINTER`, `SETCURSOR`.
+- `tools\hsoak.ps1 [-Minutes n] [-Ui]` — test ciągły z werdyktem (tempo tików, błędy w logu); `-Ui` dodaje minimapę,
+  portret, menu Esc i panel ustawień.
+- Zrzut `shot` = klatka gry bez nakładek moda; `shotout` = to, co trafia na ekran (z licznikiem i napisami).
+- **Izolacja pulpitu**: w trybie testowym `SetCursorPos`, `ClipCursor`, `SetCursor`, `ShowCursor`, `SendInput`,
+  `mouse_event`, `keybd_event`, `SetForegroundWindow`, `SetActiveWindow`, `BringWindowToTop`, `SetCapture` są podmienione
+  dla całego procesu (plus import gry). Bez tego `RHGame::Run` (`0x50F967..0x50F98E`: `GetWindowRect` + `SetCursorPos`
+  na środek okna w KAŻDYM obiegu pętli misji) przypinał kursor użytkownika do środka ekranu. `stat` pokazuje
+  `desktopBlocked=`; `htest.ps1` kończy instancję, jeśli tego pola nie ma albo kursor stoi na środku mimo ruchu myszy.
+- Urządzenia DirectInput gra otwiera z `DISCL_FOREGROUND` (klawiatura 0x16/0x15, mysz 5/6), więc ukryte okno nigdy
+  ich nie dostaje — klawiatura i mysz użytkownika nie trafiają do instancji testowej. [K]
+
+## 7. Interfejs ×2, menu na cały ekran, panel ustawień (2026-11-14, `src\ui_scale.cpp`, `src\settings_menu.cpp`)
+
+### Interfejs misji ×2 (`UIScale=2`, szerokość wewnętrzna ≥ 2048)
+Gra rozmieszcza okna w pikselach ekranu z wielu miejsc (konfiguracja grafiki czytana w ~60 miejscach, kopia w RHGame),
+więc układanie ich dla mniejszego ekranu odpadło. Zamiast tego każdy obrazek okna jest rysowany 2× większy **od swojego
+rogu ekranu** (siatka 25/50/25 %): okno w lewym dolnym polu rośnie od lewego dolnego rogu, w górnym środkowym od górnej
+krawędzi wokół własnego środka, w środkowym wokół własnego środka. Pozycja myszy dla okien jest przeliczana wstecz
+kotwicą obrazka, nad którym jest kursor (lista obrazków z ostatniej klatki), więc kliknięcie trafia w małe okno gry.
+- Kotwica okna: pętla `WindowManager::Draw` (0x006189E0) — hak w środku funkcji na 0x00618A34 (bieżące okno) i
+  0x00618A3F (koniec okna). Prostokąt okna: floaty l,t,r,b na +0x70, bajt ważności +0x80. Okna średniej wielkości
+  (≤ 50 % ekranu) mają jedną kotwicę dla wszystkich obrazków; okna tej samej klasy (vtable) — wspólny prostokąt (rząd
+  portretów rośnie razem od lewego rogu). Dwa okna HUD na cały ekran (vtable 0x0067AD9C) — obrazek po obrazku.
+- Mapa: to samo okno co przycisk w prawym górnym rogu (vtable 0x00679B70); otwarta ma 158×246 przy 1039,90.
+  `MapPosition=1` przesuwa ją ×2 pod przycisk (prawy górny róg, 8 px od krawędzi, od y = 104·2).
+- Wskaźnik okien misji: RHGame+0x68+0x1758, pozycja floaty +0x80; `Pointer::Update` (0x00628210) dodaje ruch z
+  InputState (s16 dx,dy) — przy skali ruch jest zerowany na czas wywołania, a pozycja ustawiana z przeliczenia.
+- Rysowane poza blitami (piszą piksele same, ich prostokąty też przeliczane): `DrawRect` 0x005ECDC0 (ramka widoku
+  kamery na mapie; linia pogrubiana do 2 px), `BlendBlit` 0x005EC5F0 (półprzezroczyste, np. 29×95 w prawym dolnym rogu;
+  sam rozciąga, nie przycina → przycinanie po stronie moda).
+- Poza menedżerem okien, z `RHGame::RenderFrame`: napis z pieniędzmi 0x004C8140 (od lewego górnego rogu), zegar misji
+  0x00511B90 (jedna kotwica dla całego napisu), komunikat 0x005C84A0 (od dołu, środek), kursor 0x005F1CA0 (wokół
+  „czubka"). Kursor gra składa w powierzchni 55×55 (kopia tła + kursor) — przy powiększeniu piksele równe pierwszej
+  kopii tła są pomijane (`ddm.cpp`), inaczej widać kwadrat tła.
+- Przełączanie w locie (panel F10): przy wyłączeniu wskaźnik okien jest raz ustawiany pod prawdziwy kursor.
+- Poprawki po pierwszej sesji użytkownika (2026-11-14 wieczór):
+  - Kursor nad światem (pod nim żaden powiększony obrazek) → okna widzą prawdziwą pozycję (przedtem przeliczenie
+    względem środka ekranu: gra nie widziała kursora przy krawędzi, przewijanie krawędziowe nie działało). Wyjątek:
+    miejsce, gdzie dla gry leży przeniesiona do rogu mapa — tam nadal przeliczenie od środka (bez „duchów”).
+  - Wskaźnik dostaje ruch zgodny z przeliczeniem (od poprzedniej pozycji do nowej), nie zero — `Pointer::Update`
+    zapisuje ruch w +0xB0, z niego korzysta m.in. przeciąganie.
+  - Okno zachowuje kotwicę z chwili pojawienia się (przy tym samym rozmiarze): mapę gra pozwala przeciągać —
+    kotwica liczona co klatkę od nowa z przesuwanego prostokąta dawała szarpanie w miejscu.
+  - Klik lewym na zwiniętych końcach zwoju (górne i dolne 8,5 % wysokości) idzie do gry jako prawy = zamyka mapę
+    (`input_fix.cpp` `Emit`, prostokąt mapy publikowany przez `UiScale::OnMapScrollEnd`).
+  - Okna dialogowe przy przybliżeniu menu: kursor gry jest trzymany w pokazanej części, a wskaźnik okna tylko w
+    ekranie — po dojechaniu do krawędzi rozjeżdżały się i kliknięcia nie trafiały w przyciski. Teraz wskaźnik
+    okien dialogowych jest w każdym `Pointer::Update` ustawiany dokładnie pod kursor.
+  - Ramka zaznaczenia: `RHEngine::DrawSelection` 0x004D0400 rysuje 4 linie (0x005ECBD0) między punktami świata
+    E+0x78 (początek) i E+0x80 (koniec), aktywna gdy E+0x74; koniec gra przesuwa tylko na tikach (25 Hz). W klatkach
+    między tikami koniec jest na czas rysowania ustawiany pod kursor (kamera E+0x4738 + kursor / zoom E+0x475C).
+  - Podpowiedź „F10 - USTAWIENIA MODA" w prawym dolnym rogu menu i okien gry.
+  - Narzędzia: `memfind F1 [F2]` (gdzie gra trzyma dane wartości float), w śladzie `LINE by …` (linie gry,
+    tylko w trybie testowym), `tools\memfloats.ps1 -Addr … -Len …` (pamięć jako liczby float).
+- Minimapa — przeciąganie (2026-11-14 noc, `MapDragCamera=1`, pozycja w panelu F10) [Z w tle]:
+  - Obsługa wskaźnika okna mapy: 0x0054A640 (flagi wskaźnika z `Pointer::Update` +0xA4: 0x01 klik lewym przy
+    puszczeniu, 0x08 dwuklik, 0x40 lewy trzymany, 0x02 klik prawym, 0x80 prawy trzymany). Klik lewym na obrazku
+    poziomu → 0x0054BFB0 (centruje kamerę: `CenterCameraOn` 0x004C7F60 na `(mapW·u, mapH·v)`), lewy trzymany →
+    0x0054C1E0 (przeciąganie okna: mapa+0xB0 = start, +0xB4 wskaźnik na starcie, +0xBC pozycja okna na starcie,
+    +0xB1 = przesunięte; okno rusza dopiero po 15 px), prawy klik zamyka. Prostokąt otwartej mapy: mapa+0xE4,
+    ustawiany przez 0x0054A0F0 (thiscall(mapa, Vec2* lewy górny), trzyma w ekranie) i oddawany oknu przez 0x0061AD20
+    (thiscall(okno, Rect*)). Obrazek poziomu = prostokąt okna (+0x70) minus margines z 0x006C0C58 (14, 24).
+  - Zmiany: przeciąganie zaczęte na obrazku przesuwa kamerę (ciągłe centrowanie, poza mapą dociśnięte do krawędzi);
+    okno przesuwa się za brzegi lewym albo **prawym** (`input_fix.cpp`: prawy wciśnięty na brzegu idzie do gry jako
+    lewy; prawy klik bez ruchu = lewy + prawy klik, czyli zamknięcie jak dotąd); przeciągane okno jest ustawiane pod
+    kursor w każdej rysowanej klatce (gra robi to na tikach 25 Hz i po 15 px — przy ×2 skok o 30 px ekranu); w czasie
+    przeciągania wskaźnik jest przeliczany kotwicą mapy (przy szybkim ruchu kursor zjeżdżał z obrazka, przeliczenie
+    zmieniało kotwicę i okno skakało w tę i z powrotem); przeciąganie kończy się z przyciskiem (puszczony poza oknem
+    zostawiał w grze „trwające” przeciąganie i następne przeciąganie gdziekolwiek ruszało mapę).
+  - Sprawdzone w tle (mapa 2944×2176): przeciąganie po obrazku 0,0 → 1437,1075 (zgodnie z wyliczeniem), poza mapą
+    x = 0; prawy za brzeg: okno −150/+90 px przy ruchu myszy −300/+180; prawy klik na brzegu zamyka; lewy za brzeg
+    przesuwa okno; klik na obrazku centruje (764,705); zaznaczanie w świecie nie rusza kamery.
+- Odprawa z kilkoma stronami (2026-11-14 noc): przy każdej stronie zaczyna się nowa pętla okna dialogowego, a „zdjęcie
+  poziomu” do rozpoznania tła (`NoteDialogStart`) było robione z ekranu, na którym leżał już pergamin poprzedniej
+  strony — pergamin liczył się jako poziom (99 %) i zostawał mały, a powiększony tekst wychodził poza niego. Teraz
+  zdjęcie jest robione tylko wtedy, gdy od poprzedniego okna gra narysowała klatkę misji (strony 1–4: 94 %).
+- Opcje gry — procesor i pamięć (2026-11-14 noc, `cpu_optimizer.cpp`): menu 0x00538F90 składa
+  `L"%s : %S, %i %s\n%s : %i %s"`; procesor = producent z CPUID („GenuineIntel”, 0x006C1894 kopiowany przez
+  0x0060F2B0), pamięć = `GlobalMemoryStatus` (0x0060F8F0, do 4 GB → „4095 Mb”; menu bierze 16 bitów). Teraz nazwa
+  z CPUID 0x80000002..4 (skrócona: bez (R), (TM), CPU, „@ …GHz”; łata `mov ebp, nazwa` na 0x00539066) i pamięć z
+  `GlobalMemoryStatusEx` (najwyżej 65535 MB). Sprawdzone: pełna nazwa procesora (np. „Intel Core i…, 3600 MHz”) i pamięć ponad 4 GB.
+
+### Menu i okna gry na cały ekran (`MenuZoom=1`, Direct3D 11, wysokość wewnętrzna ≥ 960)
+Menu i okna (odprawa, menu Esc, wczytywanie/zapis, opcje) rysuje jedna pętla okien dialogowych gry
+(`WindowManager::Draw` wywołany z 0x0053C565). Ułożone są dla 1024×768 na środku klatki. Gdy ta pętla rysuje, prezenter
+pokazuje środkową część klatki 1365×768 (proporcje ekranu) na całe okno (×1,875 przy 1440p), granice kursora gry
+(floaty 0x006C12E8..F4, przycinane przez wątek wejścia w 0x005F4700) są ustawiane na tę część, a ruch myszy skalowany
+768/1440 (ta sama prędkość na ekranie). Klatka misji (z 0x00510618) przywraca widok i granice.
+
+### Tła menu w HD (`HDMenu=1`, przy `MenuZoom=1`; `src\ddm\ddm_hd_menu.cpp`, `tools\hd\upscale_menu.py`)
+Gra składa każdy ekran menu w powierzchni wielkości ekranu (2560×1440) i kopiuje ją na ekran (w całości przy
+wejściu, potem kawałkami — naprawa miejsc pod przyciskami, napisami i kursorem); przyciski (`BlendBlit`, 168×39) i
+napisy (`GBLT`) dorysowuje na wierzchu. Taka złożona ramka jest rozpoznawana po treści (FNV-1a 64 po pokazywanej
+części 1365×768), w menu poza misją. Bez wersji HD zapisywana jest raz do `hd\work\menu_frames\<klucz>.mnf`;
+`upscale_menu.py` wycina ramkę wokół obrazu (bez czarnego), powiększa 2× modelem wariantu (aomr, sgi, ultrasharp,
+dat2), koryguje kolory do oryginału i zapisuje `hd\menu\<wariant>\<klucz>.mhd` (BGRA) + podglądy `hd\menu_png\`.
+Prezenter: dwie tekstury (R32_UINT oryginalne piksele, BGRA 2× HD) aktualizowane prostokątem zmian; shader pokazuje
+piksel HD tam, gdzie piksel klatki jest nadal oryginalnym pikselem tła (porównanie RGB565), resztę jak dotąd.
+Zbieranie: `tools\collect_menus.ps1` (przechodzi ekrany menu ukrytej gry). Polecenie testowe `menuhd` = liczniki.
+
+### Panel ustawień moda (F10, `SettingsKey=121`)
+Rysowany w prezenterze do tekstury klatki (składany w zwykłej pamięci z obrazu źródłowego — czytanie zmapowanej
+tekstury jest bardzo wolne: pierwsza wersja spadała do 27 kl./s), czcionka 5×7 skalowana. 15 opcji: wariant tła HD
+(tylko w misji: zmiana na tiku), postacie HD, klatki pośrednie (w misji), wygładzanie, woda, interfejs ×2, minimapa,
+przeciąganie minimapy (kamera / okno), menu, tła menu HD, VSync, filtr, płynne przewijanie, licznik FPS, prędkość kursora — zmiana od razu, zapis `WritePrivateProfileString`.
+Gdy panel jest otwarty: kliknięcia myszy nie idą do gry (`input_fix.cpp` `Emit`), wciśnięcia klawiszy też nie
+(hak `ProcessInputEvent` 0x005F0C20, typ 1; puszczenia przechodzą). Klawisze panelu: `GetAsyncKeyState` w wątku głównym.
+Gra w misji się nie zatrzymuje (pauza: Esc, potem F10).

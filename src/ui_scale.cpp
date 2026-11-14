@@ -1,0 +1,1328 @@
+#include "ui_scale.h"
+#include "config.h"
+#include "logger.h"
+#include "test_harness.h"
+#include "timing.h"
+#include "window_manager.h"
+#include "ddm/ddm.h"
+#include "ddm/ddm_hd_menu.h"
+
+#include <MinHook.h>
+#include <algorithm>
+#include <atomic>
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <intrin.h>
+#include <vector>
+
+#pragma intrinsic(_ReturnAddress)
+
+// See ui_scale.h.
+//
+// How (2026-11-14). The game places its windows in screen pixels from several sources (the
+// graphics configuration is read for that in some 60 places, the mission object keeps its own
+// copy), so laying them out for a smaller screen is not practical. Instead every window picture
+// is drawn twice as large AWAY FROM ITS CORNER: the screen is cut into a 3x3 grid (25 % / 50 % /
+// 25 %); a window whose centre lies in the bottom-left cell grows from the bottom-left corner,
+// one in the top-middle cell from the top edge about its own centre, one in the middle cell
+// about its own centre, and so on. Windows of moderate size (the portrait, the map) get one
+// anchor for all their pictures; the two full-screen HUD windows are scaled picture by picture
+// (the left hedge from the left corner, the right one from the right corner). Pictures drawn
+// outside a window (the tooltip) use the anchor the pointer was mapped with. The mouse position
+// the windows see is mapped back with the anchor of the enlarged picture under it, so a click on
+// the large picture reaches the small window the game knows.
+//
+// Game.exe addresses (static RE):
+//   0x006189E0 WindowManager::Draw(int)      thiscall, ret 4 - every window of a manager. The
+//              mission's manager (RHGame+0x68) is drawn by RHGame::RenderFrame (returns to
+//              0x00510618); dialogs with a loop of their own (briefing, menus: 0x0053C565) have
+//              their own managers and are left alone here
+//   0x00628210 Pointer::Update(InputState*)  thiscall, ret 4 - a manager's pointer (+0x1758) takes
+//              the mouse position from the state (s16 x at +0, s16 y at +2) and keeps it at +0x80
+//              for every hit test, hover and tooltip
+//   0x005C84A0 on-screen message text        thiscall, ret 0xC - from RenderFrame (returns to
+//              0x0051068F), centred above the bottom edge: grows from the bottom centre
+namespace UiScale {
+namespace {
+    int  g_factor = 1;
+    bool g_uiInstalled = false;     // the mission hooks are in place: the scale can be switched
+    bool g_pointerResync = false;   // scale switched off: the pointer goes back under the cursor
+    int  g_drawDepth = 0;           // main thread only
+    bool g_fixedAnchor = false;     // the message text: one anchor for all its letters
+    float g_fixedAx = 0.0f, g_fixedAy = 0.0f;
+
+    using PFN_Draw          = uint32_t(__fastcall*)(void* wm, void* edx, uint32_t arg);
+    using PFN_PointerUpdate = uint32_t(__fastcall*)(void* ptr, void* edx, int16_t* state);
+    using PFN_Message       = uint32_t(__fastcall*)(void* obj, void* edx, uint32_t a, uint32_t b, uint32_t c);
+    PFN_Draw          o_Draw = nullptr;
+    PFN_PointerUpdate o_PointerUpdate = nullptr;
+    PFN_Message       o_Message = nullptr;
+
+    constexpr uintptr_t kAddrEnginePtr = 0x006C0FA8;
+    bool InMission() {
+        return *reinterpret_cast<void* const*>(kAddrEnginePtr) != nullptr;
+    }
+
+    void ScreenSize(float& w, float& h) {
+        int iw = 0, ih = 0;
+        WindowManager::GetInternalResolution(iw, ih);
+        w = static_cast<float>(iw > 0 ? iw : 2560);
+        h = static_cast<float>(ih > 0 ? ih : 1440);
+    }
+
+    // anchor of the grid cell (25 % / 50 % / 25 %) that contains (x, y): the HUD lies along the
+    // edges, dialogs and the map in the middle
+    void Anchor(float x, float y, float w, float h, float& ax, float& ay) {
+        ax = x < w * 0.25f ? 0.0f : (x > w * 0.75f ? w : w * 0.5f);
+        ay = y < h * 0.25f ? 0.0f : (y > h * 0.75f ? h : h * 0.5f);
+    }
+
+    // What was drawn where in the last frame (enlarged rectangle and its anchor): the mouse is
+    // mapped back with the anchor of the picture it is over - an enlarged picture may reach into
+    // the next grid cell.
+    struct Piece { float l, t, r, b, ax, ay; };
+    std::vector<Piece> g_pieces[2];
+    int g_piecesCur = 0;            // being filled now; the other one is the last complete frame
+
+    struct Box { float l = 1e9f, t = 1e9f, r = -1e9f, b = -1e9f; bool any = false; };
+
+    // The window the window loop of WindowManager::Draw is drawing now (0x00618A34 sets it,
+    // 0x00618A3F clears it after the window's Draw): a window's rectangle (floats l, t, r, b at
+    // +0x70, valid byte at +0x80) gives all its pictures one anchor, so the map or a dialog grows
+    // in one piece about its own centre.
+    void* volatile g_curWindow = nullptr;
+    void* o_WindowLoop = nullptr;
+    void* o_WindowDone = nullptr;
+
+    __declspec(naked) void Hook_WindowLoop() {
+        __asm {
+            push eax
+            mov eax, dword ptr [esi + 8]
+            mov eax, dword ptr [eax + edi * 4]
+            mov dword ptr [g_curWindow], eax
+            pop eax
+            jmp dword ptr [o_WindowLoop]
+        }
+    }
+
+    __declspec(naked) void Hook_WindowDone() {
+        __asm {
+            mov dword ptr [g_curWindow], 0
+            jmp dword ptr [o_WindowDone]
+        }
+    }
+
+    bool Readable(const void* p, size_t n) {
+        auto a = reinterpret_cast<uintptr_t>(p);
+        const uintptr_t end = a + n;
+        while (a < end) {
+            MEMORY_BASIC_INFORMATION mbi{};
+            if (!VirtualQuery(reinterpret_cast<const void*>(a), &mbi, sizeof(mbi)) || mbi.State != MEM_COMMIT ||
+                (mbi.Protect & (PAGE_GUARD | PAGE_NOACCESS)) ||
+                !(mbi.Protect & (PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY | PAGE_EXECUTE_READ |
+                                 PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY))) {
+                return false;
+            }
+            a = reinterpret_cast<uintptr_t>(mbi.BaseAddress) + mbi.RegionSize;
+        }
+        return true;
+    }
+
+    // What each window drew in the last frame (original coordinates) - for the test harness.
+    struct Drawn { const void* win; Box box; };
+    std::vector<Drawn> g_drawn[2];
+
+    // the anchor the mouse was mapped back with: pictures drawn outside the windows (the tooltip
+    // next to the pointer) use it too, so they appear next to the real cursor
+    float g_pointerAx = 0.0f, g_pointerAy = 0.0f;
+    bool  g_pointerAnchor = false;
+
+    // The opened map moved to the corner (MapPosition=1): its window still lies at its own place
+    // for the game (original coordinates) - a pointer there would act on the map although the
+    // world is shown there.
+    float g_mapOrig[4] = {};
+    bool  g_mapOrigValid = false;
+
+    // the opened map as it was drawn last (screen pixels): the whole window and the picture of
+    // the level in it - read by the input thread
+    std::atomic<float> g_mapShownRect[4];
+    std::atomic<float> g_mapContentRect[4];
+    std::atomic<bool>  g_mapShown{ false };
+    bool               g_mapSeen = false;      // main thread: drawn in the frame being made
+
+    // main thread: the anchor the opened map was drawn with, and a drag of it in progress (see
+    // "the opened map: dragging" below)
+    float    g_mapAx = 0.0f, g_mapAy = 0.0f;
+    bool     g_mapAnchorValid = false;
+    uint8_t* g_camDragMap = nullptr;    // the drag started on the map's picture: it moves the camera
+    uint8_t* g_winDragMap = nullptr;    // the drag moves the window
+
+    void MapBack(float x, float y, float w, float h, float& ox, float& oy) {
+        // Over the world (no enlarged picture under the mouse) the windows see the real position:
+        // edge scrolling, the selection frame and the like work as without the scale.
+        float ax = x, ay = y;
+        bool found = false;
+        if ((g_camDragMap || g_winDragMap) && g_mapAnchorValid) {
+            // the map is being dragged: the pointer belongs to it wherever the cursor is (next to
+            // the window the mapping changed, and the dragged window jumped back and forth)
+            ax = g_mapAx;
+            ay = g_mapAy;
+            found = true;
+        }
+        const auto& last = g_pieces[g_piecesCur ^ 1];
+        for (auto it = last.rbegin(); !found && it != last.rend(); ++it) {   // the topmost first
+            if (x >= it->l && x < it->r && y >= it->t && y < it->b) {
+                ax = it->ax;
+                ay = it->ay;
+                found = true;
+                break;
+            }
+        }
+        if (!found && g_mapOrigValid && x >= g_mapOrig[0] && x < g_mapOrig[2] && y >= g_mapOrig[1] && y < g_mapOrig[3]) {
+            ax = w * 0.5f;      // where the moved map would be for the game: away from it, about the centre
+            ay = h * 0.5f;
+        }
+        g_pointerAx = ax;
+        g_pointerAy = ay;
+        g_pointerAnchor = true;
+        ox = ax + (x - ax) / static_cast<float>(g_factor);
+        oy = ay + (y - ay) / static_cast<float>(g_factor);
+    }
+
+    // ---- menu zoom (see ui_scale.h)
+    // The game's cursor is kept inside a rectangle (floats minX, minY, maxX, maxY at 0x006C12E8;
+    // the input thread clamps the cursor to it after every movement, 0x005F4700).
+    constexpr uintptr_t kAddrCursorBounds = 0x006C12E8;
+    constexpr uintptr_t kAddrCursor       = 0x006C1300;
+    bool           g_dialogShown = false;       // the game's dialog loop drew last
+    bool           g_missionFramed = true;      // the mission drew a frame since the last dialog loop started
+    bool           g_menuZoomPossible = false;
+    bool           g_menuZoomEnabled = false;
+    bool           g_zoomOn = false;            // main thread
+    float          g_savedBounds[4] = {};
+    float          g_zoomBounds[4] = {};
+    volatile float g_zoomMouse = 1.0f;          // read by the input thread
+    volatile bool  g_zoomUnavailable = false;
+
+    // the middle part of a frame, 768 lines high, with the frame's aspect ratio
+    bool CropFor(int w, int h, RECT& c) {
+        if (w < 1024 || h < 960) return false;
+        const int ch = 768;
+        int cw = static_cast<int>((static_cast<long long>(w) * ch + h / 2) / h);
+        if (cw < 1024) cw = 1024;
+        if (cw > w) cw = w;
+        c.left = (w - cw) / 2;
+        c.top = (h - ch) / 2;
+        c.right = c.left + cw;
+        c.bottom = c.top + ch;
+        return true;
+    }
+
+    void MenuZoomOff() {
+        if (!g_zoomOn) return;
+        auto* bounds = reinterpret_cast<float*>(kAddrCursorBounds);
+        if (std::memcmp(bounds, g_zoomBounds, sizeof(g_zoomBounds)) == 0) {
+            std::memcpy(bounds, g_savedBounds, sizeof(g_savedBounds));     // unless the game set new ones
+        }
+        g_zoomOn = false;
+        g_zoomMouse = 1.0f;
+    }
+
+    // every pass of the game's dialog loop (main menu, briefing, in-game menu, load/save, options)
+    void MenuZoomDialog() {
+        if (!g_menuZoomEnabled) return;
+        if (g_zoomUnavailable) {
+            g_menuZoomEnabled = false;
+            MenuZoomOff();
+            Logger::Warn("UiScale: menu zoom needs the Direct3D 11 presenter - off.");
+            return;
+        }
+        int w = 0, h = 0;
+        WindowManager::GetInternalResolution(w, h);
+        RECT c{};
+        if (!CropFor(w, h, c)) {
+            MenuZoomOff();
+            return;
+        }
+        auto* bounds = reinterpret_cast<float*>(kAddrCursorBounds);
+        const float mine[4] = { static_cast<float>(c.left), static_cast<float>(c.top),
+                                static_cast<float>(c.right), static_cast<float>(c.bottom) };
+        const bool entering = !g_zoomOn || std::memcmp(g_zoomBounds, mine, sizeof(mine)) != 0;
+        if (!g_zoomOn) {
+            std::memcpy(g_savedBounds, bounds, sizeof(g_savedBounds));
+        } else if (std::memcmp(bounds, g_zoomBounds, sizeof(g_zoomBounds)) != 0) {
+            std::memcpy(g_savedBounds, bounds, sizeof(g_savedBounds));    // the game set new bounds meanwhile
+        }
+        std::memcpy(g_zoomBounds, mine, sizeof(mine));
+        std::memcpy(bounds, mine, sizeof(mine));
+        if (entering) {
+            // the cursor into the part that is shown (the game clamps it only when it moves)
+            auto* cur = reinterpret_cast<float*>(kAddrCursor);
+            cur[0] = (std::max)(mine[0], (std::min)(cur[0], mine[2] - 1.0f));
+            cur[1] = (std::max)(mine[1], (std::min)(cur[1], mine[3] - 1.0f));
+        }
+        g_zoomOn = true;
+        g_zoomMouse = static_cast<float>(c.bottom - c.top) / static_cast<float>(h);
+    }
+
+    void CollectWindows(const uint8_t* wm);
+    void FollowMapDrag();
+    void PublishMapAtSize(const uint8_t* wm);
+
+    uint32_t __fastcall Hook_Draw(void* wm, void* edx, uint32_t arg) {
+        const uintptr_t from = reinterpret_cast<uintptr_t>(_ReturnAddress());
+        if (from == 0x0053C565) {
+            g_dialogShown = true;
+            MenuZoomDialog();
+        } else if (from == 0x00510618) {
+            g_dialogShown = false;
+            g_missionFramed = true;
+            MenuZoomOff();
+            if (InMission()) {
+                FollowMapDrag();        // the dragged map where the cursor is now, in every frame
+            } else {
+                g_camDragMap = nullptr;
+                g_winDragMap = nullptr;
+            }
+        }
+        const bool scale = g_factor > 1 && InMission() && from == 0x00510618;
+        if (DDM::TraceActive()) {
+            char text[96];
+            std::snprintf(text, sizeof(text), "UI DRAW begin wm=%p from %08X scaled=%d", wm,
+                          static_cast<uint32_t>(reinterpret_cast<uintptr_t>(_ReturnAddress())), scale ? 1 : 0);
+            DDM::TraceMark(text);
+        }
+        if (scale) {
+            ++g_drawDepth;
+            g_pieces[g_piecesCur].clear();
+            g_drawn[g_piecesCur].clear();
+            g_mapSeen = false;
+            CollectWindows(static_cast<const uint8_t*>(wm));
+        } else if (from == 0x00510618 && InMission()) {
+            PublishMapAtSize(static_cast<const uint8_t*>(wm));
+        } else if (from == 0x00510618 || from == 0x0053C565) {
+            g_mapShown.store(false, std::memory_order_relaxed);
+            g_mapAnchorValid = false;
+        }
+        void* const outerWindow = g_curWindow;      // a window may draw a manager of its own
+        g_curWindow = nullptr;
+        const uint32_t r = o_Draw(wm, edx, arg);
+        g_curWindow = outerWindow;
+        if (scale) {
+            --g_drawDepth;
+            g_piecesCur ^= 1;       // this frame's pictures are now the ones the mouse is mapped with
+            g_mapShown.store(g_mapSeen, std::memory_order_relaxed);
+            if (!g_mapSeen) g_mapAnchorValid = false;
+        }
+        if (DDM::TraceActive()) DDM::TraceMark("UI DRAW end");
+        return r;
+    }
+
+    uint32_t __fastcall Hook_Message(void* obj, void* edx, uint32_t a, uint32_t b, uint32_t c) {
+        const bool scale = g_factor > 1 && InMission() && reinterpret_cast<uintptr_t>(_ReturnAddress()) == 0x0051068F;
+        if (!scale) {
+            return o_Message(obj, edx, a, b, c);
+        }
+        float w, h;
+        ScreenSize(w, h);
+        ++g_drawDepth;
+        g_fixedAnchor = true;
+        g_fixedAx = w * 0.5f;
+        g_fixedAy = h;
+        const uint32_t r = o_Message(obj, edx, a, b, c);
+        g_fixedAnchor = false;
+        --g_drawDepth;
+        return r;
+    }
+
+    // Drawn by RHGame::RenderFrame after the windows, outside any window manager:
+    //   0x004C8140 the money text in the top-left corner        thiscall, from 0x0051061B
+    //   0x00511B90 the mission clock (missions with a time limit) thiscall, from 0x005106B9
+    //   0x005F1CA0 the mouse cursor (cdecl, 1 argument)         from 0x0051070C
+    // The money text grows from the top-left corner, the clock in one piece from its grid cell,
+    // the cursor about its hot spot (it keeps pointing at the same pixel).
+    using PFN_Overlay = void(__fastcall*)(void* obj, void* edx);
+    using PFN_Cursor  = void(__cdecl*)(uint32_t hidden);
+    PFN_Overlay o_Money = nullptr;
+    PFN_Overlay o_Clock = nullptr;
+    PFN_Cursor  o_Cursor = nullptr;
+    bool     g_cursorDrawing = false;
+    unsigned g_cursorSerial = 0;
+    bool  g_groupAnchor = false;    // one anchor for everything drawn now: the first picture's cell
+    bool  g_groupSet = false;
+    float g_groupAx = 0.0f, g_groupAy = 0.0f;
+
+    void __fastcall Hook_Money(void* obj, void* edx) {
+        if (g_factor <= 1 || !InMission() || reinterpret_cast<uintptr_t>(_ReturnAddress()) != 0x00510620) {
+            o_Money(obj, edx);
+            return;
+        }
+        ++g_drawDepth;
+        g_fixedAnchor = true;
+        g_fixedAx = 0.0f;
+        g_fixedAy = 0.0f;
+        o_Money(obj, edx);
+        g_fixedAnchor = false;
+        --g_drawDepth;
+    }
+
+    void __fastcall Hook_Clock(void* obj, void* edx) {
+        if (g_factor <= 1 || !InMission() || reinterpret_cast<uintptr_t>(_ReturnAddress()) != 0x005106BE) {
+            o_Clock(obj, edx);
+            return;
+        }
+        ++g_drawDepth;
+        g_groupAnchor = true;
+        g_groupSet = false;
+        o_Clock(obj, edx);
+        g_groupAnchor = false;
+        --g_drawDepth;
+    }
+
+    void __cdecl Hook_Cursor(uint32_t hidden) {
+        if (g_factor <= 1 || !InMission() || reinterpret_cast<uintptr_t>(_ReturnAddress()) != 0x00510711) {
+            o_Cursor(hidden);
+            return;
+        }
+        ++g_drawDepth;
+        ++g_cursorSerial;
+        g_cursorDrawing = true;
+        g_fixedAnchor = true;
+        g_fixedAx = static_cast<float>(static_cast<int>(*reinterpret_cast<const float*>(0x006C1300)));
+        g_fixedAy = static_cast<float>(static_cast<int>(*reinterpret_cast<const float*>(0x006C1304)));
+        o_Cursor(hidden);
+        g_fixedAnchor = false;
+        g_cursorDrawing = false;
+        --g_drawDepth;
+    }
+
+    // The mission's window manager is RHGame+0x68, its pointer object +0x1758.
+    bool IsMissionPointer(const void* ptr) {
+        auto* game = *reinterpret_cast<uint8_t* const*>(0x006C0B3C);
+        return game && InMission() && ptr == *reinterpret_cast<void* const*>(game + 0x68 + 0x1758);
+    }
+
+    void AfterMissionPointer(const uint8_t* ptr);
+    uint32_t PointerUpdate(void* ptr, void* edx, int16_t* state);
+
+    uint32_t __fastcall Hook_PointerUpdate(void* ptr, void* edx, int16_t* state) {
+        const uint32_t r = PointerUpdate(ptr, edx, state);
+        if (IsMissionPointer(ptr)) AfterMissionPointer(static_cast<const uint8_t*>(ptr));
+        return r;
+    }
+
+    uint32_t PointerUpdate(void* ptr, void* edx, int16_t* state) {
+        if (DDM::TraceActive() && state) {
+            char text[128];
+            std::snprintf(text, sizeof(text), "POINTER ptr=%p move=%d,%d cursor=%.0f,%.0f mission=%d", ptr, state[0], state[1],
+                          *reinterpret_cast<const float*>(0x006C1300), *reinterpret_cast<const float*>(0x006C1304),
+                          IsMissionPointer(ptr) ? 1 : 0);
+            DDM::TraceMark(text);
+        }
+        if (g_zoomOn && state && !IsMissionPointer(ptr)) {
+            // Menu zoom: the cursor is kept inside the part that is shown, a dialog's pointer only
+            // inside the screen - pushed against an edge they would part, and the dialog would
+            // see the mouse somewhere else than the cursor is drawn. Its movement is therefore
+            // taken from where it is to the real cursor (whole pixels), then set exactly.
+            auto* pos = reinterpret_cast<float*>(static_cast<uint8_t*>(ptr) + 0x80);
+            const float cx = *reinterpret_cast<const float*>(0x006C1300);
+            const float cy = *reinterpret_cast<const float*>(0x006C1304);
+            const int16_t dx = state[0], dy = state[1];
+            state[0] = static_cast<int16_t>((std::max)(-32000.0f, (std::min)(32000.0f, cx - pos[0] + (cx >= pos[0] ? 0.5f : -0.5f))));
+            state[1] = static_cast<int16_t>((std::max)(-32000.0f, (std::min)(32000.0f, cy - pos[1] + (cy >= pos[1] ? 0.5f : -0.5f))));
+            const uint32_t r = o_PointerUpdate(ptr, edx, state);
+            state[0] = dx;
+            state[1] = dy;
+            pos[0] = cx;
+            pos[1] = cy;
+            return r;
+        }
+        if (g_factor <= 1 && g_pointerResync && state && IsMissionPointer(ptr)) {
+            // the scale was switched off: the pointer is at the mapped-back position - put it
+            // under the real cursor again (without adding this movement twice)
+            g_pointerResync = false;
+            auto* pos = reinterpret_cast<float*>(static_cast<uint8_t*>(ptr) + 0x80);
+            pos[0] = *reinterpret_cast<const float*>(0x006C1300);
+            pos[1] = *reinterpret_cast<const float*>(0x006C1304);
+            const int16_t dx = state[0], dy = state[1];
+            state[0] = 0;
+            state[1] = 0;
+            const uint32_t r = o_PointerUpdate(ptr, edx, state);
+            state[0] = dx;
+            state[1] = dy;
+            return r;
+        }
+        if (g_factor <= 1 || !state || !IsMissionPointer(ptr)) {
+            return o_PointerUpdate(ptr, edx, state);
+        }
+        // The state carries the mouse MOVEMENT (s16 dx, dy); the pointer adds it to its position
+        // (+0x80, floats), clamps it, handles the buttons and keeps the state (+0xB0: the last
+        // movement - dragging on the map uses it). The windows get the movement from where the
+        // pointer was to where the real cursor (0x006C1300) lies on the small window pictures;
+        // afterwards the exact position is set (the movement is whole pixels). The state itself
+        // is put back: it belongs to the main loop.
+        float w, h, px, py;
+        ScreenSize(w, h);
+        const float cx = *reinterpret_cast<const float*>(0x006C1300);
+        const float cy = *reinterpret_cast<const float*>(0x006C1304);
+        MapBack(cx, cy, w, h, px, py);
+        auto* pos = reinterpret_cast<float*>(static_cast<uint8_t*>(ptr) + 0x80);
+        auto whole = [](float v) {
+            const float r = v < 0.0f ? v - 0.5f : v + 0.5f;
+            return static_cast<int16_t>((std::max)(-32000.0f, (std::min)(32000.0f, r)));
+        };
+        const int16_t dx = state[0], dy = state[1];
+        state[0] = whole(px - pos[0]);
+        state[1] = whole(py - pos[1]);
+        const uint32_t r = o_PointerUpdate(ptr, edx, state);
+        state[0] = dx;
+        state[1] = dy;
+        pos[0] = px;
+        pos[1] = py;
+        return r;
+    }
+
+    void Transform(float& l, float& t, float& r, float& b);
+
+    // Two drawing routines of the surface manager that write the pixels themselves instead of
+    // blitting (surface id 0 = the screen, 1 = its back buffer):
+    //   0x005ECDC0 DrawRect(id, const float rect[4], u16 colour, flags)  thiscall, ret 0x10 - the
+    //              outline of the camera view on the map
+    //   0x005EC5F0 BlendBlit(srcId, const float* srcRect, dstId, const float* dstRect, key,
+    //              percent, flags)  thiscall, ret 0x1C - translucent pictures (it stretches when
+    //              the rectangles differ in size)
+    using PFN_DrawRect  = uint32_t(__fastcall*)(void* mgr, void* edx, int id, const float* rect, uint32_t colour, uint32_t flags);
+    using PFN_BlendBlit = uint32_t(__fastcall*)(void* mgr, void* edx, int srcId, const float* srcRect, int dstId,
+                                                const float* dstRect, uint32_t key, uint32_t percent, uint32_t flags);
+    PFN_DrawRect  o_DrawRect = nullptr;
+    PFN_BlendBlit o_BlendBlit = nullptr;
+
+    uint32_t __fastcall Hook_DrawRect(void* mgr, void* edx, int id, const float* rect, uint32_t colour, uint32_t flags) {
+        if ((id != 0 && id != 1) || !rect || g_drawDepth <= 0) {
+            return o_DrawRect(mgr, edx, id, rect, colour, flags);
+        }
+        float rc[4] = { rect[0], rect[1], rect[2], rect[3] };
+        Transform(rc[0], rc[1], rc[2], rc[3]);
+        const uint32_t r = o_DrawRect(mgr, edx, id, rc, colour, flags);
+        // lines as thick as the rest of the enlarged picture (the routine clips to the surface)
+        for (int i = 1; i < g_factor; ++i) {
+            const float in[4] = { rc[0] + i, rc[1] + i, rc[2] - i, rc[3] - i };
+            if (in[2] > in[0] && in[3] > in[1]) o_DrawRect(mgr, edx, id, in, colour, flags);
+        }
+        return r;
+    }
+
+    uint32_t __fastcall Hook_BlendBlit(void* mgr, void* edx, int srcId, const float* srcRect, int dstId,
+                                       const float* dstRect, uint32_t key, uint32_t percent, uint32_t flags) {
+        if ((dstId != 0 && dstId != 1) || !dstRect || g_drawDepth <= 0) {
+            return o_BlendBlit(mgr, edx, srcId, srcRect, dstId, dstRect, key, percent, flags);
+        }
+        float d[4] = { dstRect[0], dstRect[1], dstRect[2], dstRect[3] };
+        float s[4];
+        if (srcRect) {
+            std::memcpy(s, srcRect, sizeof(s));
+        } else {    // the whole picture, drawn at its size
+            s[0] = 0.0f;
+            s[1] = 0.0f;
+            s[2] = d[2] - d[0];
+            s[3] = d[3] - d[1];
+        }
+        if (DDM::TraceActive()) {
+            char text[160];
+            std::snprintf(text, sizeof(text), "UI BLEND src=%d dst=%d d=(%.0f,%.0f,%.0f,%.0f) s=(%.0f,%.0f,%.0f,%.0f) %u%%", srcId, dstId,
+                          d[0], d[1], d[2], d[3], s[0], s[1], s[2], s[3], percent & 0xFFFF);
+            DDM::TraceMark(text);
+        }
+        Transform(d[0], d[1], d[2], d[3]);
+        // the routine does not clip: cut both rectangles at the screen edge in proportion
+        float w, h;
+        ScreenSize(w, h);
+        if (d[2] <= d[0] || d[3] <= d[1]) return 1;
+        const float sx = (s[2] - s[0]) / (d[2] - d[0]), sy = (s[3] - s[1]) / (d[3] - d[1]);
+        if (d[0] < 0.0f) { s[0] -= d[0] * sx; d[0] = 0.0f; }
+        if (d[1] < 0.0f) { s[1] -= d[1] * sy; d[1] = 0.0f; }
+        if (d[2] > w) { s[2] -= (d[2] - w) * sx; d[2] = w; }
+        if (d[3] > h) { s[3] -= (d[3] - h) * sy; d[3] = h; }
+        if (d[2] <= d[0] || d[3] <= d[1] || s[2] <= s[0] || s[3] <= s[1]) return 1;
+        return o_BlendBlit(mgr, edx, srcId, s, dstId, d, key, percent, flags);
+    }
+
+    // The selection frame (dragging with the left button over the world). RHEngine::DrawSelection
+    // (0x004D0400, thiscall, ret) draws four lines between the start (engine+0x78) and the end
+    // (engine+0x80), both world points (screen = (world - camera at +0x4738) * zoom at +0x475C);
+    // +0x74 = the frame is up. The game moves the end only on its 25 ticks a second, the cursor is
+    // drawn in every frame - the frame's corner trailed behind the cursor. In the frames between
+    // ticks the corner is put under the cursor for the drawing, then the game's value goes back.
+    using PFN_DrawSelection = void(__fastcall*)(uint8_t* engine, void* edx);
+    PFN_DrawSelection o_DrawSelection = nullptr;
+
+    void __fastcall Hook_DrawSelection(uint8_t* engine, void* edx) {
+        if (!engine || !engine[0x74] || !Timing::InExtraFrame()) {
+            o_DrawSelection(engine, edx);
+            return;
+        }
+        auto* end = reinterpret_cast<float*>(engine + 0x80);
+        const auto* cam = reinterpret_cast<const float*>(engine + 0x4738);
+        const float zoom = *reinterpret_cast<const float*>(engine + 0x475C);
+        const float saved[2] = { end[0], end[1] };
+        if (zoom > 0.01f) {
+            end[0] = cam[0] + *reinterpret_cast<const float*>(0x006C1300) / zoom;
+            end[1] = cam[1] + *reinterpret_cast<const float*>(0x006C1304) / zoom;
+        }
+        o_DrawSelection(engine, edx);
+        end[0] = saved[0];
+        end[1] = saved[1];
+    }
+
+    // The game's dialog loop (0x0053C390, thiscall, ret): main menu screens, briefing, in-game
+    // menu. Known from its first instruction on - it copies its backdrop to the screen before
+    // its window manager draws for the first time.
+    using PFN_DialogLoop = void(__fastcall*)(void* dlg, void* edx);
+    PFN_DialogLoop o_DialogLoop = nullptr;
+    volatile int   g_dialogLoopDepth = 0;
+
+    void __fastcall Hook_DialogLoop(void* dlg, void* edx) {
+        // The level is still on the screen - unless another dialog was shown last (the pages of
+        // a briefing follow each other without a frame of the mission in between: the picture of
+        // the level taken at the first page stays; taken from the screen, the next page's
+        // parchment would count as the level and stay small)
+        if (g_dialogLoopDepth == 0 && g_missionFramed) DDM::HD::Menu::NoteDialogStart();
+        g_missionFramed = false;
+        ++g_dialogLoopDepth;
+        o_DialogLoop(dlg, edx);
+        --g_dialogLoopDepth;
+    }
+
+    // Test harness only: 0x005ECBD0 DrawLine(id, a, b, c) thiscall, ret 0x10 - who draws which
+    // line (the selection frame is four of them), written to the draw trace.
+    using PFN_DrawLine = uint32_t(__fastcall*)(void* mgr, void* edx, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t a4);
+    PFN_DrawLine o_DrawLine = nullptr;
+
+    uint32_t __fastcall Hook_DrawLine(void* mgr, void* edx, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t a4) {
+        if (DDM::TraceActive()) {
+            char text[200];
+            auto vec = [](uint32_t p, float out[2]) {
+                out[0] = out[1] = -1.0f;
+                if (p > 0x10000 && Readable(reinterpret_cast<const void*>(p), 8)) std::memcpy(out, reinterpret_cast<const void*>(p), 8);
+            };
+            float v2[2], v3[2];
+            vec(a2, v2);
+            vec(a3, v3);
+            std::snprintf(text, sizeof(text), "LINE by %08X id=%u a=%08X(%.1f,%.1f) b=%08X(%.1f,%.1f) c=%08X",
+                          static_cast<uint32_t>(reinterpret_cast<uintptr_t>(_ReturnAddress())), a1, a2, v2[0], v2[1], a3, v3[0], v3[1], a4);
+            DDM::TraceMark(text);
+        }
+        return o_DrawLine(mgr, edx, a1, a2, a3, a4);
+    }
+
+    bool Hook(uintptr_t addr, const uint8_t* prolog, size_t n, void* detour, void** original) {
+        return std::memcmp(reinterpret_cast<const void*>(addr), prolog, n) == 0 &&
+               MH_CreateHook(reinterpret_cast<LPVOID>(addr), detour, original) == MH_OK &&
+               MH_EnableHook(reinterpret_cast<LPVOID>(addr)) == MH_OK;
+    }
+
+    // The map: one window (vtable 0x00679B70) - the scroll button in the top-right corner, which
+    // becomes the opened map (158x246 at 1039,90 on a 2560x1440 screen, the top middle).
+    constexpr uint32_t kMapVtable = 0x00679B70;
+    constexpr float kMapMargin = 8.0f;     // original pixels from the right edge
+    constexpr float kMapTop = 104.0f;      // original pixels: below the face and the tower buttons
+    bool g_mapCorner = false;
+
+    bool IsOpenMap(const void* win, const float rc[4]) {
+        return *static_cast<const uint32_t*>(win) == kMapVtable && rc[3] - rc[1] > 120.0f;
+    }
+
+    // ---- the opened map: dragging (2026-11-14, user wish) ----------------------------------
+    // The map window handles the pointer in 0x0054A640. Pointer flags (Pointer::Update, +0xA4):
+    // 0x01 left click (when let go), 0x08 left double click, 0x40 left held, 0x02 right click,
+    // 0x80 right held. Over the opened map a left click on the picture of the level centres the
+    // camera on that point (0x0054BFB0); with the left button held the window is dragged
+    // (0x0054C1E0, thiscall(map, const Vec2* pointer), ret 4: map+0xB0 = drag started, +0xB4 the
+    // pointer at the start, +0xBC the window position at the start, +0xB1 = moved - only once
+    // the pointer is 15 px from the start); a right click closes the map. The opened window's
+    // rectangle is map+0xE4, set by 0x0054A0F0 (thiscall(map, const Vec2* topLeft), ret 4: kept on
+    // the screen) and given to the window by 0x0061AD20 (thiscall(win, const Rect*), ret 4). The
+    // picture fills the window's rectangle (+0x70) minus the margin at 0x006C0C58 (Vec2: 14, 24)
+    // and shows the whole level; map+0xAC = the engine. Changes:
+    //  * a drag that starts on the picture moves the camera: the point under the pointer is
+    //    centred continuously (0x004C7F60 CenterCameraOn, as the click does), also when the pointer
+    //    leaves the map (clamped to its edge). The window is dragged by its edges - with the left
+    //    button, or with the right one (input_fix.cpp makes a right press on an edge a left one);
+    //  * the dragged window follows the cursor in every drawn frame (the game moves it in its
+    //    ticks, 25 times a second, after a dead zone of 15 px - 30 screen pixels with the x2 UI);
+    //  * while the map is dragged the pointer is mapped back with the map's anchor (MapBack);
+    //  * a drag ends with the button (AfterMissionPointer): let go outside the window, the game
+    //    kept its drag going, and the next drag anywhere moved the map.
+    constexpr uintptr_t kAddrMapMargin = 0x006C0C58;
+    using PFN_MapDrag      = void(__fastcall*)(uint8_t* map, void* edx, const float* pointer);
+    using PFN_MapSetPos    = uint8_t(__fastcall*)(uint8_t* map, void* edx, const float* topLeft);
+    using PFN_WinSetRect   = void(__fastcall*)(uint8_t* win, void* edx, const float* rect);
+    using PFN_EngineTest   = uint32_t(__fastcall*)(uint8_t* engine, void* edx);
+    using PFN_CenterCamera = void(__fastcall*)(uint8_t* engine, void* edx, const float* point);
+    PFN_MapDrag o_MapDrag = nullptr;
+    const auto g_fnMapSetPos    = reinterpret_cast<PFN_MapSetPos>(0x0054A0F0);
+    const auto g_fnWinSetRect   = reinterpret_cast<PFN_WinSetRect>(0x0061AD20);
+    const auto g_fnCanStartZoom = reinterpret_cast<PFN_EngineTest>(0x004C7C90);
+    const auto g_fnCenterCamera = reinterpret_cast<PFN_CenterCamera>(0x004C7F60);
+    bool  g_mapDragCamera = true;
+    float g_camLast[2] = { -1.0f, -1.0f };
+    float g_winLast[2] = { -1e9f, -1e9f };
+    std::atomic<bool> g_edgePress{ false };     // input thread: this left press is a right one on an edge
+
+    bool MapContent(const uint8_t* map, float c[4]) {
+        const auto* rc = reinterpret_cast<const float*>(map + 0x70);
+        const auto* m = reinterpret_cast<const float*>(kAddrMapMargin);
+        c[0] = rc[0] + m[0];
+        c[1] = rc[1] + m[1];
+        c[2] = rc[2] - m[0];
+        c[3] = rc[3] - m[1];
+        return c[2] - c[0] > 1.0f && c[3] - c[1] > 1.0f;
+    }
+
+    // the window and its picture as drawn (anchor and factor of the drawing) - for the input thread
+    void PublishMap(const uint8_t* map, float ax, float ay, float f) {
+        const auto* rc = reinterpret_cast<const float*>(map + 0x70);
+        float c[4];
+        if (!MapContent(map, c)) std::memcpy(c, rc, sizeof(c));
+        g_mapShownRect[0].store(ax + (rc[0] - ax) * f, std::memory_order_relaxed);
+        g_mapShownRect[1].store(ay + (rc[1] - ay) * f, std::memory_order_relaxed);
+        g_mapShownRect[2].store(ax + (rc[2] - ax) * f, std::memory_order_relaxed);
+        g_mapShownRect[3].store(ay + (rc[3] - ay) * f, std::memory_order_relaxed);
+        g_mapContentRect[0].store(ax + (c[0] - ax) * f, std::memory_order_relaxed);
+        g_mapContentRect[1].store(ay + (c[1] - ay) * f, std::memory_order_relaxed);
+        g_mapContentRect[2].store(ax + (c[2] - ax) * f, std::memory_order_relaxed);
+        g_mapContentRect[3].store(ay + (c[3] - ay) * f, std::memory_order_relaxed);
+    }
+
+    // the mission's windows drawn at their size: the opened map where the game has it
+    void PublishMapAtSize(const uint8_t* wm) {
+        g_mapAnchorValid = false;
+        bool shown = false;
+        if (Readable(wm + 8, 8)) {
+            void* const* begin = *reinterpret_cast<void* const* const*>(wm + 8);
+            void* const* end = *reinterpret_cast<void* const* const*>(wm + 0xC);
+            if (begin && end > begin && end - begin <= 64 && Readable(begin, (end - begin) * sizeof(void*))) {
+                for (void* const* it = begin; it < end && !shown; ++it) {
+                    auto* win = static_cast<const uint8_t*>(*it);
+                    if (!win || !Readable(win, 0x130) || !win[0x80]) continue;
+                    if (IsOpenMap(win, reinterpret_cast<const float*>(win + 0x70))) {
+                        PublishMap(win, 0.0f, 0.0f, 1.0f);
+                        shown = true;
+                    }
+                }
+            }
+        }
+        g_mapShown.store(shown, std::memory_order_relaxed);
+    }
+
+    void MapCentreCamera(uint8_t* map, const float* p) {
+        auto* engine = *reinterpret_cast<uint8_t* const*>(map + 0xAC);
+        float c[4];
+        if (!engine || engine != *reinterpret_cast<uint8_t* const*>(kAddrEnginePtr) || !MapContent(map, c)) return;
+        const float u = (std::max)(0.0f, (std::min)(1.0f, (p[0] - c[0]) / (c[2] - c[0])));
+        const float v = (std::max)(0.0f, (std::min)(1.0f, (p[1] - c[1]) / (c[3] - c[1])));
+        const float pt[2] = { *reinterpret_cast<const float*>(engine + 0x4730) * u,
+                              *reinterpret_cast<const float*>(engine + 0x4734) * v };
+        if (pt[0] == g_camLast[0] && pt[1] == g_camLast[1]) return;
+        if (!(g_fnCanStartZoom(engine, nullptr) & 0xFF)) return;    // a zoom is running: as the click
+        g_camLast[0] = pt[0];
+        g_camLast[1] = pt[1];
+        g_fnCenterCamera(engine, nullptr, pt);
+    }
+
+    void __fastcall Hook_MapDrag(uint8_t* map, void* edx, const float* pointer) {
+        if (!map || !pointer || !map[0x120]) {      // closed: the original does nothing either
+            o_MapDrag(map, edx, pointer);
+            return;
+        }
+        if (!map[0xB0]) {           // the drag starts
+            g_camDragMap = nullptr;
+            g_winDragMap = nullptr;
+            g_winLast[0] = g_winLast[1] = -1e9f;
+            float c[4];
+            if (g_mapDragCamera && !g_edgePress.load(std::memory_order_relaxed) && MapContent(map, c) &&
+                pointer[0] >= c[0] && pointer[0] < c[2] && pointer[1] >= c[1] && pointer[1] < c[3]) {
+                g_camDragMap = map;
+                map[0xB0] = 1;      // the game goes on calling this while the button is held, also off the window
+                map[0xB1] = 0;      // letting go over the picture centres once more (the same point)
+                map[0xE0] = 0;
+                g_camLast[0] = g_camLast[1] = -1.0f;
+                MapCentreCamera(map, pointer);
+                return;
+            }
+            o_MapDrag(map, edx, pointer);
+            if (map[0xB0]) g_winDragMap = map;
+            return;
+        }
+        if (map == g_camDragMap) {
+            MapCentreCamera(map, pointer);
+            map[0xE0] = 0;
+            return;
+        }
+        o_MapDrag(map, edx, pointer);
+        if (map[0xB0]) g_winDragMap = map;
+    }
+
+    // every drawn frame, before the mission's windows: the dragged window where the cursor is now
+    void FollowMapDrag() {
+        uint8_t* map = g_winDragMap;
+        if (!map) return;
+        if (!Readable(map, 0x130) || !map[0xB0] || !map[0x120]) {
+            g_winDragMap = nullptr;
+            return;
+        }
+        float p[2] = { *reinterpret_cast<const float*>(kAddrCursor), *reinterpret_cast<const float*>(kAddrCursor + 4) };
+        if (g_factor > 1 && g_mapAnchorValid) {     // as MapBack maps it for the pointer
+            const float f = static_cast<float>(g_factor);
+            p[0] = g_mapAx + (p[0] - g_mapAx) / f;
+            p[1] = g_mapAy + (p[1] - g_mapAy) / f;
+        }
+        const auto* start = reinterpret_cast<const float*>(map + 0xB4);
+        const auto* from = reinterpret_cast<const float*>(map + 0xBC);
+        const float dx = p[0] - start[0], dy = p[1] - start[1];
+        if (!map[0xB1] && dx * dx + dy * dy < 4.0f) return;    // 2 px instead of the game's 15
+        const float pos[2] = { from[0] + dx, from[1] + dy };
+        if (pos[0] == g_winLast[0] && pos[1] == g_winLast[1]) return;
+        g_winLast[0] = pos[0];
+        g_winLast[1] = pos[1];
+        g_fnMapSetPos(map, nullptr, pos);                                           // as the game's drag (0x0054C2CE)
+        g_fnWinSetRect(map, nullptr, reinterpret_cast<const float*>(map + 0xE4));    // and its next event (0x0054A77C)
+        map[0xB1] = 1;
+    }
+
+    // main thread, after every update of the mission's pointer: a drag ends with the button
+    void AfterMissionPointer(const uint8_t* ptr) {
+        if (!g_camDragMap && !g_winDragMap) return;
+        if (*reinterpret_cast<const uint16_t*>(ptr + 0xA4) & 0x40) return;     // still held
+        uint8_t* const maps[2] = { g_camDragMap, g_winDragMap };
+        for (uint8_t* map : maps) {
+            if (map && Readable(map, 0x130)) map[0xB0] = 0;
+        }
+        g_camDragMap = nullptr;
+        g_winDragMap = nullptr;
+    }
+
+    // The mission manager's windows, read when its drawing begins. A window of moderate size is
+    // anchored by its rectangle - or by the rectangle around all windows of its class (the
+    // portraits of the selected characters form a row from the bottom-left corner: they grow
+    // together, the row stays closed). A full-width window is scaled picture by picture: its
+    // ends belong to different corners.
+    struct WinInfo { const void* win; uint32_t vt; float rc[4]; };
+    // perWindow: the windows of the class lie so far apart that each can grow from its own place
+    // without covering the next (otherwise the whole row grows together)
+    struct Group { uint32_t vt; Box box; int count = 0; float minGap = 1e9f, maxW = 0.0f; bool perWindow = false; };
+    WinInfo g_wins[64];
+    int     g_winCount = 0;
+    Group   g_groups[64];
+    int     g_groupCount = 0;
+    int     g_lastWin = 0;
+
+    bool Moderate(float l, float t, float r, float b, float w, float h) {
+        return r > l && b > t && r - l <= w * 0.5f && b - t <= h * 0.5f;
+    }
+
+    void ForgetGoneAnchors();
+
+    void CollectWindows(const uint8_t* wm) {
+        g_winCount = 0;
+        g_groupCount = 0;
+        g_lastWin = 0;
+        g_mapOrigValid = false;
+        if (!Readable(wm + 8, 8)) return;
+        void* const* begin = *reinterpret_cast<void* const* const*>(wm + 8);
+        void* const* end = *reinterpret_cast<void* const* const*>(wm + 0xC);
+        if (!begin || end <= begin || end - begin > 64 || !Readable(begin, (end - begin) * sizeof(void*))) return;
+        float w, h;
+        ScreenSize(w, h);
+        for (void* const* it = begin; it < end; ++it) {
+            auto* win = static_cast<const uint8_t*>(*it);
+            if (!win || !Readable(win, 0x84) || !win[0x80]) continue;
+            WinInfo& info = g_wins[g_winCount];
+            info.win = win;
+            info.vt = *reinterpret_cast<const uint32_t*>(win);
+            std::memcpy(info.rc, win + 0x70, sizeof(info.rc));
+            if (!Moderate(info.rc[0], info.rc[1], info.rc[2], info.rc[3], w, h)) continue;
+            if (g_mapCorner && IsOpenMap(win, info.rc)) {
+                std::memcpy(g_mapOrig, info.rc, sizeof(g_mapOrig));
+                g_mapOrigValid = true;
+            }
+            ++g_winCount;
+            Group* g = nullptr;
+            for (int i = 0; i < g_groupCount; ++i) {
+                if (g_groups[i].vt == info.vt) { g = &g_groups[i]; break; }
+            }
+            if (!g) {
+                g = &g_groups[g_groupCount++];
+                g->vt = info.vt;
+                g->box = Box{};
+            }
+            g->box.l = (std::min)(g->box.l, info.rc[0]);
+            g->box.t = (std::min)(g->box.t, info.rc[1]);
+            g->box.r = (std::max)(g->box.r, info.rc[2]);
+            g->box.b = (std::max)(g->box.b, info.rc[3]);
+            g->box.any = true;
+            ++g->count;
+            g->maxW = (std::max)(g->maxW, info.rc[2] - info.rc[0]);
+        }
+        // distances between the windows of each class (left edges, in order)
+        for (int gi = 0; gi < g_groupCount; ++gi) {
+            Group& g = g_groups[gi];
+            if (g.count < 2) continue;
+            float lefts[64];
+            int n = 0;
+            for (int i = 0; i < g_winCount; ++i) {
+                if (g_wins[i].vt == g.vt && n < 64) lefts[n++] = g_wins[i].rc[0];
+            }
+            std::sort(lefts, lefts + n);
+            for (int i = 1; i < n; ++i) g.minGap = (std::min)(g.minGap, lefts[i] - lefts[i - 1]);
+            g.perWindow = g.minGap >= g.maxW * static_cast<float>(g_factor);
+        }
+        ForgetGoneAnchors();
+    }
+
+    // A window keeps the anchor it got when it appeared (at this size): the game lets the player
+    // drag some windows (the map) - computed anew from the moving rectangle every frame, the
+    // enlarged window would not follow the mouse and only shake in place.
+    struct KeptAnchor { const void* win; float w, h, ax, ay; };
+    std::vector<KeptAnchor> g_kept;
+
+    KeptAnchor* FindKept(const void* win) {
+        for (KeptAnchor& k : g_kept) {
+            if (k.win == win) return &k;
+        }
+        return nullptr;
+    }
+
+    // after CollectWindows: anchors of windows that are gone are forgotten
+    void ForgetGoneAnchors() {
+        g_kept.erase(std::remove_if(g_kept.begin(), g_kept.end(), [](const KeptAnchor& k) {
+            for (int i = 0; i < g_winCount; ++i) {
+                if (g_wins[i].win == k.win) return false;
+            }
+            return true;
+        }), g_kept.end());
+    }
+
+    // the rectangle that anchors the window (its group's or its own); false: picture by picture
+    bool WindowRect(const void* win, float w, float h, float rc[4]) {
+        if (!win || g_winCount == 0) return false;
+        const WinInfo* info = nullptr;
+        if (g_lastWin < g_winCount && g_wins[g_lastWin].win == win) {
+            info = &g_wins[g_lastWin];
+        } else {
+            for (int i = 0; i < g_winCount; ++i) {
+                if (g_wins[i].win == win) { info = &g_wins[i]; g_lastWin = i; break; }
+            }
+        }
+        if (!info) return false;
+        std::memcpy(rc, info->rc, sizeof(info->rc));
+        if (info->vt == kMapVtable) return true;    // the map: its own rectangle (see IsOpenMap)
+        for (int i = 0; i < g_groupCount; ++i) {
+            const Box& b = g_groups[i].box;
+            if (g_groups[i].vt == info->vt && !g_groups[i].perWindow && Moderate(b.l, b.t, b.r, b.b, w, h)) {
+                rc[0] = b.l;
+                rc[1] = b.t;
+                rc[2] = b.r;
+                rc[3] = b.b;
+                break;
+            }
+        }
+        return true;
+    }
+
+    void NoteDrawn(const void* win, float l, float t, float r, float b) {
+        auto& list = g_drawn[g_piecesCur];
+        Drawn* d = nullptr;
+        for (auto it = list.rbegin(); it != list.rend(); ++it) {
+            if (it->win == win) { d = &*it; break; }
+        }
+        if (!d) {
+            if (list.size() >= 256) return;
+            list.push_back(Drawn{ win, Box{} });
+            d = &list.back();
+        }
+        d->box.l = (std::min)(d->box.l, l);
+        d->box.t = (std::min)(d->box.t, t);
+        d->box.r = (std::max)(d->box.r, r);
+        d->box.b = (std::max)(d->box.b, b);
+        d->box.any = true;
+    }
+
+    void Transform(float& l, float& t, float& r, float& b) {
+        float w, h, ax, ay;
+        ScreenSize(w, h);
+        const void* win = g_curWindow;
+        NoteDrawn(win, l, t, r, b);
+        float rc[4];
+        if (g_fixedAnchor) {
+            ax = g_fixedAx;
+            ay = g_fixedAy;
+        } else if (g_groupAnchor) {
+            if (!g_groupSet) {
+                Anchor((l + r) * 0.5f, (t + b) * 0.5f, w, h, g_groupAx, g_groupAy);
+                g_groupSet = true;
+            }
+            ax = g_groupAx;
+            ay = g_groupAy;
+        } else if (WindowRect(win, w, h, rc)) {
+            const float f = static_cast<float>(g_factor);
+            const bool openMap = IsOpenMap(win, rc);
+            KeptAnchor* kept = FindKept(win);
+            if (kept && kept->w == rc[2] - rc[0] && kept->h == rc[3] - rc[1]) {
+                ax = kept->ax;      // the anchor it got when it appeared (it may have been dragged since)
+                ay = kept->ay;
+            } else if (g_mapCorner && openMap) {
+                // the opened map in the top-right corner, below the corner's pictures: the anchor
+                // that puts its enlarged top-right corner there
+                const float x0 = w - kMapMargin * f - f * (rc[2] - rc[0]);
+                const float y0 = kMapTop * f;
+                ax = (f * rc[0] - x0) / (f - 1.0f);
+                ay = (f * rc[1] - y0) / (f - 1.0f);
+            } else {
+                // one anchor for the whole window: its corner, edge or - in the middle - its
+                // centre (whole pixels: the enlarged rectangles stay exactly twice as large)
+                const float cx = (rc[0] + rc[2]) * 0.5f, cy = (rc[1] + rc[3]) * 0.5f;
+                Anchor(cx, cy, w, h, ax, ay);
+                if (ax == w * 0.5f) ax = static_cast<float>(static_cast<int>(cx));
+                if (ay == h * 0.5f) ay = static_cast<float>(static_cast<int>(cy));
+                if (ay == h && ax == 0.0f) {
+                    // the row of portraits at the bottom left: it keeps the distance from the
+                    // screen edge the game gave it (grown from the corner, the portrait sat twice
+                    // as far in - "Robin pulled to the right"), unless the row would then run off
+                    // the screen
+                    ax = static_cast<float>(static_cast<int>(rc[0]));
+                    if (ax + (rc[2] - ax) * f > w - 8.0f) ax = static_cast<float>(static_cast<int>((f * rc[2] - (w - 8.0f)) / (f - 1.0f)));
+                    if (ax + (rc[0] - ax) * f < 0.0f) ax = 0.0f;
+                }
+            }
+            if (!kept || kept->w != rc[2] - rc[0] || kept->h != rc[3] - rc[1]) {
+                if (!kept && g_kept.size() < 64) {
+                    g_kept.push_back(KeptAnchor{ win, 0.0f, 0.0f, 0.0f, 0.0f });
+                    kept = &g_kept.back();
+                }
+                if (kept) *kept = KeptAnchor{ win, rc[2] - rc[0], rc[3] - rc[1], ax, ay };
+            }
+            if (openMap) {
+                // where the enlarged map lies (input thread: its rolled-up ends close it, its
+                // edges drag it); while it is dragged the pointer is mapped with its anchor
+                g_mapAx = ax;
+                g_mapAy = ay;
+                g_mapAnchorValid = true;
+                PublishMap(static_cast<const uint8_t*>(win), ax, ay, f);
+                g_mapSeen = true;
+            }
+        } else if (!win && g_pointerAnchor) {
+            // drawn by the manager after its windows: the tooltip, placed at the pointer
+            ax = g_pointerAx;
+            ay = g_pointerAy;
+        } else {
+            Anchor((l + r) * 0.5f, (t + b) * 0.5f, w, h, ax, ay);
+        }
+        const float f = static_cast<float>(g_factor);
+        l = ax + (l - ax) * f;
+        r = ax + (r - ax) * f;
+        t = ay + (t - ay) * f;
+        b = ay + (b - ay) * f;
+        auto& cur = g_pieces[g_piecesCur];
+        if (cur.size() < 4096) cur.push_back(Piece{ l, t, r, b, ax, ay });
+    }
+}
+
+int Factor() {
+    return g_factor;
+}
+
+bool CursorDrawing() {
+    return g_cursorDrawing;
+}
+
+bool MenuZoomCrop(int frameW, int frameH, RECT& crop) {
+    if (!g_menuZoomEnabled || !g_zoomOn) return false;
+    int w = 0, h = 0;
+    WindowManager::GetInternalResolution(w, h);
+    return frameW == w && frameH == h && CropFor(frameW, frameH, crop);
+}
+
+float MenuZoomMouseScale() {
+    return g_zoomMouse;
+}
+
+bool MenuCropRect(int frameW, int frameH, RECT& crop) {
+    return CropFor(frameW, frameH, crop);
+}
+
+void MenuZoomUnavailable() {
+    g_zoomUnavailable = true;
+}
+
+bool DialogShown() {
+    return g_dialogShown;
+}
+
+bool DialogLoopRunning() {
+    return g_dialogLoopDepth > 0;
+}
+
+bool OnMapScrollEnd(float x, float y) {
+    if (!g_mapShown.load(std::memory_order_relaxed)) return false;
+    const float l = g_mapShownRect[0].load(std::memory_order_relaxed);
+    const float t = g_mapShownRect[1].load(std::memory_order_relaxed);
+    const float r = g_mapShownRect[2].load(std::memory_order_relaxed);
+    const float b = g_mapShownRect[3].load(std::memory_order_relaxed);
+    if (x < l || x >= r || y < t || y >= b) return false;
+    const float band = (b - t) * 0.085f;    // the rolled-up ends of the parchment
+    return y < t + band || y >= b - band;
+}
+
+bool OnMapEdge(float x, float y) {
+    if (!g_mapShown.load(std::memory_order_relaxed)) return false;
+    const float l = g_mapShownRect[0].load(std::memory_order_relaxed);
+    const float t = g_mapShownRect[1].load(std::memory_order_relaxed);
+    const float r = g_mapShownRect[2].load(std::memory_order_relaxed);
+    const float b = g_mapShownRect[3].load(std::memory_order_relaxed);
+    if (x < l || x >= r || y < t || y >= b) return false;
+    const float cl = g_mapContentRect[0].load(std::memory_order_relaxed);
+    const float ct = g_mapContentRect[1].load(std::memory_order_relaxed);
+    const float cr = g_mapContentRect[2].load(std::memory_order_relaxed);
+    const float cb = g_mapContentRect[3].load(std::memory_order_relaxed);
+    return x < cl || x >= cr || y < ct || y >= cb;
+}
+
+void NoteEdgePress(bool on) {
+    g_edgePress.store(on, std::memory_order_relaxed);
+}
+
+bool MapDragAvailable() {
+    return o_MapDrag != nullptr;
+}
+
+bool MapDragCamera() {
+    return g_mapDragCamera;
+}
+
+void SetMapDragCamera(bool on) {
+    if (on == g_mapDragCamera || (on && !o_MapDrag)) return;
+    g_mapDragCamera = on;
+    Logger::Info("UiScale: dragging on the map moves %s (settings panel).", on ? "the camera" : "the window");
+}
+
+bool InterfaceScaleAvailable() {
+    return g_uiInstalled;
+}
+
+bool InterfaceScaled() {
+    return g_factor > 1;
+}
+
+void SetInterfaceScale(bool on) {
+    if (!g_uiInstalled || on == (g_factor > 1)) return;
+    g_factor = on ? 2 : 1;
+    if (!on) g_pointerResync = true;
+    Logger::Info("UiScale: mission interface %s (settings panel).", on ? "x2" : "at its size");
+}
+
+bool MapInCorner() {
+    return g_mapCorner;
+}
+
+void SetMapInCorner(bool on) {
+    g_mapCorner = on;
+}
+
+bool MenuZoomAvailable() {
+    return g_menuZoomPossible && !g_zoomUnavailable;
+}
+
+bool MenuZoomOn() {
+    return g_menuZoomEnabled;
+}
+
+void SetMenuZoom(bool on) {
+    if (!MenuZoomAvailable() || on == g_menuZoomEnabled) return;
+    if (!on) MenuZoomOff();
+    g_menuZoomEnabled = on;
+    Logger::Info("UiScale: menu zoom %s (settings panel).", on ? "on" : "off");
+}
+
+unsigned CursorSerial() {
+    return g_cursorSerial;
+}
+
+bool Drawing() {
+    return g_factor > 1 && g_drawDepth > 0;
+}
+
+void ScaleRect(RECT& rc) {
+    float l = static_cast<float>(rc.left), t = static_cast<float>(rc.top);
+    float r = static_cast<float>(rc.right), b = static_cast<float>(rc.bottom);
+    Transform(l, t, r, b);
+    // anchors are whole pixels (0, W/2, W) and the factor is 2: the results are whole too
+    rc.left = static_cast<LONG>(l);
+    rc.top = static_cast<LONG>(t);
+    rc.right = static_cast<LONG>(r);
+    rc.bottom = static_cast<LONG>(b);
+}
+
+void ScaleRectF(float* ltrb) {
+    Transform(ltrb[0], ltrb[1], ltrb[2], ltrb[3]);
+}
+
+int DescribeWindows(char* out, int size) {
+    if (!out || size < 64) return 0;
+    auto* game = *reinterpret_cast<uint8_t* const*>(0x006C0B3C);
+    if (!game || !InMission() || !Readable(game + 0x68, 0x10)) return std::snprintf(out, size, "no mission");
+    uint8_t* wm = game + 0x68;
+    void** begin = *reinterpret_cast<void***>(wm + 8);
+    void** end = *reinterpret_cast<void***>(wm + 0xC);
+    const int count = begin && end > begin ? static_cast<int>(end - begin) : 0;
+    int len = std::snprintf(out, size, "windows=%d", count);
+    const auto& drawn = g_drawn[g_piecesCur ^ 1];
+    for (int i = 0; i < count && len < size - 200; ++i) {
+        auto* win = static_cast<uint8_t*>(begin[i]);
+        if (!Readable(win, 0x84)) {
+            len += std::snprintf(out + len, size - len, " [%d]=%p ?", i, win);
+            continue;
+        }
+        const float* rc = reinterpret_cast<const float*>(win + 0x70);
+        len += std::snprintf(out + len, size - len, " [%d]=%p vt=%08X rc=%.0f,%.0f,%.0f,%.0f ok=%d f=%d%d", i, win,
+                             *reinterpret_cast<const uint32_t*>(win), rc[0], rc[1], rc[2], rc[3], win[0x80], win[0x5C], win[0x5D]);
+        for (const Drawn& d : drawn) {
+            if (d.win == win && d.box.any) {
+                len += std::snprintf(out + len, size - len, " drew=%.0f,%.0f,%.0f,%.0f", d.box.l, d.box.t, d.box.r, d.box.b);
+            }
+        }
+    }
+    for (const Drawn& d : drawn) {
+        if (!d.win && d.box.any && len < size - 80) {
+            len += std::snprintf(out + len, size - len, " [none] drew=%.0f,%.0f,%.0f,%.0f", d.box.l, d.box.t, d.box.r, d.box.b);
+        }
+    }
+    return len;
+}
+
+void Install() {
+    // The selection frame follows the cursor between ticks too (any resolution, any scale).
+    static const uint8_t kSelection[] = { 0x64, 0xA1, 0x00, 0x00, 0x00, 0x00, 0x6A, 0xFF, 0x68, 0x20, 0xD3, 0x65, 0x00, 0x50 };
+    if (Hook(0x004D0400, kSelection, sizeof(kSelection), reinterpret_cast<void*>(&Hook_DrawSelection),
+             reinterpret_cast<void**>(&o_DrawSelection))) {
+        Logger::Info("UiScale: the selection frame follows the cursor in the frames between ticks.");
+    }
+    // the dialog loop: sub esp,10h / push ebx / push ebp / push esi / mov esi,ecx / push edi
+    static const uint8_t kDialogLoop[] = { 0x83, 0xEC, 0x10, 0x53, 0x55, 0x56, 0x8B, 0xF1, 0x57 };
+    if (!Hook(0x0053C390, kDialogLoop, sizeof(kDialogLoop), reinterpret_cast<void*>(&Hook_DialogLoop),
+              reinterpret_cast<void**>(&o_DialogLoop))) {
+        Logger::Warn("UiScale: dialog loop not recognised - dialogs in a mission are zoomed with their backdrop.");
+    }
+    const auto& cfg = SherwoodConfig::Get();
+    // the opened map: dragging on its picture moves the camera, its edges drag the window
+    static const uint8_t kMapDrag[] = { 0x64, 0xA1, 0x00, 0x00, 0x00, 0x00, 0x6A, 0xFF, 0x68, 0x48, 0x87, 0x66, 0x00, 0x50 };
+    static const uint8_t kMapSetPos[] = { 0x6A, 0xFF, 0x68, 0xC8, 0x84, 0x66, 0x00, 0x64, 0xA1, 0x00, 0x00, 0x00, 0x00, 0x50 };
+    static const uint8_t kCenter[] = { 0x6A, 0xFF, 0x68, 0x40, 0xC4, 0x65, 0x00, 0x64, 0xA1, 0x00, 0x00, 0x00, 0x00, 0x50 };
+    g_mapDragCamera = cfg.mapDragCamera;
+    if (std::memcmp(reinterpret_cast<const void*>(0x0054A0F0), kMapSetPos, sizeof(kMapSetPos)) == 0 &&
+        std::memcmp(reinterpret_cast<const void*>(0x004C7F60), kCenter, sizeof(kCenter)) == 0 &&
+        Hook(0x0054C1E0, kMapDrag, sizeof(kMapDrag), reinterpret_cast<void*>(&Hook_MapDrag), reinterpret_cast<void**>(&o_MapDrag))) {
+        Logger::Info("UiScale: map - dragging on its picture moves the camera %s, the window is dragged by its edges (left or right button) and follows the cursor in every frame.",
+                     g_mapDragCamera ? "(on)" : "(off: MapDragCamera=0, the window moves as in the game)");
+    } else {
+        g_mapDragCamera = false;
+        Logger::Warn("UiScale: map window code not recognised - the map is dragged as in the game.");
+    }
+
+    // The hooks go in whenever the feature is possible (it can be switched in the settings panel);
+    // with the feature off they only pass the calls on.
+    const bool ui = cfg.width >= 2048;
+    const bool menu = cfg.height >= 960 && cfg.renderer == 1 && cfg.presenter == 0;
+    if (!ui) {
+        Logger::Info("UiScale: no interface scale (internal width %d < 2048).", cfg.width);
+    }
+    if (!menu) {
+        Logger::Info("UiScale: no menu zoom (internal height %d, Renderer=%d, Presenter=%d).", cfg.height, cfg.renderer, cfg.presenter);
+    }
+    static const uint8_t kDrawOnly[] = { 0x64, 0xA1, 0x00, 0x00, 0x00, 0x00, 0x6A, 0xFF, 0x68, 0x30, 0x58, 0x67, 0x00, 0x50 };
+    auto finishMenuZoom = [&]() {
+        g_menuZoomPossible = menu && o_Draw != nullptr;
+        g_menuZoomEnabled = g_menuZoomPossible && cfg.menuZoom;
+        if (g_menuZoomPossible) {
+            Logger::Info("UiScale: menu zoom %s - menus and dialogs shown on the whole window (the middle 768 lines of the frame).",
+                         g_menuZoomEnabled ? "on" : "off (MenuZoom=0)");
+        }
+    };
+    static const uint8_t kPointerOnly[] = { 0x6A, 0xFF, 0x68, 0x68, 0x65, 0x67, 0x00, 0x64, 0xA1, 0x00, 0x00, 0x00, 0x00, 0x50 };
+    if (!ui) {
+        // the dialog loop's window manager drawing tells when a dialog is up; the dialogs'
+        // pointers are kept under the cursor (Hook_PointerUpdate)
+        if (!Hook(0x006189E0, kDrawOnly, sizeof(kDrawOnly), reinterpret_cast<void*>(&Hook_Draw), reinterpret_cast<void**>(&o_Draw)) ||
+            !Hook(0x00628210, kPointerOnly, sizeof(kPointerOnly), reinterpret_cast<void*>(&Hook_PointerUpdate),
+                  reinterpret_cast<void**>(&o_PointerUpdate))) {
+            if (o_Draw) MH_DisableHook(reinterpret_cast<LPVOID>(0x006189E0));
+            o_Draw = nullptr;
+            Logger::Warn("UiScale: window manager code not recognised - no menu zoom.");
+        }
+        finishMenuZoom();
+        return;
+    }
+    static const uint8_t kDraw[]    = { 0x64, 0xA1, 0x00, 0x00, 0x00, 0x00, 0x6A, 0xFF, 0x68, 0x30, 0x58, 0x67, 0x00, 0x50 };
+    static const uint8_t kPointer[] = { 0x6A, 0xFF, 0x68, 0x68, 0x65, 0x67, 0x00, 0x64, 0xA1, 0x00, 0x00, 0x00, 0x00, 0x50 };
+    static const uint8_t kMessage[] = { 0x6A, 0xFF, 0x68, 0xD8, 0x03, 0x67, 0x00, 0x64, 0xA1, 0x00, 0x00, 0x00, 0x00, 0x50 };
+    // window loop of WindowManager::Draw: mov eax,[esi+8]; mov ecx,[eax+edi*4]; mov eax,[ecx];
+    // call [eax+14h] | mov eax,[esp+18h]; inc edi
+    static const uint8_t kLoop[]    = { 0x8B, 0x46, 0x08, 0x8B, 0x0C, 0xB8, 0x8B, 0x01, 0xFF, 0x50, 0x14 };
+    static const uint8_t kDone[]    = { 0x8B, 0x44, 0x24, 0x18, 0x47 };
+    static const uint8_t kRect[]    = { 0x6A, 0xFF, 0x68, 0xD3, 0x29, 0x67, 0x00, 0x64, 0xA1, 0x00, 0x00, 0x00, 0x00, 0x50 };
+    static const uint8_t kBlend[]   = { 0x6A, 0xFF, 0x68, 0x60, 0x29, 0x67, 0x00, 0x64, 0xA1, 0x00, 0x00, 0x00, 0x00, 0x50 };
+    static const uint8_t kMoney[]   = { 0x6A, 0xFF, 0x68, 0x92, 0xC4, 0x65, 0x00, 0x64, 0xA1, 0x00, 0x00, 0x00, 0x00, 0x50 };
+    static const uint8_t kClock[]   = { 0x64, 0xA1, 0x00, 0x00, 0x00, 0x00, 0x6A, 0xFF, 0x68, 0x30, 0x27, 0x66, 0x00, 0x50 };
+    static const uint8_t kCursor[]  = { 0x64, 0xA1, 0x00, 0x00, 0x00, 0x00, 0x6A, 0xFF, 0x68, 0x20, 0x2F, 0x67, 0x00, 0x50 };
+    const bool known = std::memcmp(reinterpret_cast<const void*>(0x006189E0), kDraw, sizeof(kDraw)) == 0 &&
+                       std::memcmp(reinterpret_cast<const void*>(0x00628210), kPointer, sizeof(kPointer)) == 0 &&
+                       std::memcmp(reinterpret_cast<const void*>(0x005C84A0), kMessage, sizeof(kMessage)) == 0 &&
+                       std::memcmp(reinterpret_cast<const void*>(0x00618A34), kLoop, sizeof(kLoop)) == 0 &&
+                       std::memcmp(reinterpret_cast<const void*>(0x00618A3F), kDone, sizeof(kDone)) == 0 &&
+                       std::memcmp(reinterpret_cast<const void*>(0x005ECDC0), kRect, sizeof(kRect)) == 0 &&
+                       std::memcmp(reinterpret_cast<const void*>(0x005EC5F0), kBlend, sizeof(kBlend)) == 0 &&
+                       std::memcmp(reinterpret_cast<const void*>(0x004C8140), kMoney, sizeof(kMoney)) == 0 &&
+                       std::memcmp(reinterpret_cast<const void*>(0x00511B90), kClock, sizeof(kClock)) == 0 &&
+                       std::memcmp(reinterpret_cast<const void*>(0x005F1CA0), kCursor, sizeof(kCursor)) == 0;
+    if (!known) {
+        Logger::Warn("UiScale: the window code does not match this build - interface stays at its size.");
+        if (!menu || !Hook(0x006189E0, kDrawOnly, sizeof(kDrawOnly), reinterpret_cast<void*>(&Hook_Draw), reinterpret_cast<void**>(&o_Draw)) ||
+            !Hook(0x00628210, kPointerOnly, sizeof(kPointerOnly), reinterpret_cast<void*>(&Hook_PointerUpdate),
+                  reinterpret_cast<void**>(&o_PointerUpdate))) {
+            if (o_Draw) MH_DisableHook(reinterpret_cast<LPVOID>(0x006189E0));
+            o_Draw = nullptr;
+        }
+        finishMenuZoom();
+        return;
+    }
+    g_factor = 1;       // until every hook is in place
+    g_mapCorner = cfg.mapPosition == 1;
+    const bool ok = Hook(0x006189E0, kDraw, sizeof(kDraw), reinterpret_cast<void*>(&Hook_Draw), reinterpret_cast<void**>(&o_Draw)) &&
+                    Hook(0x005C84A0, kMessage, sizeof(kMessage), reinterpret_cast<void*>(&Hook_Message), reinterpret_cast<void**>(&o_Message)) &&
+                    Hook(0x00628210, kPointer, sizeof(kPointer), reinterpret_cast<void*>(&Hook_PointerUpdate), reinterpret_cast<void**>(&o_PointerUpdate)) &&
+                    Hook(0x00618A34, kLoop, sizeof(kLoop), reinterpret_cast<void*>(&Hook_WindowLoop), &o_WindowLoop) &&
+                    Hook(0x00618A3F, kDone, sizeof(kDone), reinterpret_cast<void*>(&Hook_WindowDone), &o_WindowDone) &&
+                    Hook(0x005ECDC0, kRect, sizeof(kRect), reinterpret_cast<void*>(&Hook_DrawRect), reinterpret_cast<void**>(&o_DrawRect)) &&
+                    Hook(0x005EC5F0, kBlend, sizeof(kBlend), reinterpret_cast<void*>(&Hook_BlendBlit), reinterpret_cast<void**>(&o_BlendBlit)) &&
+                    Hook(0x004C8140, kMoney, sizeof(kMoney), reinterpret_cast<void*>(&Hook_Money), reinterpret_cast<void**>(&o_Money)) &&
+                    Hook(0x00511B90, kClock, sizeof(kClock), reinterpret_cast<void*>(&Hook_Clock), reinterpret_cast<void**>(&o_Clock)) &&
+                    Hook(0x005F1CA0, kCursor, sizeof(kCursor), reinterpret_cast<void*>(&Hook_Cursor), reinterpret_cast<void**>(&o_Cursor));
+    finishMenuZoom();
+    if (TestHarness::Enabled()) {
+        static const uint8_t kLine[] = { 0x6A, 0xFF, 0x68, 0x78, 0x29, 0x67, 0x00, 0x64, 0xA1, 0x00, 0x00, 0x00, 0x00, 0x50 };
+        Hook(0x005ECBD0, kLine, sizeof(kLine), reinterpret_cast<void*>(&Hook_DrawLine), reinterpret_cast<void**>(&o_DrawLine));
+    }
+    if (!ok) {
+        g_factor = 1;
+        Logger::Warn("UiScale: hooks could not be installed - interface stays at its size.");
+        return;
+    }
+    g_uiInstalled = true;
+    g_factor = cfg.uiScale >= 2 ? 2 : 1;
+    Logger::Info("UiScale: mission interface %s (each window grows from its screen corner, middle windows about their centre; mouse mapped back); map %s.",
+                 g_factor > 1 ? "x2" : "at its size (UIScale=0, can be switched in the settings panel)",
+                 g_mapCorner ? "in the top-right corner" : "where the game opens it");
+}
+
+} // namespace UiScale

@@ -1,0 +1,281 @@
+# Plan naprawy i odświeżenia — Robin Hood: Legenda Sherwood (GOG) na Windows 11
+
+Stan na 2026-11-13. Sprzęt testowy: 8-rdzeniowy procesor, karta graficzna 12 GB, monitor 2560×1440 / 144 Hz.
+Szczegóły techniczne (adresy, ABI): [RE_NOTES.md](RE_NOTES.md). Narzędzia: `tools\rh.py`.
+
+## 0. Wynik pomiaru z 2026-11-13 (test nr 1, wrapper GOG-a) — to on wyznacza kierunek
+
+- Hipoteza „mysz 1000 Hz dławi pętlę zdarzeń" jest **obalona**: obsługa zdarzenia kosztuje 0,01 ms.
+- Profil głównego wątku w zwykłej grze: `ddraw.dll` GOG-a 85%, sterownik NVIDIA 6–7%, **kod gry 3–4%**.
+- Tick 19 ms w spokoju: `Flip` 8,7 ms + `Blt` 2,7 ms we wrapperze. W walce `Blt` rośnie do **94 ms** na tick
+  (o 14 wywołań więcej, każde czeka na GPU), przy przewijaniu kamery skoki `Blt` do ~50 ms.
+- Wniosek: wolny jest wrapper, nie gra. Naprawa = własny DirectDraw w pamięci (`src\ddm\`), zrobiony tego samego dnia;
+  gra startuje z nim do menu, obraz poprawny. **Czeka na test nr 2 w rozgrywce.**
+
+### Test nr 2 (własny DirectDraw, 2026-11-13)
+- Relacja użytkownika: 24 kl./s, walka nie laguje jak wcześniej, przesuwanie mapy nadal „laguje".
+- Log (`backups\SherwoodFix_2026-11-13_test2_ddm.log`): tick **2,2–3,2 ms** przy 2560×1440 (wrapper: 19–23 ms, w walce
+  113 ms), `Blt` 0,8 ms, `Flip` 0,62 ms, zero linii `Spike` w całej sesji. Przewijanie dokłada jedną pełnoekranową
+  kopię (+0,4 ms). Czyli „lag" przewijania to nie wydajność, tylko 25 kroków kamery na sekundę.
+
+### Test nr 3 (klatki pośrednie, 2026-11-13, podgląd logu na żywo podczas gry użytkownika)
+- `SmoothCameraScroll` + `SmoothCursor`: własna funkcja rysująca gry (`RHGame::RenderFrame`) wołana między tickami;
+  kod w `src\timing.cpp`, mechanizm w RE_NOTES. Przy 144 Hz: 5 klatek na tick.
+- Na żywo: `Present=124–125 Hz`, tick 2,3–2,6 ms, klatka pośrednia 1,8–2,7 ms, bez błędów i ostrzeżeń, obraz poprawny
+  na zrzutach (także przy zoomie i w walce). Do potwierdzenia: odczucie użytkownika, czyste zamknięcie gry.
+- Logger otwiera plik do współdzielonego odczytu (log można czytać w trakcie gry). Profiler próbkuje tylko, gdy płyną
+  ticki, i jest zatrzymywany przed `ExitProcess` (wcześniej mógł zawiesić proces przy wyjściu).
+
+### Po teście nr 3 — uwagi użytkownika i co z nimi zrobiono (2026-11-13)
+| Uwaga | Ustalenie | Zmiana |
+|---|---|---|
+| Tylko 100–120 kl./s, „czemu nie VSync 144" | Schemat „5 klatek na tick" dawał 125 kl./s na monitorze 144 Hz (dudnienie = szarpanie). | Zwykły `VSync=1`: jedna klatka na odświeżenie, krok kamery proporcjonalny do czasu, ticki gry na idealnym harmonogramie 40 ms. Zmierzone: 143,7–143,9 kl./s. |
+| FPS spada w walce | Te same kopie pamięci bywały 2–3× wolniejsze w niektórych oknach czasu (0,16 → 0,5 ms/Mpx), niezależnie od ilości rysowania. Podejrzane przypinanie wątku głównego do jednego rdzenia. | `ThreadOptimization=0`. Do potwierdzenia w walce. |
+| Przewijanie lewo/prawo szarpie, wolne | 125 kl./s na 144 Hz + prędkości przewijania dobrane pod 640–1024 px. | VSync jak wyżej; `EdgeScrollSpeed=0` = prędkość × szerokość/1024 (×2,5 przy 2560). |
+| Brak dźwięków walki | Zasięg słyszalności 800 px od środka widoku wpisany na sztywno. | `HearingRangePercent=0` = zasięg × szerokość/1024. Do potwierdzenia uchem. |
+| Po kilku Alt+Tab gra nie wraca | Gra sama minimalizuje okno (`CloseWindow`), a mod kłamał jej, że nie jest zminimalizowane. | `CloseWindow` ignorowane; przywracanie okna przy aktywacji. Do potwierdzenia. |
+
+### Test nr 4 (VSync, 2026-11-13, sesja użytkownika ~13 min) — `backups\SherwoodFix_2026-11-13_test4_vsync.log`
+- Użytkownik: „spora poprawa". 143,7–143,9 kl./s w większości okien, zero ostrzeżeń, 2 linie `Spike` (~0,95 s, przejścia
+  z wygaszaniem ekranu, teraz ograniczone VSync-em).
+- Alt+Tab: 3 cykle dezaktywacja/aktywacja w logu, po każdym gra wróciła. Wyjście Alt+F4: czyste (`detached cleanly`).
+- Dźwięk: 2238 startów próbek, 0 nieudanych, 0 w klatkach pośrednich. Zasięg ×2,5 zastosowany; brak jeszcze oceny uchem.
+- Spadki do 131–137 kl./s pokrywają się z animacją zoomu (klatki pośrednie są wtedy celowo wstrzymane) — kosmetyka.
+- Kopie pamięci stabilnie ~0,21 ms/Mpx (bez 2–3× spowolnień z testu 3) po wyłączeniu przypinania wątków.
+
+### Wygładzanie ruchu obiektów (`SmoothMotion=1`, 2026-11-13) — wdrożone, NIEPRZETESTOWANE w rozgrywce
+- `src\motion_smooth.cpp` + hook na `RenderFrame` w `src\timing.cpp`: po ticku zapamiętuje pozycje (poprzednia/bieżąca),
+  przed każdą klatką wpisuje pozycję pośrednią i woła `PI::Update`, po klatce przywraca oryginał. Obiekty pokazywane
+  do 40 ms za pozycją logiczną; skok > 120 px na tick traktowany jako teleport. Błąd dostępu do pamięci wyłącza funkcję
+  na resztę sesji i trafia do logu (`MotionSmooth: access violation ...`).
+- Przy okazji naprawione dwa błędy klatek pośrednich znalezione w rozpoznaniu: animacje scenerii (dym, flagi) i licznik
+  powidoku postaci gracza szły tyle razy szybciej, ile klatek przypadało na tick.
+- Sprawdzone tylko przy starcie gry: hooki założone (`animation step guarded=1`, `afterimage counter guarded=1`,
+  `MotionSmooth: ... enabled`). Test w rozgrywce się nie odbył — użytkownik pracował przy komputerze, a okno gry bez
+  fokusu nie przyjmuje sterowania.
+- Do obserwacji: drganie postaci, gdy kamera sama za nią podąża; kolejność rysowania nakładających się postaci
+  (może się zamienić o jeden tick za późno); linia `smoothed objects/tick` w `Input(5s)`.
+- 2026-11-14: użytkownik potwierdził, że ruch postaci jest płynniejszy; dźwięki walki są, biały kursor zniknął.
+
+### Test nr 5 (2026-11-14, zgłoszenia użytkownika + testy automatyczne w rozgrywce) — logi `backups\SherwoodFix_2026-11-14_test5*.log`
+| Zgłoszenie | Przyczyna (potwierdzona czym) | Stan |
+|---|---|---|
+| Ikony akcji migają bardzo szybko | panel postaci odlicza miganie „na narysowaną klatkę" (`0x005D9180`); przy 144 kl./s ~6× za szybko (dezasemblacja) | poprawione (hook `0x0055EE00`), NIE potwierdzone wzrokowo |
+| „Zwiechy" po powrocie z Alt+Tab | detektor Alt+Tab w grze (`0x005E17A0`) sam wyłącza grę 5 ms po aktywacji, a okno bez ramek zostaje na wierzchu (log testu 5d; 3 z 7 przełączeń w teście 5c) | poprawione u źródła + strażnik przywracający aktywność; 6 cykli w menu po poprawce bez zwiechy |
+| `Game.exe` zostaje w tle bez okna | pętla menu głównego czeka na komunikat nieistniejącego okna (stos ze strażnika, test 5a) | proces kończony w hooku `ExitProcess`, a gdy sam nie wyjdzie — 2 s po zniknięciu okna |
+| Gra pada ~2 s po starcie misji | TYLKO gdy w tle wisi inny `Game.exe`: trzyma `Data\RobinHood.bks` na wyłączność (log: błąd 32) | start gry kończy pozostawiony proces bez okna albo wyświetla komunikat |
+| Obraz „ucieka w lewo i w górę" | mapa Nottingham ma 2304 px szerokości, ekran 2560 → pas 256 px z prawej; dół to pas HUD 80 px, którego grafika nie zakrywa na szerokim ekranie (log `Map ...`) | NIE naprawione — patrz Etap 4 |
+- Poza tym: czas komunikatów na ekranie i animacja zmiany kursora szły za szybko przy klatkach pośrednich — poprawione
+  (zapis/odtworzenie stanu wokół klatki pośredniej). Ponawianie przejęcia klawiatury/myszy, gdy nie uda się przy aktywacji.
+- Profiler domyślnie wyłączony (`Profiler=0`); nowy klucz `HangWatchdog=1`.
+- Sprawdzone automatycznie na wersji końcowej (175 616 B): start misji, 25 Hz logiki / 143,9 kl./s, zamknięcie z menu
+  w grze w 0,1–0,2 s. Alt+Tab w rozgrywce i w menu sprawdzony na wersji o jedną kompilację wcześniejszej (ten sam kod wejścia).
+
+### Test nr 6 i tryb HD (2026-11-14, noc) — szczegóły techniczne w `docs\HD_MODE.md`
+Uwagi użytkownika po przełączeniu na 1280×720 ×2: ruch płynniejszy, ale gra „mocno rozciągnięta"; zgoda na upscaling AI
+(tła, postacie, animacje — wszystko) i na testowanie wielu modeli; pomysł: kilka wariantów map do wyboru i przełączanie
+w locie; woda na tle HD wygląda słabo; wersja HD mapy jest „mniej ciepła, mniej nasycona" niż oryginał.
+
+| Co | Stan |
+|---|---|
+| **Tryb HD**: gra składa obraz w 2560×1440, mapa w powiększeniu 2,0 (`HDView=1`: start misji od razu w 2,0) — kadr jak 1280×720, ale interfejs/napisy/kursor ostre | wdrożone, sprawdzone w tle (start misji, zoom, przewijanie, 3 min testu ciągłego: 25,0 Hz, ~132 kl./s przy zajętym GPU) |
+| **Tła HD**: rozciąganie ×2 tła mapy podmieniane na obraz z `hd\maps\<wariant>\<hash>.hdmap` (poziom rozpoznawany po zawartości) | wdrożone; 20 map × 4 warianty (dat2, sgi, ultrasharp, aomr) |
+| **Warianty w locie**: F8 oryginał↔HD, F7/F6 następny/poprzedni; napis na ekranie; wybór zapisywany w INI | wdrożone, sprawdzone poleceniami testowymi (klawisze fizyczne — do potwierdzenia przez użytkownika) |
+| **Kolory map HD** | zmierzone: dat2 R−2,5 B+1,9 i nasycenie 60,1→57,7 %; aomr ciemniejszy i przesycony. Poprawka: niskie częstotliwości (σ=3 px) z oryginału → różnica średnich ≤0,2 poziomu. Wszystkie warianty przegenerowane |
+| **Woda**: animacje wody to duże sprite'y (np. staw 272×178, 8 klatek, mocno skompresowane), które co klatkę zamalowują tło | na tle HD pomijane (`HDWater=1`) — nieruchoma woda z obrazu HD (wybór użytkownika); rozpoznawane po podobieństwie do tła pod spodem (woda 8–14/255, reszta 45–82) |
+| **Pełna wysokość widoku** (`FullHeightView=1`): 42 łatki + przepuszczanie kliknięć między elementami HUD | sprawdzone: klik w dawnym pasie HUD dociera do świata (postać idzie w to miejsce) |
+| **Sprite'y HD** (`HDSprites=1`): postacie, dachy, drzewa, obiekty rysowane z klatek upscalowanych AI; rozpoznawanie klatki przez hak na dekoder banku; obsługa zasłaniania (maski) i cienia | wdrożone i sprawdzone w tle na Nottingham (dzień). Magazyny: 4 × 10 072 klatki bezstratne (dachy, obiekty — w stylu wariantu) + 394 614 klatek postaci i animacji (`_common`, model SGI, 4,1 GB); razem `hd\` = 11 GB. **Test końcowy z ustawieniami użytkownika i wolną kartą (4 min, ukryty): 25,0 Hz logiki (min 25,0), praca 7,0 ms/tik (najgorszy tik 20 ms), 143,8 kl./s (min 143,0), 576 tys. narysowanych klatek HD, 0 odrzuconych, 0 błędów.** Noc/mgła: barwienie klatek HD zaimplementowane wg kodu gry, NIE sprawdzone w grze (bezpiecznik: kontrola kolorów) |
+| Sprite'y bez wersji HD: powiększanie z filtrem zamiast klocków 2×2 (`SmoothSprites=1`); cienie przyciemniają każdy piksel tła HD osobno | wdrożone |
+| **Klatki pośrednie animacji** (eksperyment; opis i tabela w `docs\HD_MODE.md` §5a) | tania metoda (przepływ OpenCV): rozmyte klatki z „duchami". **Model neuronowy RIFE v4.26** (wagi pobrane za zgodą użytkownika, sieć napisana od nowa w `tools\hd\rife_net.py`): ostre, wiarygodne klatki także przy dużym ruchu; w teście z prawdziwą klatką najlepszy we wszystkich 8 animacjach (np. skok: 31,0 → 23,3 przy 29,4 dla przenikania; dolna granica 9,2). NIE wdrożone w grze — czeka na decyzję (615 tys. par, ~5–6 GB, 1–3 h generowania + praca w modzie) |
+| **Kursor Windows przypięty do środka ekranu podczas testów w tle** (zgłoszenie użytkownika) | przyczyna: `RHGame::Run` co obieg woła `SetCursorPos(środek okna)`; ukryta instancja testowa trafiała tym w pulpit. Tryb testowy odcina teraz SetCursorPos/ClipCursor/SendInput/SetForegroundWindow… dla całego procesu (pomiar: 25 połkniętych wywołań/s, kursor wolny) |
+| Start gry za innym oknem (29 s „zwiechy" 2026-11-14) | `BringToFrontAtStart` (4 metody + wysunięcie okna nad inne) — wdrożone; próba sprawdzenia nocą nieważna, bo komputer był ZABLOKOWANY (ekran blokady odrzuca każdą zmianę pierwszego planu). NIE sprawdzone w zwykłym starcie |
+| Klawisze F6/F7/F8 fizycznie, zwykłe uruchomienie na ekranie | NIE sprawdzone (ekran blokady) — do potwierdzenia przez użytkownika; przełączanie sprawdzone poleceniami testowymi, napis na ekranie widoczny na zrzucie |
+
+Jeszcze nie w HD (kolejność prac): 1) sprite'y na poziomach nocnych i we mgle (barwienie klatek HD tak jak robi to gra);
+2) animacja wody w HD (teraz woda stoi); 3) interfejs/menu ×2 (HUD w 1440p jest mały); 4) sprawdzenie pozostałych 8 lokacji
+(tła są rozpoznawane po zawartości — w logu ma być `HD: upscaled background ... in use`, a nie `no picture for this level`);
+5) klatki pośrednie animacji modelem neuronowym, jeśli tania metoda nie wystarczy.
+
+## 1. Co naprawdę jest nie tak (ustalone z logu i dezasemblacji)
+
+| Objaw | Przyczyna | Status |
+|---|---|---|
+| Lagi w walce i przy przewijaniu kamery (tick 110–166 ms zamiast ~20 ms) | Wrapper DirectDraw GOG-a: `Blt` do 94 ms na tick, `Flip` 9–12 ms zawsze (patrz sekcja 0). | Własny DirectDraw w pamięci + D3D11 wdrożony (`Renderer=1`), **czeka na test w grze** |
+| Biały, zawieszony kursor Windows w menu | Gra działa w oknie, a chowa kursor (`ShowCursor(0)`) tylko w pętli rozgrywki; mysz trzyma DirectInput. | Poprawka wdrożona (okno nigdy nie ustawia kursora), czeka na potwierdzenie |
+| Mysz 1000 Hz+ | Pętla główna robi jeden przebieg na raport myszy, ale przebieg jest tani (0,01 ms). | Scalanie do 125 Hz zostaje jako zabezpieczenie; bez mierzalnego wpływu na wydajność |
+| „Animacje klatkują" | Silnik ma jedną pętlę 25 Hz na logikę i obraz. Animacje mają najwyżej 25 klatek/s z założenia. Rozdzielczość tego nie zmienia. | Wymaga interpolacji klatek (etap 3) |
+| „Topornie", kursor się ciągnie | Kursor jest rysowany tylko przez wątek główny, czyli 25 razy na sekundę, i staje razem z grą przy każdym przycięciu. | Etap 2 (kursor rysowany przez nasz renderer z częstotliwością monitora) |
+| Wyższa rozdzielczość „niewiele dała" | 2560×1440 to 4,7× więcej pikseli do narysowania programowo niż maksymalne 1024×768 gry, a postacie robią się malutkie. Obraz nie jest ostrzejszy, bo grafiki mają rozdzielczość z 2002 r. | Etap 2 (osobna rozdzielczość wewnętrzna i wyjściowa) |
+| Poprawki audio Argona | `Fmod.dll` jest spakowany UPX-em; hooki zakładane przy starcie były kasowane przez rozpakowanie i psuły FMOD przy wyjściu. | Naprawione (LateInit), potwierdzone w logu |
+| Mod zmieniał systemową akcelerację myszy | `RawMouseInput` wyłączał ją dla całego pulpitu; po crashu zostawała wyłączona. Gra i tak czyta mysz przez DirectInput. | Usunięte |
+| Telemetria „Locks/f=0" | Licznik był zerowany tuż przed odczytem. | Zastąpione nową diagnostyką |
+
+Nie wiadomo jeszcze: ile czasu ticka zjada wrapper DirectDraw GOG-a (`Lock`/`Blt`), ile dźwięk, a ile kod gry.
+Zmierzy to nowa diagnostyka przy pierwszym teście (linie `Perf(5s)`, `Spike`, `Prof.*` w `SherwoodFix.log`).
+
+## 2. Odpowiedzi na pomysły
+
+- **DLSS** — nie da się. DLSS potrzebuje z silnika 3D głębi i wektorów ruchu; ta gra to płaski obraz 2D.
+  Odpowiedniki, które mają sens: skalowanie przestrzenne shaderem (FSR 1 / NIS / CAS) oraz interpolacja klatek.
+- **Upscaling plików gry (Real-ESRGAN itp.)** — poprawi ostrość, **nie poprawi płynności**. Do tego silnik rysuje
+  sprite'y 1:1 w pikselach świata, więc podmiana plików na 2× większe nie zadziała bez przejęcia rysowania.
+  Realna droga to „paczka HD jak w emulatorach": zrzut grafik z pamięci gry → AI upscaling offline → nasz renderer
+  rysuje wersje HD na GPU. Duża praca, dopiero po etapach 1–3 (etap 5).
+- **Płynniejsze animacje** — dorobienie klatek pośrednich w plikach wymagałoby przestawienia całej logiki gry z 25 na
+  50 Hz (prędkości, liczniki, AI liczone w tickach), co jest nierealne łatkami. Wykonalne: interpolacja gotowych
+  klatek obrazu po stronie GPU (jak w telewizorach / Lossless Scaling), z kursorem i przewijaniem kamery liczonymi
+  dokładnie, bez opóźnienia.
+
+## 3. Etapy
+
+### Etap 0 — zrobione 2026-11-13
+- `tools\rh.py`, kopie skryptów Argona w `tools\argon_scratch\`, kopie zapasowe w `backups\`.
+- `src\input_fix.cpp`: scalanie raportów myszy do 125 Hz (przyciski i kółko bez opóźnień).
+- `src\diag.cpp`: rozbicie czasu ticka (zdarzenia wejścia, Lock/Unlock/Blt/Flip, dźwięk) + profiler próbkujący 1 kHz.
+- `src\audio_fix.cpp` + LateInit: działające hooki FMOD (na razie tylko pomiar i log).
+- Test startu: gra wstaje do menu, wszystkie łatki założone, zero błędów w logu.
+
+### Etap 1 — grywalność (najpierw to)
+1. **Test w grze** (patrz sekcja 5) i odczyt logu: czy tick w walce wrócił do ~20 ms.
+2. Analiza `Prof.*`: lista 5 najgorętszych miejsc, każde z nazwą funkcji i decyzją (łatka / pominąć).
+3. **Własny DirectDraw w pamięci** (`src\ddm\`) — ZROBIONE 2026-11-13: powierzchnie jako zwykłe bufory RAM,
+   `Lock` za darmo, `Blt` programowo w SSE2, prezentacja przez Direct3D 11 (flip-model, sharp-bilinear),
+   okno bez ramek. Wrapper GOG-a zostaje załadowany, ale nie jest wołany. Specyfikacja użycia: DDRAW_USAGE.md.
+   Do potwierdzenia testem w rozgrywce (linie `Perf(5s)` i `Blit(5s)` w logu).
+4. Przegląd „optymalizacji" Argona pomiarem A/B: hook `memcpy`, przypinanie wątków do rdzeni, `SmoothCameraScroll`.
+   Co nie daje mierzalnego zysku albo psuje stabilność — domyślnie wyłączone.
+
+Gotowe, gdy: praca ticka < 15 ms w walce, zero linii `Spike` poza wczytywaniem, 30 min gry bez crasha.
+
+### Etap 2 — własny renderer wyjściowy (Direct3D 11, flip-model)
+1. Prezentacja bufora gry przez D3D11 (`FLIP_DISCARD`, tearing/VRR), okno bez ramek.
+2. **Rozdzielczość wewnętrzna ≠ wyjściowa**: np. gra rysuje 1280×720, GPU skaluje ×2 do 2560×1440.
+   Postacie mają rozsądną wielkość, a procesor rysuje 4× mniej pikseli.
+3. Shadery: `UpscalerMode` 0 = najbliższy sąsiad, 1 = sharp-bilinear, 2 = FSR 1 (EASU + RCAS), plus wygładzanie
+   pasm 16-bit (deband). Ustawienia w `SherwoodFix.ini`.
+4. **Kursor rysowany przez renderer** z częstotliwością monitora (144 Hz), niezależnie od ticków gry.
+5. Równe tempo klatek: każda klatka gry pokazywana dokładnie co 40 ms.
+
+Gotowe, gdy: kursor płynny przy 144 Hz, obraz ostry przy skalowaniu ×2, przełączanie Alt+Tab bez błędów.
+
+### Etap 3 — płynność ruchu
+1. Przewijanie kamery i kursor z częstotliwością bliską monitorowi — ZROBIONE 2026-11-13 klatkami pośrednimi
+   (`RHGame::RenderFrame` między tickami; rysowanie klatki kosztuje ~2 ms, więc nie trzeba sztuczek po stronie GPU).
+   Zostaje: równe odstępy klatek względem odświeżania (VRR / `AllowTearing`), ocena wizualna użytkownika.
+2. Interpolacja klatek świata 25 → 50/75 Hz (przepływ optyczny w compute shaderze), HUD i kursor poza interpolacją
+   (świat przechwytywany przed `HudDraw 0x0055EE00`).
+3. Szybki sprawdzian przed pisaniem punktu 2: Lossless Scaling (niedrogi, płatny program na Steamie) robi to samo
+   dla dowolnej gry w oknie. Pozwala tanio ocenić, czy interpolowane 50–75 kl./s w tej grze Ci się podoba.
+
+Gotowe, gdy: scroll bez szarpania, ruch postaci wizualnie płynny, brak smużenia interfejsu.
+
+### Etap 4 — błędy
+Potrzebna lista od Ciebie: co, gdzie, po jakiej akcji. Każdy błąd: kroki odtworzenia → log (handler crashy już
+zapisuje moduł+adres i stos) → poprawka → test. Znane podejrzane miejsca: hack sub-klatek kamery, małe mapy
+w wysokiej rozdzielczości (kryjówka), zoom.
+
+Otwarte po teście nr 5 — **czarny pas z prawej i u dołu przy 2560×1440** (decyzja użytkownika, trzy drogi):
+1. Zostać przy 2560×1440 i wyśrodkować mapę węższą od ekranu (pasy po obu stronach). Wymaga ujemnej pozycji kamery:
+   zmiana `EnforceSafeCameraBounds`, przycięcie `ScreenToWorld 0x004DEE70` do granic mapy, przegląd ~31 funkcji
+   czytających kamerę (ryzyko indeksowania poza zakresem — Argon miał tu crashe). Nieprzetestowane, nie wdrożone.
+2. Wypełnić dolny pas HUD mapą (widok o pełnej wysokości): 23 odwołania do stałej 80.0 + osobne miejsca z `(0,-80)`.
+3. Rozdzielczość wewnętrzna 1280×720 skalowana ×2 (sama zmiana w INI): znikają oba pasy na każdej mapie, wszystko
+   jest 2× większe (jak w oryginale), menu czytelne, koszt klatki 4× mniejszy.
+Zmierzone 2026-11-14 z nagłówków plików map (rozmiary w RE_NOTES, „Dane gry"): przy 2560×1440 czarne pasy ma **6 z 9
+map** (Croisement 1408 px szerokości — prawie połowa ekranu czarna), przy 1280×720 żadna. To przesądza na korzyść
+drogi 3; droga 1 (wyśrodkowanie) zostawia ogromne pasy. Przerwa w dolnym pasku HUD zostaje przy każdej szerokości
+powyżej 800 px, więc droga 2 jest potrzebna niezależnie. 1280×720 nie było jeszcze ani razu uruchomione — do sprawdzenia:
+menu przy wysokości 720, czułość kursora (1 impuls myszy = 1 piksel wewnętrzny, czyli 2× szybciej na ekranie).
+DLSS odpada (wymaga głębi, wektorów ruchu i jittera z renderera 3D; gra oddaje gotowy obraz 2D). Realna droga do
+jakości: tła map to strumienie bzip2 z 12-bajtowym nagłówkiem → jednorazowy upscaling AI teł i rysowanie ich w 2560×1440
+pod sprite'ami (Etap 5); ewentualnie eksperyment z RTX Video Super Resolution (SDK NVIDII, pod skompresowane wideo).
+**2026-11-14 02:16 — przełączono na 1280×720 ×2 na życzenie użytkownika (próba).** `SherwoodFix.ini`: `Width=1280`,
+`Height=720`; poprzedni plik w `backups\SherwoodFix_2026-11-14_2560x1440.ini`. Nowy klucz `[Input] MouseSensitivity=0`
+(`src\input_fix.cpp`: impulsy myszy × szer. wewnętrzna / szer. okna, z przenoszeniem ułamka) — bez tego kursor byłby 2×
+szybszy. Wgrana wersja 176 128 B. **Stan: NIEPRZETESTOWANE** — użytkownik był przy komputerze, więc nie uruchamiałem gry;
+do potwierdzenia przez niego: menu przy wysokości 720, prędkość kursora, brak pasów, płynność.
+Do sprawdzenia przy okazji: czy miganie ikon akcji ma teraz właściwe tempo; pozostałe liczniki „na klatkę"
+(metoda: zrzut pamięci przed i po klatce pośredniej albo pułapka sprzętowa na zapis).
+
+### Etap 5 — paczka HD (w toku od 2026-11-14; opis: `docs\HD_MODE.md`)
+1. ✔ Tła map: wyciągnięte z plików `.map`, 4 warianty AI, podmiana w locie, przełączanie klawiszem, korekta kolorów.
+2. ✔ Woda (pomijana na tle HD), cienie, wygładzanie sprite'ów jako rozwiązanie przejściowe.
+3. ✔ Sprite'y HD: hak na dekoder klatek banku (`0x00504CD0`: klatka → powierzchnia), magazyny `hd\sprites\<wariant>\`
+   (klatki bezstratne: dachy, drzewa, obiekty — modelem wariantu) i `hd\sprites\_common\` (postacie i animacje — SGI),
+   podmiana w rozciąganiu z kluczem (DirectDraw) i w procedurach gry `0x0062261C/0x006220EC`, maski zasłaniania, cień.
+   ☐ poziomy nocne/mgła.
+   ✔ 2026-11-14 (zgłoszenie użytkownika: „ikonka nad głową Robina jest pixeloza"): **ikony i znaczniki w HD** — klatki
+   tworzone przez grę w locie rozpoznawane po treści, magazyn `hd\sprites\_icons\` (381 ikon, UltraSharp), pierścień
+   zaznaczenia przez hak na `0x005E8B10`; brakujące ikony z innych misji mod sam zbiera do `hd\work\runtime_frames\`
+   (dorabia je `tools\hd\upscale_icons.py --model ultrasharp`). Polecenie testowe `miss` = raport tego, co jeszcze
+   idzie bez HD (Nottingham: pusto). Opis: `docs\HD_MODE.md` §5 „Ikony i znaczniki".
+4. ✔ Interfejs i menu (zgłoszenia użytkownika 2026-11-14 po pierwszej sesji, opis techniczny: `docs\HD_MODE.md` §7):
+   - **Crash „Opcje → Grafika"** (zgłoszone jako „zacięcie"): hak testu trafienia HUD czytał wiszący wskaźnik RHGame po
+     wyjściu z misji → sprawdzanie pamięci (`VirtualQuery`) i vtable. Sprawdzone w tle: okno grafiki otwiera się.
+   - **Migający kursor** (prawy górny róg, akcje z lewej): klatki między tikami ustawiały kształt kursora świata →
+     `SetCursor` (0x005F14C0) pomijany w klatkach dodatkowych, liczniki pulsowania zapisywane/przywracane.
+   - **Przyciski zoomu** (prawy górny róg): `CanZoomOut` (0x004C7CF0) nie pozwalał oddalić z 2,0 przy mapie węższej od
+     widoku, a mod wymuszał 2,0 → teraz oddalenie do 1,0 i z powrotem; wymuszanie tylko 3 s po starcie poziomu.
+   - **Interfejs ×2** (`UIScale=2`): wszystkie okna misji, minimapa (×2, w prawym górnym rogu, `MapPosition=1`),
+     ramka widoku na mapie, półprzezroczyste elementy, napis z pieniędzmi, zegar misji, dymki, kursor ×2.
+   - **Menu i okna gry na cały ekran** (`MenuZoom=1`): menu główne, odprawa, menu Esc, wczytywanie, opcje.
+   - **Panel ustawień moda w grze** (F10, `SettingsKey=121`): 15 opcji, zmiana od razu, zapis do INI.
+   Sprawdzone w tle (zrzuty, kliknięcia, soak). ☐ Kilka portretów naraz (misje z drużyną) — grupowanie okon tej samej
+   klasy jest zrobione, ale nieoglądane; ☐ ocena użytkownika na prawdziwym ekranie.
+   - Zgłoszenia po pierwszej sesji z interfejsem ×2 (2026-11-14 ~17:10) i poprawki tego samego wieczoru: przewijanie
+     przy górnej krawędzi, przeciąganie okna minimapy (szarpało w miejscu), zamykanie mapy klikiem w zwinięty koniec
+     zwoju, ramka zaznaczenia wlecze się za kursorem (25 Hz) → dociągana w klatkach pośrednich, podpowiedź F10 w menu
+     (użytkownik szukał ustawień moda w opcjach grafiki gry). Przy okazji znaleziony błąd przybliżenia menu: po
+     dojechaniu kursorem do krawędzi kliknięcia w menu nie trafiały (rozjazd wskaźnika okna i kursora) — poprawiony.
+   - ✔ **Tła menu w HD** (prośba „menu też upscalować", zgoda 2026-11-14): 5 teł menu zebranych w locie, 4 warianty AI,
+     podmiana w prezenterze tam, gdzie piksel klatki jest oryginalnym pikselem tła (`docs\HD_MODE.md` §7).
+     ☐ Przyciski menu (168×39, `BlendBlit`) i pergamin odprawy nadal w oryginale (powiększone filtrem).
+   - Zgłoszenia z sesji 2026-11-14 ~18:30 i poprawki tej nocy: tło menu Esc/odprawy w misji ostre (bez powiększania
+     tła), Robin na portrecie przy swoim marginesie, szwy przy ikonach akcji, wnętrza budynków (porównanie z obrazem
+     poziomu — ☐ niesprawdzone w budynku), ✔ **minimapa**: przeciąganie po obrazku przesuwa kamerę, okno za brzegi
+     lewym lub prawym, płynnie w każdej klatce (`MapDragCamera=1`, panel F10), ✔ odprawa z kilkoma stronami (pergamin
+     zostawał mały od 2. strony), ✔ **opcje gry: prawdziwy procesor i pamięć** (pełna nazwa procesora
+     i pamięć ponad 4 GB zamiast „GenuineIntel” i „4095 Mb”).
+   - ☐ **Zoom** (zgłoszenie 2026-11-14 ~18:30): czarny pas przy oddaleniu 1,0 na poziomach węższych niż 2560 px
+     (skutek dopuszczenia oddalenia 2,0 → 1,0 na każdym poziomie), brak przybliżenia ponad 2,0, tylko dwa kroki.
+     Silnik rysuje postacie tylko przy 0,5 / 1 / 2 (osobne gałęzie, `docs\OBJECT_RENDER.md`), więc płynny zoom = lupa
+     w prezenterze: zdjęcie świata przed rysowaniem okien (piksele różne od zdjęcia = interfejs, zostaje 1×), świat
+     powiększany w shaderze, myszka dla świata przeliczana (`ScreenToWorld` 0x004DEE70 i inne miejsca wyboru obiektów —
+     do sprawdzenia), kadr przesuwany proporcjonalnie do położenia kamery (brzegi mapy osiągalne), poziom silnika
+     1,0 poniżej 2,0 i 2,0 (HD) od 2,0 w górę. Dopasowanie „bez pasa” = lupa ×(2560/szerokość mapy) przy 1,0.
+5. ◐ Klatki pośrednie animacji postaci (prośba użytkownika; „jak się nie uda, trudno"): eksperyment zakończony
+   powodzeniem — RIFE v4.26 daje dobre klatki (`docs\HD_MODE.md` §5a). ☐ Wdrożenie w grze jako przełącznik
+   (generowanie par + podmiana w klatkach między tikami) — po decyzji użytkownika. 2026-11-14 użytkownik zapytał, czy
+   „będzie gorzej przez ghosty i blury w ruchu" → zaproponowana MAŁA PRÓBA zamiast całości: tylko animacje Robina,
+   włączane klawiszem (ocena w ruchu w grze; klatki RIFE są gładsze od oryginalnych, pary koniec→początek trzeba odsiać).
+   ◐ **Próba wdrożona 2026-11-14** („już nie gram, możesz robić co tam chcesz"): `HDInBetween=1`, klawisz F9, dane dla
+   Robina (`RobinTown.rhs` + `RobinHood.rhs`) w `hd\sprites\_between\`; opis i pomiary: `docs\HD_MODE.md` §5b. Sprawdzone
+   w tle (pozycje co do piksela, zasłanianie, 25 Hz / 7 ms / 144 kl./s).
+   ✔ **Wszystkie postacie** (decyzja użytkownika 2026-11-14: „Tak, wszystkie postacie"): 117 plików `Characters\*.rhs`,
+   457 198 par, 314 756 użytecznych, 2,98 GB w `hd\sprites\_between\`; generator przeniesiony na kartę (7× szybciej),
+   nowa miara „cienkie elementy" (znikające miecze/włócznie odrzucane), sylwetki z samego cienia. Opis: `docs\HD_MODE.md`
+   §5c. ☐ Ocena użytkownika na prawdziwym ekranie (F9 = porównanie), inne poziomy, noc/mgła.
+
+**Pierwsza prawdziwa sesja użytkownika w trybie HD** (2026-11-14 od 11:54, Nottingham dzień; z `SherwoodFix.log`, bez
+mojego udziału): 25,0 Hz, 143,9 kl./s, 7,0 ms pracy na tik (max 7–27 ms w zwykłej grze), 0 ostrzeżeń i błędów, tła `dat2`
+i oba magazyny sprite'ów wczytane, woda pomijana. Przerwy 1,2–3,8 s: po starcie poziomu (11:55:04), przy ponownym
+wczytaniu (11:56:21, 11:56:26) i jedna bez przypisanej przyczyny (11:56:52–57; w tle kończył się wtedy eksport PNG na
+jednym rdzeniu — przez wcześniejsze 45 s eksportu gra szła równo). Do obserwacji. Klawisze F6/F7/F8 nadal
+niepotwierdzone (w logu brak „background variant switched").
+
+## 4. Podział pracy (oszczędzanie tokenów: najwyżej 1–2 agentów naraz)
+
+| Kto | Co |
+|---|---|
+| Fable (główna sesja) | dezasemblacja, hooki silnika, rdzeń DirectDraw w pamięci, architektura renderera, interpolacja |
+| Opus, średni effort | porty shaderów HLSL (FSR 1, deband), testy pikselowe blitterów, przeglądy kodu |
+| Sonnet, niski effort | szablony COM (vtable IDirectDraw7/Surface7), obsługa INI, dokumentacja, rozeznanie w sieci, streszczanie logów |
+
+## 5. Test, którego teraz potrzebuję (5 minut)
+1. Uruchom grę normalnie (GOG / skrót).
+2. Wczytaj zapis z przeciwnikami. Walcz 1–2 minuty, machając myszą tak jak zwykle.
+3. Przewiń kamerę w 4 strony, użyj zoomu, wyjdź z gry przez menu.
+4. Napisz, jak było w odczuciu. Log `SherwoodFix.log` przeczytam sam.
+
+Porównanie „przed": ustaw w `SherwoodFix.ini` `MouseReportRateHz=0` i powtórz tę samą walkę.
+Powrót do wersji Argona: skopiuj `backups\winmm_argon_2026-11-13.dll` jako `winmm.dll`.

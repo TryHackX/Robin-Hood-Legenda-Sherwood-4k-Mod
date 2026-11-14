@@ -1,0 +1,24 @@
+# The repository lives in the game folder, so everything is ignored except the mod's own files.
+# NOT published: the game itself, graphics made from the game's art (hd\), AI model weights,
+# logs, backups, build output, screenshots.
+/*
+!/.gitignore
+!/README.md
+!/src/
+!/docs/
+!/tools/
+!/hd/
+!/release/
+
+/hd/*
+!/hd/CZYTAJ.txt
+
+/src/build/
+/tools/out/
+/tools/argon_scratch/
+/tools/testcfg/user_*.ini
+/release/*.zip
+/release/package/
+__pycache__/
+*.pyc
+*.log

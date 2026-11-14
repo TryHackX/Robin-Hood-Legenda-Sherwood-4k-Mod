@@ -47,17 +47,53 @@ original DirectDraw wrapper, plus optional HD graphics prepared with AI models f
   not supported — the patches are then not applied, and the log says so).
 - Windows 10 or 11, a graphics card with Direct3D 11.
 
-## Installation
+## Installation — the complete HD version, step by step
 
-1. Download the archive from **Releases**.
-2. Copy `winmm.dll` and `SherwoodFix.ini` into the game folder (where `Game.exe` is).
-3. Start the game as usual (GOG Galaxy or the shortcut).
+You need two releases from the **Releases** page (right side of the repository page):
+[**SherwoodEngineFix 1.1.0**](https://github.com/TryHackX/Robin-Hood-Legenda-Sherwood-4k-Mod/releases/tag/v1.1.0)
+(the mod itself, 0.2 MB) and
+[**HD graphics pack 1**](https://github.com/TryHackX/Robin-Hood-Legenda-Sherwood-4k-Mod/releases/tag/hd-pack-1)
+(the HD pictures, 7 archives). Download the files listed under **Assets** — not "Source code (zip)" / "Source code
+(tar.gz)": GitHub adds those two to every release by itself, they hold only the source code (~0.4 MB) and are not
+needed to play.
 
-Uninstall: delete `winmm.dll` (and optionally `SherwoodFix.ini`, `SherwoodFix.log`).
+**Step 1 — find the game folder.** The folder with `Game.exe`, by default
+`C:\Program Files (x86)\GOG Galaxy\Games\Robin Hood - The Legend of Sherwood`
+(in GOG Galaxy: the game → ⚙ → Manage installation → Show folder).
 
-By default the game renders at 2560×1440 (HD mode). On a 1080p monitor set `Width=1920`, `Height=1080` in
-`SherwoodFix.ini` (or `0` and `0` = the monitor's resolution). Every option is described in the INI file itself
-(comments in Polish); the most important ones can be changed in the F10 panel.
+**Step 2 — the mod.** From `SherwoodEngineFix-v1.1.0.zip` copy `winmm.dll` and `SherwoodFix.ini` into the game
+folder (next to `Game.exe`).
+
+**Step 3 — the HD pictures.** Download these archives from *HD graphics pack 1*:
+
+| Archive | Download | Unpacked | Contents | |
+|---|---|---|---|---|
+| `SherwoodHD-1-postacie-a.zip` | 1.1 GB | 2.0 GB | characters and all their animations (part 1), icons | **required** |
+| `SherwoodHD-1-postacie-b.zip` | 1.1 GB | 2.0 GB | characters and all their animations (part 2) | **required** |
+| `SherwoodHD-2-tla-dat2.zip` | 0.7 GB | 1.1 GB | all 20 map backgrounds, roofs, trees, objects, menu backgrounds (default variant `dat2`) | **required** |
+| `SherwoodHD-3-klatki-posrednie.zip` | 1.6 GB | 3.0 GB | in-between frames: character animations 2× smoother (F9) | recommended |
+| `SherwoodHD-wariant-aomr.zip` | 0.7 GB | 1.1 GB | another look of the backgrounds (F6 / F7) | optional |
+| `SherwoodHD-wariant-sgi.zip` | 0.7 GB | 1.4 GB | another look of the backgrounds (F6 / F7) | optional |
+| `SherwoodHD-wariant-ultrasharp.zip` | 0.7 GB | 1.1 GB | another look of the backgrounds (F6 / F7) | optional |
+
+Required only: 2.9 GB to download, 5.1 GB on disk. Everything: 6.4 GB to download, 11.6 GB on disk.
+
+Unpack **each** archive **into the game folder** — in Windows: right-click the archive → *Extract All…* → choose the
+game folder → *Extract* (7-Zip / WinRAR work too). The archives contain the `hd` folder, so afterwards the game folder
+holds `hd\maps\…`, `hd\sprites\…` and `hd\menu\…`. Check: `hd\sprites\_common\` must contain `sprites.idx`,
+`sprites.dat` **and** `sprites.dat.2` (from the two character archives). If Windows asks to replace files, answer yes.
+The downloaded `.zip` files can be deleted afterwards.
+
+**Step 4 — play.** Start the game as usual (GOG Galaxy or the shortcut). At the start of a mission the name of the HD
+variant appears at the top of the screen for 3 s. F8 compares with the original graphics, F10 opens the mod's
+settings.
+
+**Monitor resolution.** By default the game renders at 2560×1440 (HD mode). On a 1080p monitor set `Width=1920`,
+`Height=1080` in `SherwoodFix.ini` (or `0` and `0` = the monitor's resolution); on a 4K monitor 2560×1440 is
+recommended (sharp HD pictures, scaled up). Every option is described in the INI file itself (comments in Polish);
+the most important ones can be changed in the F10 panel.
+
+**Uninstall:** delete `winmm.dll` and the `hd` folder (and optionally `SherwoodFix.ini`, `SherwoodFix.log`).
 
 ## Mod keys
 
@@ -68,20 +104,10 @@ By default the game renders at 2560×1440 (HD mode). On a 1080p monitor set `Wid
 | F7 / F6 | next / previous HD graphics variant |
 | F9 | in-between frames of character animations (when generated) |
 
-## HD graphics
+## HD graphics — how they were made
 
-The HD pictures are ready to download — no AI work on your PC needed. Get the archives from the **HD graphics pack**
-release and unpack each of them **into the game folder** (they contain the `hd\` folder; keep the paths):
-
-| Archive | Contents | |
-|---|---|---|
-| `SherwoodHD-1-postacie-a.zip` + `SherwoodHD-1-postacie-b.zip` | characters and all their animations, icons | both needed |
-| `SherwoodHD-2-tla-dat2.zip` | map backgrounds, roofs, trees, objects, menu backgrounds — variant `dat2` (the default) | needed |
-| `SherwoodHD-3-klatki-posrednie.zip` | in-between frames of character animations (F9) | optional |
-| `SherwoodHD-wariant-aomr.zip`, `-sgi.zip`, `-ultrasharp.zip` | the other background variants (F6 / F7) | optional |
-
-The packs need mod version 1.1.0 or newer (the characters' store comes in two parts). Without HD pictures the mod
-works normally (original graphics, sharply enlarged).
+The HD packs (installation above) need mod version 1.1.0 or newer (the characters' store comes in two parts). Without
+HD pictures the mod works normally (original graphics, sharply enlarged).
 
 The pictures were made from the original game files with the tools in `tools\hd\` (Python 3 + PyTorch), which can
 also rebuild them from your own copy of the game:
@@ -101,8 +127,6 @@ the `ultrasharp` variant and the icons are for non-commercial use), RIFE by hzwe
 
 - The engine itself has only three zoom levels (0.5 / 1 / 2); the smooth zoom magnifies its 1.0 or 2.0 picture. Below
   2.0 the original pixels are shown (HD pictures need 2.0), above 2.0 the HD picture is magnified further.
-- With the smooth zoom between the engine's levels, the backdrop of the Esc menu and the briefing shows the world at
-  the engine's zoom. The mouse wheel zooms about the screen centre (not the cursor).
 - Night levels and fog have not been checked with HD graphics yet.
 
 ## Building from source

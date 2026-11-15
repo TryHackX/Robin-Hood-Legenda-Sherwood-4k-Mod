@@ -22,7 +22,8 @@ struct SherwoodConfig {
     int hdKeyPrev = 0x75;        // previous HD variant (F6)
     bool hdView = true;          // internal width >= 2048: start levels at the 2.0 zoom (framing of 1280x720)
     bool smoothSprites = true;   // 2.0 zoom: magnify sprites with filtering instead of 2x2 blocks
-    int hdWater = 1;             // on HD backgrounds: 1 = still water from the HD picture, 0 = the game's low-res water animation
+    int hdWater = 1;             // on HD backgrounds: 1 = still water from the HD picture, 2 = HD water with the game's
+                                 // shimmer, 0 = the game's low-res ground animations as they are (smoke: 1 and 2 = over the HD picture)
     bool hdSprites = true;       // 2.0 zoom: draw upscaled sprite frames from hd\sprites\<variant>\ where they exist
     bool hdInBetween = false;    // experimental: generated in-between frames of sprite animations (hd\sprites\_between)
     int uiScale = 0;             // internal width >= 2048: 2 = the game's windows (HUD, map, dialogs) drawn x2 from their screen corners

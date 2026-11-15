@@ -239,8 +239,16 @@ Do sprawdzenia przy okazji: czy miganie ikon akcji ma teraz właściwe tempo; po
    - ✔ **Płynny zoom — lupa** (zgłoszenie 2026-11-14 ~18:30: czarny pas przy oddaleniu, brak przybliżenia ponad
      2,0, tylko dwa kroki; „Tak, rób zoom”): `SmoothZoom=1`, kroki 115 %, od „poziom wypełnia ekran” do 4,0; świat
      powiększany w prezenterze, interfejs 1×, myszka przeliczana, brzegi poziomu osiągalne, minimapa pokazuje
-     fragment. Opis: `docs\HD_MODE.md` §7 „Płynny zoom”. ☐ zoom kółkiem względem kursora, ☐ tło menu Esc przy
+     fragment. Opis: `docs\HD_MODE.md` §7 „Płynny zoom”. ✔ zoom kółkiem względem kursora, ✔ tło menu Esc przy
      powiększeniu lupy.
+   - ✔ **v1.1.1 — zgłoszenie 2026-11-15** (5 zdjęć): obiekty „rozjeżdżały się” z tłem przy zoomie kółkiem (silnik
+     w spoczynku nie przesuwał tła za kamerą kotwicy → stan przewijania), „kropkowane” tło pod napisami dymków (procedura
+     MMX 0x00622FD4 mieszała raz na blok 2×2 → per piksel), zoom ze scenek dawał „natywną rozdzielczość” (lupa przejmuje
+     zoom gry), brak dymu z kominów (uznany za wodę → nakładka na obraz HD z płynnym przenikaniem klatek), spadki FPS
+     (HUD ×2 filtrowany co klatkę → pamięć podręczna; klatka ~10 → ~4,5 ms), wywrotka przy wyjściu z misji (nieaktualny
+     RHGame*). Woda: nowa opcja `HDWater=2` (obraz HD + migotanie z gry), domyślnie zostaje nieruchoma (wybór
+     użytkownika). Opis: `docs\HD_MODE.md` §4 i §7. ☐ Woda `HDWater=2` w grze (test w tle ma tylko Lincoln), ☐ remake
+     animacji wody/dymu „dla realizmu” (prośba użytkownika — do ustalenia), ☐ czcionka HD zamiast ×2.
    - ✔ **Wydanie na GitHubie** (2026-11-14): v1.0.0 (README po angielsku), paczki grafiki HD jako osobne wydanie
      (7 plików ZIP < 2 GB; magazyn postaci w dwóch częściach — mod czyta `sprites.dat` + `sprites.dat.2`).
 5. ◐ Klatki pośrednie animacji postaci (prośba użytkownika; „jak się nie uda, trudno"): eksperyment zakończony

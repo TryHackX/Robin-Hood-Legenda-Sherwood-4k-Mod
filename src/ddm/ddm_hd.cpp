@@ -11,6 +11,7 @@
 #include "ddm.h"
 
 #include <MinHook.h>
+#include <emmintrin.h>
 #include <intrin.h>
 #include <algorithm>
 #include <atomic>
@@ -18,6 +19,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <deque>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -36,6 +38,20 @@ namespace {
     // Measured on Nottingham (day): the ten water animations 8.0 .. 13.7, every other large
     // sprite (trees, buildings, carts, mill) 45 .. 82.
     constexpr double kGroundRepaintMaxDiff = 25.0;
+    // Water is irregular (the water animations measured: 39 .. 67 % of the rectangle opaque).
+    // A repaint that covers (nearly) its whole rectangle is an overlay instead: the smoke above
+    // the chimneys of Lincoln's houses is a full rectangle (98 .. 100 %) that repaints rock and
+    // roof with thin smoke - as close to the ground as water (12.8 .. 18.2 in its first frames).
+    // It was left out as water (user report 2026-11-15: no smoke in HD).
+    constexpr double kGroundOverlayMinCoverage = 90.0;
+    // An overlay is blended over the HD picture only where it differs from the level picture
+    // beneath (the frame's own copy of the ground is low-resolution and block-compressed: drawn
+    // as it is, it showed as a blurry patch around the smoke). How much of the (3x3 smoothed)
+    // frame covers the HD picture follows the size of that difference (0..255, the largest
+    // channel): nothing up to the first value - compression noise (median 9.5) - all of it from
+    // the second; the smoke itself is 30 .. 75 (90th .. 99th percentile). (Adding the difference
+    // to the HD picture instead kept the rock's detail under the smoke: it looked too thin.)
+    constexpr int kOverlayFadeFrom = 8, kOverlayFadeTo = 36;
 
     enum class Load { Missing, Mapped, Unloaded };
 
@@ -94,10 +110,26 @@ namespace {
     bool g_originValid = false;
 
     // Sprites of this level that were compared with the level picture beneath them (see
-    // HideGroundAnimation).
+    // DrawGroundAnimation).
+    struct GroundMean {                 // water with HDWater=2: the mean of the frames seen here
+        std::vector<int32_t>  sum;      // R5, G6, B5 per pixel, summed over seen.size() frames
+        std::vector<uint64_t> seen;     // hashes of the frames in the sum
+    };
+    struct GroundFrames {               // the last two frames, 2x magnified, for a cross-fade
+        int W = 0, H = 0;                       // size of the magnified frame
+        std::vector<int16_t> cur, prev;         // 4 planes of W x H values (see Magnify2x)
+        std::vector<int16_t> curSpan, prevSpan; // per HD row: first and end column with something to do
+        uint64_t curHash = 0;
+        LONGLONG tCur = 0;              // QueryPerformanceCounter when `cur` appeared
+        double   intervalMs = 0.0;      // how long a frame stays (mean of the last changes)
+        bool     hasPrev = false;
+    };
     struct GroundAnim {
-        int  mx, my, w, h;   // position in level pixels, frame size
-        bool repaint;        // looks like the ground it is drawn on: water
+        int  mx = 0, my = 0, w = 0, h = 0;  // position in level pixels, frame size
+        bool repaint = false;               // looks like the ground it is drawn on
+        bool overlay = false;               // ... and covers its whole rectangle: smoke
+        std::shared_ptr<GroundMean> mean;
+        std::shared_ptr<GroundFrames> frames;
     };
     std::vector<GroundAnim> g_groundAnims;
 
@@ -558,6 +590,36 @@ namespace {
                                                    float scaleX, float scaleY);
     PFN_BlendStretch o_BlendStretch = nullptr;
 
+    // The 2x case per destination pixel. The game blends ONE destination pixel per source pixel,
+    // repeats the result over the 2x2 block and copies whole rows down - so whatever lies under
+    // the picture's transparent parts turns into 2x2 blocks as well: under every letter of a
+    // tooltip (the interface's text is drawn this way at the 2x interface scale). With the smooth
+    // zoom those blocks differed from the world copy, were taken for interface and showed the
+    // world at its own size between magnified world pixels - "dotted" boxes under the text
+    // (user report 2026-11-15). Same arithmetic as the game (0x005E8B10), for every pixel; where
+    // the alpha picture is 0 the pixel stays as it is (the game's formula gives the same).
+    void BlendStretch2x(const uint16_t* src, uint16_t* dst, const uint16_t* alphaSrc, uint32_t key,
+                        uint32_t cols, uint32_t rows, uint32_t srcPitch, uint32_t dstPitch) {
+        for (uint32_t y = 0; y < rows * 2; ++y) {
+            const size_t so = static_cast<size_t>(y >> 1) * srcPitch;
+            const auto* s = reinterpret_cast<const uint16_t*>(reinterpret_cast<const uint8_t*>(src) + so);
+            const auto* a = reinterpret_cast<const uint16_t*>(reinterpret_cast<const uint8_t*>(alphaSrc) + so);
+            auto* out = reinterpret_cast<uint16_t*>(reinterpret_cast<uint8_t*>(dst) + static_cast<size_t>(y) * dstPitch);
+            for (uint32_t x = 0; x < cols * 2; ++x) {
+                const uint32_t sp = s[x >> 1];
+                if (sp == key) continue;
+                uint32_t al = (static_cast<uint32_t>(a[x >> 1]) >> 2) & 0x1F0;
+                if (al == 0) continue;
+                if (al > 0xFF) al = 0xFF;
+                const uint32_t ia = 0x100 - al, d = out[x];
+                const uint32_t r = (((((sp >> 8) & 0xF8) * al) >> 8) & 0xF8) + (((((d >> 8) & 0xF8) * ia) >> 8) & 0xF8);
+                const uint32_t g = (((((sp >> 3) & 0xFC) * al) >> 8) & 0xFC) + (((((d >> 3) & 0xFC) * ia) >> 8) & 0xFC);
+                const uint32_t b = ((((sp & 0x1F) << 3) * al) >> 11) + ((((d & 0x1F) << 3) * ia) >> 11);
+                out[x] = static_cast<uint16_t>((r << 8) + (g << 3) + b);
+            }
+        }
+    }
+
     uint32_t __fastcall Hook_BlendStretch(void* self, void* edx, const uint16_t* src, uint16_t* dst, const uint16_t* alphaSrc,
                                           uint32_t key, uint32_t dstW, uint32_t dstH, uint32_t srcPitch, uint32_t dstPitch,
                                           float scaleX, float scaleY) {
@@ -571,8 +633,61 @@ namespace {
                 if (FindLockedBuf(src, sb)) Sprites::NoteFallback(sb.bits, sb.w, sb.h, 3);
                 else Sprites::NoteFallback(nullptr, static_cast<int>(dstW / 2), static_cast<int>(dstH / 2), 3);
             }
+            if (src && dst && alphaSrc && !((srcPitch | dstPitch) & 1)) {
+                if (TraceActive()) {
+                    char text[120];
+                    std::snprintf(text, sizeof(text), "BLEND2X %ux%u alpha=%s key=%04X", dstW, dstH,
+                                  alphaSrc == src ? "own" : "other", key & 0xFFFF);
+                    TraceMark(text);
+                }
+                BlendStretch2x(src, dst, alphaSrc, key & 0xFFFF, dstW / 2, dstH / 2, srcPitch, dstPitch);
+                return 1;
+            }
         }
         return o_BlendStretch(self, edx, src, dst, alphaSrc, key, dstW, dstH, srcPitch, dstPitch, scaleX, scaleY);
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // Text (and other pictures with an alpha picture) magnified 2x: the general blitter's mode
+    // 0x28401 at the factor 2 (0x005E84E0) calls this MMX routine, cdecl:
+    //     (src, dst, alpha, dstW, dstH, srcPitch, dstPitch, alphaPitch)
+    // Per source pixel that is not 0x07C0: weight w = 2 * (blue of the alpha picture) of 64,
+    // out = (src * w + dst * (64 - w)) per channel (5-6-5 spread to bytes, the game's channel
+    // masks at 0x006C11C8), computed with the destination pixel at the block's top-left and
+    // written as the whole 2x2 block. The interface's text is drawn this way at the 2x
+    // interface scale: under every letter's cell the picture (alpha 0 there) turned the world
+    // into 2x2 blocks. With the smooth zoom those block pixels differed from the world copy,
+    // were taken for interface and showed the world at its own size between magnified world
+    // pixels - "dotted" boxes under tooltips (user report 2026-11-15). Here the same arithmetic
+    // per destination pixel; where w = 0 the pixel stays as it is (the formula gives the same).
+    using PFN_AlphaText2x = void(__cdecl*)(const uint16_t* src, uint16_t* dst, const uint16_t* alpha, uint32_t dstW,
+                                           uint32_t dstH, int srcPitch, int dstPitch, int alphaPitch);
+    PFN_AlphaText2x o_AlphaText2x = nullptr;
+
+    void __cdecl Hook_AlphaText2x(const uint16_t* src, uint16_t* dst, const uint16_t* alpha, uint32_t dstW, uint32_t dstH,
+                                  int srcPitch, int dstPitch, int alphaPitch) {
+        const uint32_t cols = dstW >> 1, rows = dstH >> 1;
+        if (!cols || !rows || !src || !dst || !alpha) return;
+        const auto* mask = reinterpret_cast<const uint16_t*>(kAddrSpanMask);
+        const uint32_t mB = mask[0], mG = mask[1], mR = mask[2];
+        for (uint32_t y = 0; y < rows * 2; ++y) {
+            const auto* s = reinterpret_cast<const uint16_t*>(reinterpret_cast<const uint8_t*>(src) +
+                                                              static_cast<ptrdiff_t>(y >> 1) * srcPitch);
+            const auto* a = reinterpret_cast<const uint16_t*>(reinterpret_cast<const uint8_t*>(alpha) +
+                                                              static_cast<ptrdiff_t>(y >> 1) * alphaPitch);
+            auto* out = reinterpret_cast<uint16_t*>(reinterpret_cast<uint8_t*>(dst) + static_cast<ptrdiff_t>(y) * dstPitch);
+            for (uint32_t x = 0; x < cols * 2; ++x) {
+                const uint32_t sp = s[x >> 1];
+                if (sp == 0x07C0) continue;
+                const uint32_t w = (a[x >> 1] & 0x1Fu) * 2;
+                if (w == 0) continue;
+                const uint32_t iw = 64 - w, d = out[x];
+                const uint32_t b = (((((sp & 0x1F) << 2) * w + ((d & 0x1F) << 2) * iw) & mB) >> 8) & 0xFF;
+                const uint32_t g = (((((sp >> 5) & 0x3F) << 1) * w + (((d >> 5) & 0x3F) << 1) * iw) & mG) >> 2;
+                const uint32_t r = ((((sp >> 11) << 2) * w + ((d >> 11) << 2) * iw) & mR) << 3;
+                out[x] = static_cast<uint16_t>(r | g | b);
+            }
+        }
     }
 
     // ---------------------------------------------------------------------------------------
@@ -772,65 +887,349 @@ bool TryBackgroundBlit(const Buf& dst, const RECT& d, const RECT& clip,
     return true;
 }
 
-// Water. The levels' water (ponds, streams) is animated by large sprites that repaint the
-// ground they lie on, frame after frame: the same picture as the level background at that
-// spot, with ripples - stored at low resolution and heavily block-compressed. Magnified over
-// an HD background they turn the pond back into blocks, while the pond of the HD picture
-// itself looks far better. So such a sprite is left out when the HD background is shown:
-// still water from the HD picture. It is recognised by content, not by name: a large sprite
-// whose pixels are close to the level picture beneath it. Flags, smoke, fires, mill wheels
-// differ from what is under them and are drawn as always.
-bool HideGroundAnimation(const Buf& src, const RECT& s, const RECT& d) {
+namespace {
+    // A picture of 4 values per level pixel, magnified 2x with the smooth filter's weights:
+    //   overlay: [alpha 0..256, alpha * R5 * 16 / 256, ... G6, ... B5]
+    //   else:    [0, R5, G6, B5 differences x 16]
+    // The result goes to 4 planes of W x H = 2w x 2h values:
+    //   overlay: A = alpha 0..256, then R, G, B = alpha * colour (R5 / G6 / B5): out = (HD * (256 - A) + C) / 256
+    //   else:    0, then R, G, B = differences x 256:                            out = HD + D / 256
+    // `span` gets per HD row the first and the end column where anything is to be done.
+    void Magnify2x(const int16_t* pic, int w, int h, bool overlay, GroundFrames& gf, std::vector<int16_t>& out,
+                   std::vector<int16_t>& span) {
+        const int W = 2 * w, H = 2 * h;
+        gf.W = W;
+        gf.H = H;
+        const size_t plane = static_cast<size_t>(W) * H;
+        out.assign(plane * 4, 0);
+        span.assign(static_cast<size_t>(H) * 2, 0);
+        const int first = overlay ? 0 : 1;
+        for (int j = 0; j < H; ++j) {
+            const int k = j >> 1;
+            const int ya = (std::max)(0, (std::min)(h - 1, (j & 1) ? k : k - 1));
+            const int yb = (std::max)(0, (std::min)(h - 1, ((j & 1) ? k : k - 1) + 1));
+            const int wya = (j & 1) ? 3 : 1, wyb = 4 - wya;
+            const int16_t* ra = pic + static_cast<size_t>(ya) * w * 4;
+            const int16_t* rb = pic + static_cast<size_t>(yb) * w * 4;
+            const size_t row = static_cast<size_t>(j) * W;
+            int x0 = W, x1 = 0;
+            for (int i = 0; i < W; ++i) {
+                const int kx = i >> 1;
+                const int xa = (std::max)(0, (std::min)(w - 1, (i & 1) ? kx : kx - 1));
+                const int xb = (std::max)(0, (std::min)(w - 1, ((i & 1) ? kx : kx - 1) + 1));
+                const int wxa = (i & 1) ? 3 : 1, wxb = 4 - wxa;
+                const int16_t* p00 = ra + xa * 4; const int16_t* p01 = ra + xb * 4;
+                const int16_t* p10 = rb + xa * 4; const int16_t* p11 = rb + xb * 4;
+                bool any = false;
+                for (int n = 0; n < 4; ++n) {
+                    int v = wya * (wxa * p00[n] + wxb * p01[n]) + wyb * (wxa * p10[n] + wxb * p11[n]);   // x 16
+                    if (overlay && n == 0) v = (v + 8) >> 4;     // alpha 0..256
+                    out[plane * n + row + i] = static_cast<int16_t>(v);
+                    if (n >= first && v != 0) any = true;
+                }
+                if (any) { x0 = (std::min)(x0, i); x1 = i + 1; }
+            }
+            span[static_cast<size_t>(j) * 2] = static_cast<int16_t>(x0 < x1 ? x0 : 0);
+            span[static_cast<size_t>(j) * 2 + 1] = static_cast<int16_t>(x0 < x1 ? x1 : 0);
+        }
+    }
+
+    // The magnified picture onto the HD picture already in `dst` (rect `d`, visible part `clip`),
+    // cross-faded from `prev` (t = 0) to `cur` (t = 256): overlays blended, differences added.
+    // Overlays: SSE2, 8 pixels at a time (two smoke columns cost 0.5 ms a frame in plain code).
+    void ApplyGround2x(const Buf& dst, const RECT& d, const RECT& clip, const GroundFrames& gf, int t, bool overlay) {
+        const int W = gf.W, H = gf.H;
+        const size_t plane = static_cast<size_t>(W) * H;
+        if (W <= 0 || gf.cur.size() != plane * 4) return;
+        const bool fade = t < 256 && gf.hasPrev && gf.prev.size() == gf.cur.size() && gf.prevSpan.size() == gf.curSpan.size();
+        const __m128i tv = _mm_set1_epi16(static_cast<short>((t < 0 ? 0 : t) << 7));
+        const __m128i k256 = _mm_set1_epi16(256), k128 = _mm_set1_epi16(128);
+        const __m128i m6 = _mm_set1_epi16(63), m5 = _mm_set1_epi16(31);
+        for (int y = clip.top; y < clip.bottom; ++y) {
+            const int j = y - d.top;
+            if (j < 0 || j >= H) continue;
+            int x0 = gf.curSpan[static_cast<size_t>(j) * 2], x1 = gf.curSpan[static_cast<size_t>(j) * 2 + 1];
+            if (fade) {
+                const int p0 = gf.prevSpan[static_cast<size_t>(j) * 2], p1 = gf.prevSpan[static_cast<size_t>(j) * 2 + 1];
+                if (p1 > p0) {
+                    if (x1 > x0) { x0 = (std::min)(x0, p0); x1 = (std::max)(x1, p1); }
+                    else { x0 = p0; x1 = p1; }
+                }
+            }
+            x0 = (std::max)(x0, static_cast<int>(clip.left - d.left));
+            x1 = (std::min)(x1, static_cast<int>(clip.right - d.left));
+            if (x1 <= x0) continue;
+            const size_t row = static_cast<size_t>(j) * W;
+            const int16_t* c[4] = { &gf.cur[row], &gf.cur[plane + row], &gf.cur[2 * plane + row], &gf.cur[3 * plane + row] };
+            const int16_t* p[4] = { nullptr, nullptr, nullptr, nullptr };
+            if (fade) for (int n = 0; n < 4; ++n) p[n] = &gf.prev[plane * n + row];
+            auto* out = reinterpret_cast<uint16_t*>(dst.bits + static_cast<size_t>(y) * dst.pitch) + d.left;
+            int i = x0;
+            if (overlay) {
+                for (; i + 8 <= x1; i += 8) {
+                    __m128i v[4];
+                    for (int n = 0; n < 4; ++n) {
+                        v[n] = _mm_loadu_si128(reinterpret_cast<const __m128i*>(c[n] + i));
+                        if (fade) {
+                            const __m128i pv = _mm_loadu_si128(reinterpret_cast<const __m128i*>(p[n] + i));
+                            // prev + (cur - prev) * t / 256 (mulhi by t*128, then x2)
+                            v[n] = _mm_add_epi16(pv, _mm_slli_epi16(_mm_mulhi_epi16(_mm_sub_epi16(v[n], pv), tv), 1));
+                        }
+                    }
+                    const __m128i hp = _mm_loadu_si128(reinterpret_cast<const __m128i*>(out + i));
+                    const __m128i inv = _mm_sub_epi16(k256, v[0]);
+                    const __m128i r = _mm_srli_epi16(_mm_add_epi16(_mm_add_epi16(_mm_mullo_epi16(_mm_srli_epi16(hp, 11), inv), v[1]), k128), 8);
+                    const __m128i g = _mm_srli_epi16(_mm_add_epi16(_mm_add_epi16(
+                                          _mm_mullo_epi16(_mm_and_si128(_mm_srli_epi16(hp, 5), m6), inv), v[2]), k128), 8);
+                    const __m128i b = _mm_srli_epi16(_mm_add_epi16(_mm_add_epi16(_mm_mullo_epi16(_mm_and_si128(hp, m5), inv), v[3]), k128), 8);
+                    const __m128i px = _mm_or_si128(_mm_or_si128(_mm_slli_epi16(_mm_min_epi16(r, m5), 11),
+                                                                 _mm_slli_epi16(_mm_min_epi16(g, m6), 5)), _mm_min_epi16(b, m5));
+                    _mm_storeu_si128(reinterpret_cast<__m128i*>(out + i), px);
+                }
+            }
+            static const int kMax[3] = { 31, 63, 31 };
+            for (; i < x1; ++i) {
+                int v[4];
+                for (int n = 0; n < 4; ++n) v[n] = fade ? p[n][i] + (((c[n][i] - p[n][i]) * t) >> 8) : c[n][i];
+                const uint32_t px = out[i];
+                int col[3] = { static_cast<int>(px >> 11), static_cast<int>((px >> 5) & 63), static_cast<int>(px & 31) };
+                for (int n = 0; n < 3; ++n) {
+                    col[n] = overlay ? (col[n] * (256 - v[0]) + v[n + 1] + 128) >> 8
+                                     : col[n] + (v[n + 1] + (v[n + 1] >= 0 ? 128 : -128)) / 256;
+                    col[n] = (std::max)(0, (std::min)(kMax[n], col[n]));
+                }
+                out[i] = static_cast<uint16_t>((col[0] << 11) | (col[1] << 5) | col[2]);
+            }
+        }
+    }
+
+    uint64_t HashFrame(const Buf& src) {
+        uint64_t hsh = 1469598103934665603ull;
+        for (int y = 0; y < src.h; ++y) {
+            const auto* p = reinterpret_cast<const uint32_t*>(src.bits + static_cast<size_t>(y) * src.pitch);
+            for (int x = 0; x < src.w / 2; ++x) hsh = (hsh ^ p[x]) * 1099511628211ull;
+        }
+        return hsh;
+    }
+
+    bool MakeGroundDifference(GroundAnim& anim, const Buf& src, int mx, int my, int16_t* diff);
+}
+
+// Ground animations: large sprites that repaint the ground they lie on, frame after frame - the
+// level picture of that spot plus ripples (water) or smoke, low-resolution and heavily block-
+// compressed. Magnified over an HD background such a frame shows as a blurry, blocky patch.
+// Recognised by content, not by name: a large sprite whose pixels are close to the level
+// picture beneath it (flags, fires, mill wheels differ from what is under them: drawn as always).
+//  - Overlays (the sprite covers its whole rectangle - chimney smoke): the difference to the level
+//    picture beneath, smoothed and with the compression noise faded out, is added to the HD
+//    picture: smoke over the HD rock, no patch.
+//  - Water (irregular): HDWater=1 (the player's choice of 2026-11-14) still water from the HD
+//    picture; HDWater=2 the HD picture with the game's shimmer: each frame's difference to the
+//    mean of the frames seen at this place (no ripples in the data - a shimmer of +-3 of 255).
+// Returns true when the sprite was handled here (drawn or left out).
+bool DrawGroundAnimation(const Buf& dst, const RECT& d, const RECT& clip, const Buf& src, const RECT& s) {
     const auto& cfg = SherwoodConfig::Get();
     const HdMap* hd = g_current;
     if (cfg.hdWater == 0 || !hd || !hd->px || !g_originValid || !g_srcBits) return false;
-    if (src.w * src.h < 4000) return false; // small sprites are never water surfaces
+    if (src.w * src.h < 4000) return false; // small sprites never repaint the ground
 
     // position of the whole frame (not only of the part on screen) in level pixels
     const int hx = d.left + g_originX - 2 * s.left;
     const int hy = d.top + g_originY - 2 * s.top;
     if ((hx | hy) & 1) return false;
     const int mx = hx / 2, my = hy / 2;
-    int otherPlaces = 0; // same frame size seen elsewhere and not water: a moving object
-    for (const GroundAnim& g : g_groundAnims) {
+    GroundAnim* anim = nullptr;
+    int otherPlaces = 0; // same frame size seen elsewhere and not a repaint: a moving object
+    for (GroundAnim& g : g_groundAnims) {
         if (g.w != src.w || g.h != src.h) continue;
-        if (g.mx == mx && g.my == my) return g.repaint;
+        if (g.mx == mx && g.my == my) { anim = &g; break; }
         if (!g.repaint) ++otherPlaces;
     }
-    if (otherPlaces >= 3) return false; // water does not move; no need to compare at every position
-    if (g_groundAnims.size() > 4096) g_groundAnims.clear();
+    const bool levelAlive = SurfaceAlive(reinterpret_cast<uintptr_t>(g_identity), g_srcBits);
+    if (!anim) {
+        if (otherPlaces >= 3) return false; // the ground does not move; no need to compare at every position
+        if (g_groundAnims.size() > 4096) g_groundAnims.clear();
+        // First time this sprite is seen here: compare it with the level picture.
+        uint64_t diffSum = 0;
+        uint32_t opaque = 0, total = 0;
+        if (levelAlive) {
+            const int x0 = (std::max)(0, -mx), y0 = (std::max)(0, -my);
+            const int x1 = (std::min)(src.w, g_srcW - mx), y1 = (std::min)(src.h, g_srcH - my);
+            for (int y = y0; y < y1; ++y) {
+                const auto* sp = reinterpret_cast<const uint16_t*>(src.bits + static_cast<size_t>(y) * src.pitch);
+                const auto* mp = reinterpret_cast<const uint16_t*>(g_srcBits + static_cast<size_t>(my + y) * g_srcPitch) + mx;
+                for (int x = x0; x < x1; ++x) {
+                    ++total;
+                    const uint32_t a = sp[x];
+                    if (a == 0x07C0) continue;
+                    const uint32_t b = mp[x];
+                    ++opaque;
+                    diffSum += static_cast<uint32_t>(std::abs(static_cast<int>(a >> 11) - static_cast<int>(b >> 11))) * 8 +
+                               static_cast<uint32_t>(std::abs(static_cast<int>((a >> 5) & 63) - static_cast<int>((b >> 5) & 63))) * 4 +
+                               static_cast<uint32_t>(std::abs(static_cast<int>(a & 31) - static_cast<int>(b & 31))) * 8;
+                }
+            }
+        }
+        GroundAnim g;
+        g.mx = mx; g.my = my; g.w = src.w; g.h = src.h;
+        const double meanDiff = opaque ? static_cast<double>(diffSum) / (3.0 * opaque) : 255.0; // per channel, 0..255
+        const double coverage = total ? 100.0 * opaque / total : 0.0;
+        g.repaint = opaque >= 3000 && meanDiff < kGroundRepaintMaxDiff;
+        g.overlay = g.repaint && coverage >= kGroundOverlayMinCoverage;
+        g_groundAnims.push_back(g);
+        anim = &g_groundAnims.back();
+        Logger::Info("HD: sprite %dx%d at level position %d,%d: %.0f%% opaque, differs from the ground beneath by %.1f of 255 -> %s.",
+                     src.w, src.h, mx, my, coverage, meanDiff,
+                     !g.repaint ? "drawn" :
+                     g.overlay ? "overlay (smoke): its difference to the ground over the HD picture" :
+                     cfg.hdWater == 2 ? "water: the HD picture with the game's shimmer" :
+                                        "water surface, left out (still water from the HD picture)");
+    }
+    if (!anim->repaint) return false;
+    if (!anim->overlay && cfg.hdWater != 2) return true;    // still water from the HD picture
+    if (anim->overlay && !levelAlive) return false;         // nothing to compare with: as the game draws it
 
-    // First time this sprite is seen here: compare it with the level picture.
-    uint64_t diffSum = 0;
-    uint32_t opaque = 0, total = 0;
-    if (SurfaceAlive(reinterpret_cast<uintptr_t>(g_identity), g_srcBits)) {
-        const int x0 = (std::max)(0, -mx), y0 = (std::max)(0, -my);
-        const int x1 = (std::min)(src.w, g_srcW - mx), y1 = (std::min)(src.h, g_srcH - my);
-        for (int y = y0; y < y1; ++y) {
+    // The difference picture is made when the animation shows another frame; in between, the
+    // last two are cross-faded over the time a frame stays (the game steps its smoke a few times
+    // a second - with 144 pictures a second it jumped; one frame of delay is not visible).
+    const int w = src.w, h = src.h;
+    if (!anim->frames) anim->frames = std::make_shared<GroundFrames>();
+    GroundFrames& gf = *anim->frames;
+    const size_t cells = static_cast<size_t>(w) * h * 4;       // the level-pixel picture
+    const size_t big = cells * 4;                               // ... magnified 2x
+    LARGE_INTEGER now{}, freq{};
+    QueryPerformanceCounter(&now);
+    QueryPerformanceFrequency(&freq);
+    const uint64_t frameHash = HashFrame(src);
+    if (gf.cur.size() != big || frameHash != gf.curHash) {
+        if (gf.cur.size() == big) {
+            const double ms = static_cast<double>(now.QuadPart - gf.tCur) * 1000.0 / static_cast<double>(freq.QuadPart);
+            if (ms >= 20.0 && ms <= 1000.0) gf.intervalMs = gf.intervalMs > 0.0 ? gf.intervalMs * 0.75 + ms * 0.25 : ms;
+            gf.prev.swap(gf.cur);
+            gf.prevSpan.swap(gf.curSpan);
+            gf.hasPrev = true;
+        }
+        gf.curHash = frameHash;
+        gf.tCur = now.QuadPart;
+        static std::vector<int16_t> lo;                         // main thread (frame drawing)
+        lo.assign(cells, 0);
+        if (!MakeGroundDifference(*anim, src, mx, my, lo.data())) {
+            gf.W = 2 * w;                                       // water: still until a mean exists
+            gf.H = 2 * h;
+            gf.cur.assign(big, 0);
+            gf.curSpan.assign(static_cast<size_t>(h) * 4, 0);
+            return true;
+        }
+        Magnify2x(lo.data(), w, h, anim->overlay, gf, gf.cur, gf.curSpan);
+    }
+    int t = 256;
+    if (gf.hasPrev && gf.intervalMs > 0.0) {
+        const double ms = static_cast<double>(now.QuadPart - gf.tCur) * 1000.0 / static_cast<double>(freq.QuadPart);
+        t = static_cast<int>((std::min)(1.0, ms / gf.intervalMs) * 256.0);
+    }
+    // the magnified picture covers the whole frame; `d` may be a part of it (`clip` lies inside `d`)
+    const RECT whole{ d.left - 2 * s.left, d.top - 2 * s.top, d.left - 2 * s.left + 2 * w, d.top - 2 * s.top + 2 * h };
+    ApplyGround2x(dst, whole, clip, gf, t, anim->overlay);
+    return true;
+}
+
+// The difference picture of one frame (see DrawGroundAnimation); false: nothing to show yet.
+namespace {
+bool MakeGroundDifference(GroundAnim& anim, const Buf& src, int mx, int my, int16_t* diff) {
+    const int w = src.w, h = src.h;
+    if (anim.overlay) {
+        // per level pixel: the frame (x16) and its difference to the level picture (x16)
+        static std::vector<int16_t> raw;
+        raw.assign(static_cast<size_t>(w) * h * 6, 0);
+        static std::vector<uint8_t> has;
+        has.assign(static_cast<size_t>(w) * h, 0);
+        for (int y = 0; y < h; ++y) {
+            if (my + y < 0 || my + y >= g_srcH) continue;
             const auto* sp = reinterpret_cast<const uint16_t*>(src.bits + static_cast<size_t>(y) * src.pitch);
-            const auto* mp = reinterpret_cast<const uint16_t*>(g_srcBits + static_cast<size_t>(my + y) * g_srcPitch) + mx;
-            for (int x = x0; x < x1; ++x) {
-                ++total;
-                const uint32_t a = sp[x];
+            const auto* mp = reinterpret_cast<const uint16_t*>(g_srcBits + static_cast<size_t>(my + y) * g_srcPitch);
+            for (int x = 0; x < w; ++x) {
+                if (mx + x < 0 || mx + x >= g_srcW) continue;
+                const int a = sp[x];
                 if (a == 0x07C0) continue;
-                const uint32_t b = mp[x];
-                ++opaque;
-                diffSum += static_cast<uint32_t>(std::abs(static_cast<int>(a >> 11) - static_cast<int>(b >> 11))) * 8 +
-                           static_cast<uint32_t>(std::abs(static_cast<int>((a >> 5) & 63) - static_cast<int>((b >> 5) & 63))) * 4 +
-                           static_cast<uint32_t>(std::abs(static_cast<int>(a & 31) - static_cast<int>(b & 31))) * 8;
+                const int b = mp[mx + x];
+                int16_t* r = &raw[(static_cast<size_t>(y) * w + x) * 6];
+                r[0] = static_cast<int16_t>((a >> 11) * 16);
+                r[1] = static_cast<int16_t>(((a >> 5) & 63) * 16);
+                r[2] = static_cast<int16_t>((a & 31) * 16);
+                r[3] = static_cast<int16_t>(((a >> 11) - (b >> 11)) * 16);
+                r[4] = static_cast<int16_t>((((a >> 5) & 63) - ((b >> 5) & 63)) * 16);
+                r[5] = static_cast<int16_t>(((a & 31) - (b & 31)) * 16);
+                has[static_cast<size_t>(y) * w + x] = 1;
+            }
+        }
+        // 3x3 means of the opaque neighbours (the frame is block-compressed); how much the frame
+        // differs from the ground decides how much of it covers the HD picture
+        for (int y = 0; y < h; ++y) {
+            for (int x = 0; x < w; ++x) {
+                if (!has[static_cast<size_t>(y) * w + x]) continue;
+                int sum[6] = { 0, 0, 0, 0, 0, 0 }, n = 0;
+                for (int dy = -1; dy <= 1; ++dy) {
+                    const int yy = y + dy;
+                    if (yy < 0 || yy >= h) continue;
+                    for (int dx = -1; dx <= 1; ++dx) {
+                        const int xx = x + dx;
+                        if (xx < 0 || xx >= w || !has[static_cast<size_t>(yy) * w + xx]) continue;
+                        const int16_t* r = &raw[(static_cast<size_t>(yy) * w + xx) * 6];
+                        for (int c = 0; c < 6; ++c) sum[c] += r[c];
+                        ++n;
+                    }
+                }
+                // size of the difference on the 0..255 scale (x16): 5-bit channels x 255/31, 6-bit x 255/63
+                const int size = (std::max)({ std::abs(sum[3] / n) * 255 / 31, std::abs(sum[4] / n) * 255 / 63,
+                                              std::abs(sum[5] / n) * 255 / 31 });
+                const int from = kOverlayFadeFrom * 16, to = kOverlayFadeTo * 16;
+                if (size <= from) continue;
+                const int alpha = size >= to ? 256 : (size - from) * 256 / (to - from);
+                int16_t* o = diff + (static_cast<size_t>(y) * w + x) * 4;
+                o[0] = static_cast<int16_t>(alpha);
+                for (int c = 0; c < 3; ++c) o[c + 1] = static_cast<int16_t>(sum[c] / n * alpha / 256);
+            }
+        }
+    } else {
+        // water with the game's shimmer: this frame minus the mean of the frames seen here
+        if (!anim.mean) anim.mean = std::make_shared<GroundMean>();
+        GroundMean& gm = *anim.mean;
+        if (gm.sum.size() != static_cast<size_t>(w) * h * 3) {
+            gm.sum.assign(static_cast<size_t>(w) * h * 3, 0);
+            gm.seen.clear();
+        }
+        const uint64_t frame = anim.frames ? anim.frames->curHash : HashFrame(src);
+        if (gm.seen.size() < 32 && std::find(gm.seen.begin(), gm.seen.end(), frame) == gm.seen.end()) {
+            gm.seen.push_back(frame);
+            for (int y = 0; y < h; ++y) {
+                const auto* sp = reinterpret_cast<const uint16_t*>(src.bits + static_cast<size_t>(y) * src.pitch);
+                int32_t* sm = &gm.sum[static_cast<size_t>(y) * w * 3];
+                for (int x = 0; x < w; ++x) {
+                    const int a = sp[x];
+                    sm[x * 3 + 0] += a >> 11;
+                    sm[x * 3 + 1] += (a >> 5) & 63;
+                    sm[x * 3 + 2] += a & 31;
+                }
+            }
+        }
+        const int n = static_cast<int>(gm.seen.size());
+        if (n < 2) return false;    // one frame seen so far: still water until the mean means something
+        for (int y = 0; y < h; ++y) {
+            const auto* sp = reinterpret_cast<const uint16_t*>(src.bits + static_cast<size_t>(y) * src.pitch);
+            const int32_t* sm = &gm.sum[static_cast<size_t>(y) * w * 3];
+            int16_t* o = diff + static_cast<size_t>(y) * w * 4;
+            for (int x = 0; x < w; ++x) {
+                const int a = sp[x];
+                if (a == 0x07C0) continue;
+                o[x * 4 + 1] = static_cast<int16_t>(((a >> 11) * n - sm[x * 3 + 0]) * 16 / n);
+                o[x * 4 + 2] = static_cast<int16_t>((((a >> 5) & 63) * n - sm[x * 3 + 1]) * 16 / n);
+                o[x * 4 + 3] = static_cast<int16_t>(((a & 31) * n - sm[x * 3 + 2]) * 16 / n);
             }
         }
     }
-    GroundAnim g{ mx, my, src.w, src.h, false };
-    const double meanDiff = opaque ? static_cast<double>(diffSum) / (3.0 * opaque) : 255.0; // per channel, 0..255
-    const double coverage = total ? 100.0 * opaque / total : 0.0;
-    g.repaint = opaque >= 3000 && meanDiff < kGroundRepaintMaxDiff;
-    g_groundAnims.push_back(g);
-    Logger::Info("HD: sprite %dx%d at level position %d,%d: %.0f%% opaque, differs from the ground beneath by %.1f of 255 -> %s.",
-                 src.w, src.h, mx, my, coverage, meanDiff,
-                 g.repaint ? "water surface, left out (still water from the HD picture)" : "drawn");
-    return g.repaint;
+    return true;
 }
+} // namespace
 
 void OnGameTick() {
     if (!SherwoodConfig::Get().hdBackgrounds) return;
@@ -949,6 +1348,11 @@ void InstallHooks() {
         const bool general = HookRoutine(0x005E6900, kGeneralBlit, sizeof(kGeneralBlit), reinterpret_cast<void*>(&Hook_GeneralBlit),
                                          reinterpret_cast<void**>(&o_GeneralBlit));
         Logger::Info("General blitter @ 0x005E6900 hooked (draw traces, interface scale): %d.", general ? 1 : 0);
+        // push ebp / mov ebp,esp / pushal / mov edx,[ebp+0x18] / mov ecx,[ebp+0x14] / shr edx,1
+        static const uint8_t kAlphaText2x[] = { 0x55, 0x89, 0xE5, 0x60, 0x8B, 0x55, 0x18, 0x8B, 0x4D, 0x14, 0xD1, 0xEA };
+        const bool text = HookRoutine(0x00622FD4, kAlphaText2x, sizeof(kAlphaText2x), reinterpret_cast<void*>(&Hook_AlphaText2x),
+                                      reinterpret_cast<void**>(&o_AlphaText2x));
+        Logger::Info("HD: 2x text with an alpha picture @ 0x00622FD4 blended per pixel: %d.", text ? 1 : 0);
     }
     Sprites::InstallHooks();
 }

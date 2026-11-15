@@ -768,7 +768,11 @@ HRESULT Surface::DoBlt(const RECT* dstRect, Surface* src, const RECT* srcRect, D
             } else if (dw == sw * 2 && dh == sh * 2 && !mirrorX && !mirrorY && inside) {
                 // tiles of the HUD lie side by side: no fading at their edges (seams)
                 SetSmoothEdgeClamp(true);
-                SmoothSprite2x16(buf(), d, src->buf(), s, clip, keyed ? keyColor : kNoColor, kNoColor, 256, nullptr, false, false);
+                if (Diag::IsMainThread()) {
+                    SmoothPicture2x16(buf(), d, src->buf(), s, clip, keyed ? keyColor : kNoColor);    // kept between frames
+                } else {
+                    SmoothSprite2x16(buf(), d, src->buf(), s, clip, keyed ? keyColor : kNoColor, kNoColor, 256, nullptr, false, false);
+                }
                 SetSmoothEdgeClamp(false);
             } else {
                 RECT sc = s;
@@ -800,9 +804,11 @@ HRESULT Surface::DoBlt(const RECT* dstRect, Surface* src, const RECT* srcRect, D
     // exact 2x magnification of a colour-keyed sprite (objects, water animations at the 2x zoom):
     // filtered instead of 2x2 blocks
     if (keyed && src != this && dw == sw * 2 && dh == sh * 2 && !mirrorX && !mirrorY &&
-        s.left >= 0 && s.top >= 0 && s.right <= src->w && s.bottom <= src->h &&
-        HD::HideGroundAnimation(src->buf(), s, d)) {
-        return DD_OK; // water animation on an HD background: the HD picture shows the water
+        s.left >= 0 && s.top >= 0 && s.right <= src->w && s.bottom <= src->h) {
+        RECT groundClip = d;
+        if (ClipToBounds(groundClip, w, h) && HD::DrawGroundAnimation(buf(), d, groundClip, src->buf(), s)) {
+            return DD_OK; // water / chimney smoke on an HD background: drawn over the HD picture, or still HD water
+        }
     }
     // ... or the upscaled version of the sprite frame the surface holds, when there is one
     if (keyed && src != this && dw == sw * 2 && dh == sh * 2 && !mirrorX && !mirrorY &&
@@ -1455,6 +1461,17 @@ bool CopyFront(std::vector<uint16_t>& out, int& w, int& h) {
     for (int y = 0; y < b.h; ++y) {
         std::memcpy(out.data() + static_cast<size_t>(y) * b.w, b.bits + static_cast<size_t>(y) * b.pitch, static_cast<size_t>(b.w) * 2);
     }
+    w = b.w;
+    h = b.h;
+    return true;
+}
+
+bool BackBits(const uint8_t*& bits, int& pitch, int& w, int& h) {
+    std::lock_guard<std::recursive_mutex> lock(g.lock);
+    if (!g.primary || !g.primary->back || !g.primary->back->st.bits) return false;
+    const Buf b = g.primary->back->buf();
+    bits = b.bits;
+    pitch = b.pitch;
     w = b.w;
     h = b.h;
     return true;

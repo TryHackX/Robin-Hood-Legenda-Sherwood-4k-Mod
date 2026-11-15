@@ -3,6 +3,7 @@
 #include "logger.h"
 #include "ui_scale.h"
 #include "ddm/ddm_hd.h"
+#include "ddm/ddm_present.h"
 
 #include <windows.h>
 #include <MinHook.h>
@@ -74,6 +75,7 @@ namespace {
     LARGE_INTEGER g_freq{}, g_last{};
     std::atomic<int> g_wheel{ 0 };          // input thread -> main thread
     std::atomic<float> g_testZoom{ 0.0f };  // test harness -> main thread
+    std::atomic<int>   g_testGameZoom{ 0 }; // test harness: the engine's own zoom animation (+1 in, -1 out)
     std::atomic<DWORD> g_wheelTime{ 0 };    // input thread: when the mouse wheel turned last
     // zoom with the wheel: the world point under the cursor stays under it while the zoom changes
     bool  g_anchor = false;
@@ -89,9 +91,11 @@ namespace {
     };
     Shown g_shown;
     bool  g_viewPending = false;            // OnWorldDrawn made a view for the frame being drawn
-    std::vector<uint16_t> g_snap;
-    int   g_snapW = 0, g_snapH = 0;
+    int   g_worldW = 0, g_worldH = 0;      // the world texture (DDM::Present::UploadWorld)
+    std::vector<uint16_t> g_readBack;      // LastWorld: the world read back from it
     unsigned g_switches = 0;
+    float g_lastEngineZoom = 0.0f;         // the engine's zoom as this module left it
+    bool  g_gameZooming = false;           // the game runs a zoom animation of its own
 
     uint8_t* Engine() { return *reinterpret_cast<uint8_t* const*>(kAddrEnginePtr); }
     float F(const uint8_t* e, int off) { return *reinterpret_cast<const float*>(e + off); }
@@ -161,6 +165,7 @@ namespace {
         g_offY = cy - (cam[1] + vh / (2.0f * zoom));
         g_hudDirty = true;
         ++g_switches;
+        g_lastEngineZoom = zoom;
         Logger::Info("ViewZoom: engine zoom %.1f -> %.1f (view %.2f) about %.0f,%.0f.", before, zoom, g_zShown, cx, cy);
         return true;
     }
@@ -305,6 +310,26 @@ void OnGameTick(uint8_t* e) {
         Logger::Info("ViewZoom: level %.0fx%.0f - zoom %.2f (from %.2f to %.2f).", F(e, kLevelSize), F(e, kLevelSize + 4),
                      g_zTarget, zMin, zMax);
     }
+    // The game changed the engine's zoom itself - a script showing something with its zoom
+    // animation, a loaded game: the player's zoom follows instead of magnifying the engine's new
+    // picture back to the old zoom (user report: "the resolution turns native" during such events)
+    const float ez = F(e, kZoom);
+    if (e[kCamState] == 3 || e[kCamState] == 4) {
+        g_gameZooming = true;
+    } else if (newLevel) {
+        g_lastEngineZoom = ez;
+        g_gameZooming = false;
+    } else if (g_gameZooming || std::fabs(ez - g_lastEngineZoom) > 0.01f) {
+        if (std::fabs(ez - g_lastEngineZoom) > 0.01f) {
+            g_zTarget = g_zShown = (std::min)(zMax, (std::max)(zMin, ez));
+            g_offX = g_offY = 0.0f;
+            g_anchor = false;
+            g_hudDirty = true;
+            Logger::Info("ViewZoom: the game set the zoom %.1f itself - followed.", ez);
+        }
+        g_lastEngineZoom = ez;
+        g_gameZooming = false;
+    }
     for (int n = g_wheel.exchange(0); n != 0; n += n > 0 ? -1 : 1) {
         Step(n > 0 ? +1 : -1, true);
     }
@@ -312,6 +337,12 @@ void OnGameTick(uint8_t* e) {
     if (test > 0.0f) {
         g_zTarget = g_zShown = (std::min)(zMax, (std::max)(zMin, test));
         g_hudDirty = true;
+    }
+    if (const int gz = g_testGameZoom.exchange(0)) {
+        // test harness: the engine's own zoom animation, past the hooks - as a script starts it
+        alignas(8) uint8_t evt[32] = {};
+        if (gz > 0) o_ZoomIn(e, nullptr, evt);
+        else o_ZoomOut(e, nullptr, evt);
     }
     g_zTarget = (std::min)(zMax, (std::max)(zMin, g_zTarget));
     const float want = EngineFor(g_zShown, zMin);
@@ -329,7 +360,15 @@ void OnGameTick(uint8_t* e) {
         AnchorCentre(g_zShown, W, H, vx, vy);
         const auto* cam = reinterpret_cast<const float*>(e + kCamera);
         float pos[2] = { vx - W / (2.0f * z), vy - H / (2.0f * z) };
-        if (std::fabs(pos[0] - cam[0]) >= 1.0f || std::fabs(pos[1] - cam[1]) >= 1.0f) g_fnSetCamera(e, nullptr, pos);
+        if (std::fabs(pos[0] - cam[0]) >= 1.0f || std::fabs(pos[1] - cam[1]) >= 1.0f) {
+            g_fnSetCamera(e, nullptr, pos);
+            // The engine's resting state blits its world surface as it is and only notes the new
+            // camera: the background stayed where the old camera had it while the characters,
+            // roofs and hints were drawn at the new one (user report 2026-11-14: things "come
+            // apart" when zooming, Alt+Tab - a full redraw - fixed it). As scrolling, the engine
+            // moves its world surface by camera - camera of the last render and draws the strips.
+            if (e[kCamState] == 1) e[kCamState] = 2;
+        }
         g_offX = vx - (cam[0] + W / (2.0f * z));
         g_offY = vy - (cam[1] + H / (2.0f * z));
         if (g_zShown == g_zTarget) g_anchor = false;
@@ -356,6 +395,14 @@ void OnWorldDrawn() {
     g_zShown += (g_zTarget - g_zShown) * k;
     if (std::fabs(g_zTarget - g_zShown) < 0.002f * g_zTarget) g_zShown = g_zTarget;
 
+    if (e[kCamState] == 3 || e[kCamState] == 4) {   // the game's own zoom animation: shown as it draws it
+        g_shown.on = false;
+        return;
+    }
+    // RHEngine::Update draws nothing in some frames (0x004C83FC: E+0xD1 set and E+0x4A94 & 0x1F):
+    // the back buffer then still holds an older frame with its interface - the world of the last
+    // drawn frame stays in the texture
+    const bool worldDrawn = !(e[0xD1] == 1 && (*reinterpret_cast<const uint32_t*>(e + 0x4A94) & 0x1F));
     const float zr = F(e, kRenderZoom) > 0.01f ? F(e, kRenderZoom) : F(e, kZoom);
     const float camX = F(e, kRenderCam), camY = F(e, kRenderCam + 4);
     const float W = F(e, kViewport), H = F(e, kViewport + 4) - Strip();
@@ -396,8 +443,16 @@ void OnWorldDrawn() {
     g_offX = (cx - W * 0.5f) / zr;
     g_offY = (cy - H * 0.5f) / zr;
     g_shown = Shown{ true, m, cx - halfW, cy - halfH, camX, camY, zr, W, H };
-    // the world as it is now, before the windows are drawn over it
-    if (DDM::CopyBack(g_snap, g_snapW, g_snapH) && g_snapW >= static_cast<int>(W) && g_snapH >= static_cast<int>(H)) {
+    // the world as it is now, before the windows are drawn over it - straight into the texture
+    // the presenter magnifies (one copy per frame)
+    const uint8_t* bits = nullptr;
+    int pitch = 0, bw = 0, bh = 0;
+    if (!worldDrawn && g_worldW >= static_cast<int>(W)) {
+        g_viewPending = true;               // the texture still holds the last drawn world
+    } else if (DDM::BackBits(bits, pitch, bw, bh) && bw >= static_cast<int>(W) && bh >= static_cast<int>(H) &&
+               DDM::Present::UploadWorld(bits, pitch, bw, bh)) {
+        g_worldW = bw;
+        g_worldH = bh;
         g_viewPending = true;
     } else {
         g_shown.on = false;
@@ -407,27 +462,33 @@ void OnWorldDrawn() {
 bool TakeView(View& out) {
     if (!g_viewPending) return false;
     g_viewPending = false;
-    if (!g_shown.on || g_snap.empty()) return false;
+    if (!g_shown.on || g_worldW <= 0) return false;
     out.m = g_shown.m;
     out.cropX = g_shown.cropX;
     out.cropY = g_shown.cropY;
     out.worldH = g_shown.worldH;
-    out.snap = g_snap.data();
-    out.w = g_snapW;
-    out.h = g_snapH;
+    out.snap = nullptr;                 // already in the presenter's texture
+    out.w = g_worldW;
+    out.h = g_worldH;
     return true;
 }
 
 bool LastWorld(View& out) {
-    if (!g_enabled || !g_shown.on || g_snap.empty()) return false;
+    if (!g_enabled || !g_shown.on || g_worldW <= 0) return false;
+    int w = 0, h = 0;
+    if (!DDM::Present::ReadWorld(g_readBack, w, h)) return false;
     out.m = g_shown.m;
     out.cropX = g_shown.cropX;
     out.cropY = g_shown.cropY;
     out.worldH = g_shown.worldH;
-    out.snap = g_snap.data();
-    out.w = g_snapW;
-    out.h = g_snapH;
+    out.snap = g_readBack.data();
+    out.w = w;
+    out.h = h;
     return true;
+}
+
+bool Magnifying() {
+    return g_enabled && g_shown.on && g_shown.m > 1.0005f;
 }
 
 bool ScreenToFrame(float& x, float& y) {
@@ -478,6 +539,10 @@ int Describe(char* out, int size) {
 
 void TestSetZoom(float z) {
     g_testZoom.store(z);
+}
+
+void TestGameZoom(int dir) {
+    g_testGameZoom.store(dir > 0 ? 1 : -1);
 }
 
 void Install() {

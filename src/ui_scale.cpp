@@ -400,9 +400,17 @@ namespace {
     }
 
     // The mission's window manager is RHGame+0x68, its pointer object +0x1758.
+    // RHGame* [0x6C0B3C] (and the engine pointer) stay set when a mission ends: in the menus they
+    // point to freed memory. Reading through it crashed the game on leaving a mission (user's
+    // session 2026-11-14 22:03, ACCESS_VIOLATION READ game+0x17C0 from a dialog's pointer update):
+    // used only while the memory is there and still carries RHGame's vtable (0x00678CA0).
     bool IsMissionPointer(const void* ptr) {
         auto* game = *reinterpret_cast<uint8_t* const*>(0x006C0B3C);
-        return game && InMission() && ptr == *reinterpret_cast<void* const*>(game + 0x68 + 0x1758);
+        if (!game || !InMission() || !Readable(game, 4) || !Readable(game + 0x68 + 0x1758, 4) ||
+            *reinterpret_cast<const uint32_t*>(game) != 0x00678CA0u) {
+            return false;
+        }
+        return ptr == *reinterpret_cast<void* const*>(game + 0x68 + 0x1758);
     }
 
     void AfterMissionPointer(const uint8_t* ptr);
@@ -529,6 +537,11 @@ namespace {
 
     uint32_t __fastcall Hook_BlendBlit(void* mgr, void* edx, int srcId, const float* srcRect, int dstId,
                                        const float* dstRect, uint32_t key, uint32_t percent, uint32_t flags) {
+        if (DDM::TraceActive()) {
+            char text[96];
+            std::snprintf(text, sizeof(text), "UI BLEND win=%p depth=%d %u%%", g_curWindow, g_drawDepth, percent & 0xFFFF);
+            DDM::TraceMark(text);
+        }
         if ((dstId != 0 && dstId != 1) || !dstRect || g_drawDepth <= 0) {
             return o_BlendBlit(mgr, edx, srcId, srcRect, dstId, dstRect, key, percent, flags);
         }

@@ -115,7 +115,10 @@ namespace {
             case kHdSprites:     yesNo(cfg.hdSprites); break;
             case kBetween:       yesNo(DDM::HD::BetweenOn()); break;
             case kSmoothSprites: yesNo(cfg.smoothSprites); break;
-            case kWater:         std::snprintf(out, n, "%s", cfg.hdWater ? "NIERUCHOMA Z OBRAZU HD" : "ANIMACJA Z GRY"); break;
+            case kWater:
+                std::snprintf(out, n, "%s", cfg.hdWater == 1 ? "NIERUCHOMA Z OBRAZU HD" :
+                                            cfg.hdWater == 2 ? "HD Z MIGOTANIEM Z GRY" : "ANIMACJA Z GRY (NISKA ROZDZ.)");
+                break;
             case kUiScale:       std::snprintf(out, n, "%s", UiScale::InterfaceScaled() ? "2X WIEKSZY" : "ORYGINALNY"); break;
             case kMap:           std::snprintf(out, n, "%s", UiScale::MapInCorner() ? "PRAWY GORNY ROG" : "JAK W GRZE (U GORY)"); break;
             case kMapDrag:       std::snprintf(out, n, "%s", UiScale::MapDragCamera() ? "PRZESUWA KAMERE" : "PRZESUWA OKNO (JAK W GRZE)"); break;
@@ -163,10 +166,15 @@ namespace {
                 cfg.smoothSprites = !cfg.smoothSprites;
                 WriteIni("Display", "SmoothSprites", cfg.smoothSprites ? 1 : 0);
                 break;
-            case kWater:
-                cfg.hdWater = cfg.hdWater ? 0 : 1;
+            case kWater: {
+                // still HD water -> HD water with the game's shimmer -> the game's own frames
+                static const int kOrder[3] = { 1, 2, 0 };
+                int at = 0;
+                while (at < 3 && kOrder[at] != cfg.hdWater) ++at;
+                cfg.hdWater = kOrder[((at < 3 ? at : 0) + (dir < 0 ? 2 : 1)) % 3];
                 WriteIni("Display", "HDWater", cfg.hdWater);
                 break;
+            }
             case kUiScale: {
                 const bool on = !UiScale::InterfaceScaled();
                 UiScale::SetInterfaceScale(on);

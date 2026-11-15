@@ -28,6 +28,8 @@ namespace DDM {
     bool CopyFront(std::vector<uint16_t>& out, int& w, int& h);
     // The frame being drawn (the back surface of the flip chain), RGB565.
     bool CopyBack(std::vector<uint16_t>& out, int& w, int& h);
+    // ... its pixels in place (main thread: valid until the game draws again)
+    bool BackBits(const uint8_t*& bits, int& pitch, int& w, int& h);
 }
 
 namespace DDM::HD {
@@ -39,10 +41,11 @@ namespace DDM::HD {
                            const Buf& src, const RECT& s, const void* identity,
                            unsigned lockGeneration, unsigned writeGeneration);
 
-    // A colour-keyed sprite is about to be magnified 2x onto the frame (rect `s` of `src` to
-    // rect `d`). Returns true if it is a water animation that should not be drawn because the
-    // HD background shows the water better (see ddm_hd.cpp).
-    bool HideGroundAnimation(const Buf& src, const RECT& s, const RECT& d);
+    // A colour-keyed sprite is about to be magnified 2x onto the frame `dst` (rect `s` of `src`
+    // to rect `d`, visible part `clip`). Returns true if it is a ground animation (water, chimney
+    // smoke) that was handled here: its difference to the level picture over the HD background,
+    // or left out for still HD water (see ddm_hd.cpp).
+    bool DrawGroundAnimation(const Buf& dst, const RECT& d, const RECT& clip, const Buf& src, const RECT& s);
 
     // Main thread, once per game tick: hot keys, variant switches, the redraw they need.
     void OnGameTick();

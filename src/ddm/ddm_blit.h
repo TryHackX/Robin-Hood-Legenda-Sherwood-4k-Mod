@@ -39,4 +39,8 @@ namespace DDM {
     void SmoothSprite2x16(const Buf& dst, const RECT& dr, const Buf& src, const RECT& sr, const RECT& clip,
                           uint32_t key, uint32_t marker, uint32_t factor, const uint16_t* maskBGR,
                           bool mirrorX, bool mirrorY);
+    // The same for interface pictures (no shadow, not mirrored, `sr` inside the surface), main
+    // thread only: the filtered picture is kept and drawn again while its source pixels stay the
+    // same - the HUD is not filtered anew in every frame. Same pixels as SmoothSprite2x16.
+    void SmoothPicture2x16(const Buf& dst, const RECT& dr, const Buf& src, const RECT& sr, const RECT& clip, uint32_t key);
 }

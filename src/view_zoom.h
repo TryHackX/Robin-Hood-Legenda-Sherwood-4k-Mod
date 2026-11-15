@@ -45,6 +45,8 @@ namespace ViewZoom {
 
     // the frame position whose world a screen position shows (false: no magnification)
     bool ScreenToFrame(float& x, float& y);
+    // the last frame with the world was magnified (main thread)
+    bool Magnifying();
     // the last frame with the world, if it was magnified: its world copy and the magnification
     // (ddm_hd_menu.cpp: the backdrop of a dialog shows the world the same way)
     bool LastWorld(View& out);
@@ -64,4 +66,5 @@ namespace ViewZoom {
     // test harness
     int  Describe(char* out, int size);
     void TestSetZoom(float z);          // jump straight to an effective zoom
+    void TestGameZoom(int dir);         // the engine's own zoom animation past the hooks (as a script)
 }

@@ -15,6 +15,8 @@ original DirectDraw wrapper, plus optional HD graphics prepared with AI models f
   scaling by shader (sharp pixels / sharp bilinear / soft).
 - Extra frames between game ticks (the game runs its logic 25 times per second): smooth map scrolling, smooth cursor,
   smooth movement of characters and projectiles — at the monitor's refresh rate; game speed unchanged.
+- The enlarged interface is filtered once and kept (it was filtered again in every frame): a frame at 2560×1440 costs
+  about 4.5 ms of processor time instead of 10 ms, so the game holds the monitor's refresh rate.
 - Input fixes (high polling rate mice, mouse re-acquired after Alt+Tab), audio fixes (hearing range on wide screens),
   hang watchdog, removed thread deadlock when scrolling with the screen edge.
 
@@ -26,10 +28,15 @@ original DirectDraw wrapper, plus optional HD graphics prepared with AI models f
   prepared with AI models (4 variants, switchable while playing), colours matched to the original. Download them as
   ready-made packs — see "HD graphics" below.
 - Optional in-between frames for character animations (RIFE model) — animations 2× smoother.
-- **Smooth zoom** (magnifier): zoom in and out in small steps (game keys, mouse wheel, the buttons in the corner),
-  from "the whole level fills the screen" (no black bands) up to 4× closer. The engine renders at 1.0 or 2.0 (HD
-  pictures) and the graphics card magnifies the rest — only the world, the interface keeps its size; clicks land
-  where you see them, the view reaches every edge of the level.
+- **Smooth zoom** (magnifier): zoom in and out in small steps (game keys, mouse wheel — about the cursor, the buttons
+  in the corner), from "the whole level fills the screen" (no black bands) up to 4× closer. The engine renders at 1.0
+  or 2.0 (HD pictures) and the graphics card magnifies the rest — only the world, the interface keeps its size; clicks
+  land where you see them, the view reaches every edge of the level. Zooms started by the game itself (scripted
+  scenes) are followed.
+- **Chimney smoke and water on HD backgrounds**: the game's smoke and water animations are tiny, heavily compressed
+  pictures that repaint the ground under them. The smoke is drawn as its difference to the ground, blended over the
+  HD picture and cross-faded between animation frames (no blurry patch, no jumps); water stays the still water of the
+  HD picture by default, or — `HDWater=2` / F10 — gets the game's shimmer on top of it.
 
 **Interface**
 - Mission interface 2× larger (each window grows from its own screen corner, clicks land where you see them).
@@ -50,7 +57,7 @@ original DirectDraw wrapper, plus optional HD graphics prepared with AI models f
 ## Installation — the complete HD version, step by step
 
 You need two releases from the **Releases** page (right side of the repository page):
-[**SherwoodEngineFix 1.1.0**](https://github.com/TryHackX/Robin-Hood-Legenda-Sherwood-4k-Mod/releases/tag/v1.1.0)
+[**SherwoodEngineFix 1.1.1**](https://github.com/TryHackX/Robin-Hood-Legenda-Sherwood-4k-Mod/releases/tag/v1.1.1)
 (the mod itself, 0.2 MB) and
 [**HD graphics pack 1**](https://github.com/TryHackX/Robin-Hood-Legenda-Sherwood-4k-Mod/releases/tag/hd-pack-1)
 (the HD pictures, 7 archives). Download the files listed under **Assets** — not "Source code (zip)" / "Source code
@@ -61,7 +68,7 @@ needed to play.
 `C:\Program Files (x86)\GOG Galaxy\Games\Robin Hood - The Legend of Sherwood`
 (in GOG Galaxy: the game → ⚙ → Manage installation → Show folder).
 
-**Step 2 — the mod.** From `SherwoodEngineFix-v1.1.0.zip` copy `winmm.dll` and `SherwoodFix.ini` into the game
+**Step 2 — the mod.** From `SherwoodEngineFix-v1.1.1.zip` copy `winmm.dll` and `SherwoodFix.ini` into the game
 folder (next to `Game.exe`).
 
 **Step 3 — the HD pictures.** Download these archives from *HD graphics pack 1*:

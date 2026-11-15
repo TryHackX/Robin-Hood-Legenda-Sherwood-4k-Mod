@@ -57,12 +57,27 @@ Kolejność w jednej klatce (`RHGame::RenderFrame`):
   najwyżej co 0,5 s, a po `Blt` do niej — od razu. Zmiana zawartości w trakcie gry → ostrzeżenie w logu i powrót do
   oryginalnych pikseli dla tego stanu (nie zaobserwowano). [Z]
 
-## 4. Woda [Z]
+## 4. Woda i dym — animacje „na ziemi” [Z]
 Staw w Nottingham = animacja 8 klatek 272×178 (klatki banku 4579–4586, paleta 16), nieprzezroczysta, każda klatka to
-cały staw; dane są kodowane blokami 4×1, więc powiększone dają mozaikę. Na tle HD takie sprite'y są pomijane
-(`HDWater=1`): duży sprite (≥4000 px, ≥3000 nieprzezroczystych), którego piksele różnią się od mapy pod spodem średnio
-o <25/255. Pomiar na Nottingham: woda 8,0–13,7 (10 animacji), wszystko inne 45–82. Decyzje są w logu (`HD: sprite …`).
-Do zrobienia później: animacja wody w HD (klatki przez model odporny na kompresję albo „migotanie" z różnicy klatek).
+cały staw; dane są kodowane blokami 4×1, więc powiększone dają mozaikę. Dym z kominów w Lincoln (klatki 4242–4250
+52×106 i 4251–4259 52×111) to tak samo pełne prostokąty: skała i dach + cienki dym, w niskiej jakości. Rozpoznanie
+(`DrawGroundAnimation`, raz na miejsce): duży sprite (≥4000 px, ≥3000 nieprzezroczystych), którego piksele różnią się
+od mapy pod spodem średnio o <25/255 — „zamalowuje ziemię”. Pomiar: woda 8,0–13,7, dym 12,8–18,2, reszta 45–82.
+- **Nakładka** (pokrywa ≥90 % prostokąta — dym; woda ma 39–67 %): różnica klatka − mapa pod spodem, wygładzona 3×3;
+  od jej wielkości (największy kanał, 0..255) zależy krycie: 0 do 8 (szum kompresji, mediana 9,5), pełne od 36 (dym:
+  percentyle 90/99 = 30/75). Kolor = wygładzona klatka. Mieszane na obraz HD (A·klatka + (1−A)·HD), więc skała HD
+  zostaje ostra, a dym jest miękką smugą. (Samo dodanie różnicy do HD było za słabe: dym ginął na szczegółach skały.)
+  Wcześniej dym albo był uznany za wodę i pomijany (zgłoszenie 2026-11-15: „po Alt+Tab widać dymy, a u nas nie”),
+  albo rysowany wprost — rozmyta łata wokół komina.
+- **Woda**: `HDWater=1` (domyślnie, wybór użytkownika z 2026-11-14) — pomijana, nieruchoma woda z obrazu HD;
+  `HDWater=2` — obraz HD + migotanie z gry: klatka − średnia klatek widzianych w tym miejscu (w danych nie ma fal, tylko
+  szum ±3/255 zmieniający się z klatką: `tools\hd\water_motion_study.py`). `HDWater=0` — klatki gry jak są.
+- Płynność: różnica liczona przy zmianie klatki animacji (hasz pikseli), powiększana 2× raz; między klatkami obrazu
+  przenikanie poprzedniej i bieżącej przez czas trwania klatki (średnia z pomiarów) — dym nie skacze co klatkę
+  animacji (gra zmienia ją kilka razy na sekundę, obraz ma 144). Opóźnienie o jedną klatkę animacji jest niewidoczne.
+- Koszt: złożenie SSE2 w zakresach wierszy, gdzie coś jest (dwa kominy: rozciąganie 2,1 ms na tik zamiast 5,6 ms
+  w zwykłym kodzie). Studium z podglądami: `tools\hd\ground_anim_study.py` → `hd\compare\ground_anim\`.
+- Nie sprawdzone w grze: woda z `HDWater=2` (w teście w tle dostępna jest tylko pierwsza misja, Lincoln, bez stawu).
 
 ## 5. Sprite'y HD (wdrożone 2026-11-14, `src\ddm\ddm_hd_sprites.cpp`, `HDSprites=1`)
 - **Skąd wiadomo, co jest na powierzchni** [Z]: hak na dekoder banku `0x504CD0` zapisuje „wskaźnik pikseli powierzchni →
@@ -349,6 +364,15 @@ kotwicą obrazka, nad którym jest kursor (lista obrazków z ostatniej klatki), 
   - Sprawdzone w tle (mapa 2944×2176): przeciąganie po obrazku 0,0 → 1437,1075 (zgodnie z wyliczeniem), poza mapą
     x = 0; prawy za brzeg: okno −150/+90 px przy ruchu myszy −300/+180; prawy klik na brzegu zamyka; lewy za brzeg
     przesuwa okno; klik na obrazku centruje (764,705); zaznaczanie w świecie nie rusza kamery.
+- Wydajność (2026-11-15, zgłoszenie „spadki do 112 FPS”): każdy obrazek interfejsu ×2 szedł co klatkę przez filtr
+  wygładzający (`SmoothSprite2x16`) — sam HUD to ~0,6 Mpx na klatkę, ~5 ms, połowa czasu klatki (linie `Blit(5s)`:
+  „stretch 2,5 Mpx 20 ms na tik” przy ~4 klatkach na tik). Teraz `SmoothPicture2x16` (`ddm_blit.cpp`) trzyma wynik
+  filtra: piksele w pełni kryjące jako gotowe kolory (kopiowane `memcpy` w zakresach wierszy), miękką krawędź jako sumy
+  kolorów z pokryciem (mieszane z tym, co pod spodem — te same piksele co filtr). Wpis jest używany tylko, gdy piksele
+  źródła czytane przez filtr (z ramką 1 px) są dokładnie takie jak przy jego tworzeniu (`memcmp`); obrazek zmieniający
+  się co chwilę idzie bez pamięci. Wynik (w tle, 2560×1440, zoom 2,0): rozciąganie z 20 ms do ~2 ms na tik, klatka
+  z ~10 ms do ~4,5 ms; z VSync gra trzyma odświeżanie ekranu (tu 144 Hz), bez VSync ~145–150 kl./s przy innym
+  procesie obciążającym CPU w tle.
 - Odprawa z kilkoma stronami (2026-11-14 noc): przy każdej stronie zaczyna się nowa pętla okna dialogowego, a „zdjęcie
   poziomu” do rozpoznania tła (`NoteDialogStart`) było robione z ekranu, na którym leżał już pergamin poprzedniej
   strony — pergamin liczył się jako poziom (99 %) i zostawał mały, a powiększony tekst wychodził poza niego. Teraz
@@ -365,7 +389,9 @@ na poziomach węższych niż ekran. Teraz zoom gracza to dowolna wartość od �
 max(1, 2560/szer. poziomu, 1440/wys.)) do `ZoomMax`; silnik rysuje w 1,0 (poniżej 2,0) albo 2,0 (grafika HD, od 2,0
 w górę), resztę powiększa prezenter — **tylko świat**:
 - Zdjęcie świata: `ViewZoom::OnWorldDrawn` z haka `WindowManager::Draw` misji (0x00510618), zanim narysują się okna —
-  kopia bufora tylnego (`DDM::CopyBack`, 7,4 MB na klatkę, tylko gdy powiększenie > 1).
+  bufor tylny prosto do tekstury D3D11 (`DDM::BackBits` → `Present::UploadWorld`, `UpdateSubresource` do tekstury
+  DEFAULT, bez kopii na CPU). Klatki, w których `Update` nic nie narysował (`E+0xD1` i `E+0x4A94 & 0x1F`), zostawiają
+  poprzednią teksturę. Tło okien dialogowych czyta ją z powrotem przez `Present::ReadWorld` (tekstura staging).
 - Shader (warstwa 3): piksel klatki równy pikselowi zdjęcia = świat → próbka zdjęcia w powiększeniu (filtr wg
   `ShaderFilter`); różny = interfejs (HUD, kursor, napisy, panel F10, licznik FPS) → bez zmian, w swoim miejscu.
 - Zmiana poziomu silnika bez animacji gry: zoom `E+0x475C`, indeks `E+0x4898`, kamera przez `SetCameraPosition`
@@ -387,8 +413,23 @@ w górę), resztę powiększa prezenter — **tylko świat**:
 - Sprawdzone w tle (2944×2176): 2,0 → 2,65 → 4,0 → 1,5 (silnik 1,0) → 1,0; interfejs zawsze 1×; klik przy 3,0 —
   Robin doszedł dokładnie w kliknięte miejsce; przewijanie do lewego brzegu — kamera 0, fragment do krawędzi;
   minimapa — mniejszy prostokąt, klik centruje; kółko myszy = kroki zoomu (gra sama mapuje kółko na zoom).
-- Do zrobienia: zoom kółkiem względem kursora (teraz względem środka ekranu); tło okien dialogowych (Esc, odprawa)
-  przy powiększeniu innym niż 1,0/2,0 pokazuje świat w powiększeniu silnika.
+- Kółko myszy zoomuje względem kursora (kotwica: punkt świata pod kursorem zostaje pod nim). Kamera idzie za kotwicą
+  przez `SetCameraPosition`; w stanie spoczynku (1) silnik kopiuje jednak powierzchnię świata bez zmian i tylko
+  zapamiętuje nową kamerę — tło zostawało przy starej kamerze, a postacie, dachy i podpowiedzi rysowały się przy nowej
+  („obiekty rozjeżdżają się przy zoomie, Alt+Tab naprawia” — zgłoszenie 2026-11-15). Po ruchu kamery stan → 2
+  (przewijanie): silnik sam przesuwa powierzchnię świata o (kamera − kamera ostatniego renderu) i dorysowuje pasy.
+- Zoom ustawiony przez grę (skrypty pokazujące coś z animacją oddalenia, wczytanie stanu): w stanie 3/4 lupa się nie
+  wtrąca, a po animacji przejmuje zoom silnika (`ViewZoom: the game set the zoom … itself - followed`). Wcześniej
+  lupa powiększała obraz silnika 1,0 z powrotem do starego zoomu — „rozdzielczość robi się natywna”. Test w tle:
+  `lupa gameout` / `lupa gamein` = oryginalna animacja gry z pominięciem haków (jak skrypt).
+- Napisy ×2 (dymki podpowiedzi, komunikaty): tryb blittera 0x28401 (klucz, alfa z drugiego obrazka, rozciąganie) przy
+  skali 2,0 woła procedurę MMX 0x00622FD4 `(src, dst, alfa, szerDst, wysDst, pitchSrc, pitchDst, pitchAlfa)`, cdecl.
+  Liczyła mieszanie RAZ na blok 2×2 (z lewym górnym pikselem celu) i zapisywała cały blok — pod każdą literą świat
+  zamieniał się w bloki 2×2 (alfa = 0 dookoła liter). Przy lupie te piksele różniły się od zdjęcia świata, więc szły
+  jako interfejs: „kropkowane” prostokąty i „stara mapa” pod napisem. Hak liczy to samo dla każdego piksela celu
+  (waga = 2 × niebieski z obrazka alfa, z 64; maski kanałów z 0x006C11C8); piksele z alfą 0 zostają nietknięte.
+  Analogicznie tryb 0x28201 (0x005E8B10, pierścienie, światła bez klatki HD) przy skali 2,0 — per piksel.
+- Zdjęcia porównawcze i pomiary: `tools\out\tooltip_fixed_x2.png` (po), `tooltip_zoom.png` (przed).
 
 ### Menu i okna gry na cały ekran (`MenuZoom=1`, Direct3D 11, wysokość wewnętrzna ≥ 960)
 Menu i okna (odprawa, menu Esc, wczytywanie/zapis, opcje) rysuje jedna pętla okien dialogowych gry

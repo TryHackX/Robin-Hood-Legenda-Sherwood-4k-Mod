@@ -231,16 +231,17 @@ void SetSmoothEdgeClamp(bool on) {
     t_edgeClamp = on;
 }
 
-void SmoothSprite2x16(const Buf& dst, const RECT& dr, const Buf& src, const RECT& sr, const RECT& clip,
-                      uint32_t key, uint32_t marker, uint32_t factor, const uint16_t* maskBGR,
-                      bool mirrorX, bool mirrorY) {
+namespace {
+// The filter itself: for every destination row of `clip` it hands the two filtered source rows
+// and their vertical weights to `emitRow(y, ca, cb, oa, ob, sa, sb, wya, wyb)` - per column n
+// of the clip: colour sums ca/cb (spread RGB565), opaque weights oa/ob and shadow weights sa/sb
+// (0..4 each); wya + wyb = 4. The caller turns them into pixels.
+template <typename EmitRow>
+void SmoothCore(const RECT& dr, const Buf& src, const RECT& sr, const RECT& clip, uint32_t key, uint32_t marker,
+                bool mirrorX, bool mirrorY, EmitRow&& emitRow) {
     const int sw = sr.right - sr.left;
     const int sh = sr.bottom - sr.top;
     const int cw = clip.right - clip.left;
-    if (sw <= 0 || sh <= 0 || cw <= 0 || clip.bottom <= clip.top) return;
-    static const uint16_t kMask565[3] = { 0x1F00, 0x1F80, 0x1F00 };
-    const uint16_t* mask = maskBGR ? maskBGR : kMask565;
-    const int32_t mul = static_cast<int16_t>(static_cast<uint16_t>(factor << 6));
 
     static thread_local FilteredRow rows[2];
     static thread_local std::vector<uint32_t> lineColor; // one source row with a transparent pixel on either side
@@ -314,13 +315,32 @@ void SmoothSprite2x16(const Buf& dst, const RECT& dr, const Buf& src, const RECT
         const FilteredRow& b = rowFor(yb);
         // rowFor may have replaced `a` when it filled `b`: both rows must be present
         const FilteredRow& a2 = (a.row == ya) ? a : rowFor(ya);
+        emitRow(y, a2.color.data(), b.color.data(), a2.opaque.data(), b.opaque.data(), a2.shadow.data(), b.shadow.data(),
+                wya, wyb);
+    }
+}
+
+inline uint16_t Pack(uint32_t acc) {
+    acc = ((acc + 0x01004008u) >> 4) & 0x07E0F81Fu;
+    return static_cast<uint16_t>(acc | (acc >> 16));
+}
+} // namespace
+
+void SmoothSprite2x16(const Buf& dst, const RECT& dr, const Buf& src, const RECT& sr, const RECT& clip,
+                      uint32_t key, uint32_t marker, uint32_t factor, const uint16_t* maskBGR,
+                      bool mirrorX, bool mirrorY) {
+    const int sw = sr.right - sr.left;
+    const int sh = sr.bottom - sr.top;
+    const int cw = clip.right - clip.left;
+    if (sw <= 0 || sh <= 0 || cw <= 0 || clip.bottom <= clip.top) return;
+    static const uint16_t kMask565[3] = { 0x1F00, 0x1F80, 0x1F00 };
+    const uint16_t* mask = maskBGR ? maskBGR : kMask565;
+    const int32_t mul = static_cast<int16_t>(static_cast<uint16_t>(factor << 6));
+
+    SmoothCore(dr, src, sr, clip, key, marker, mirrorX, mirrorY,
+               [&](int y, const uint32_t* ca, const uint32_t* cb, const uint8_t* oa, const uint8_t* ob,
+                   const uint8_t* sa, const uint8_t* sb, uint32_t wya, uint32_t wyb) {
         auto* d = reinterpret_cast<uint16_t*>(dst.bits + static_cast<size_t>(y) * dst.pitch) + clip.left;
-        const uint32_t* ca = a2.color.data();
-        const uint32_t* cb = b.color.data();
-        const uint8_t* oa = a2.opaque.data();
-        const uint8_t* ob = b.opaque.data();
-        const uint8_t* sa = a2.shadow.data();
-        const uint8_t* sb = b.shadow.data();
         for (int n = 0; n < cw; ++n) {
             const uint32_t opaque = wya * oa[n] + wyb * ob[n];      // 0..16
             const uint32_t shadow = wya * sa[n] + wyb * sb[n];
@@ -331,10 +351,191 @@ void SmoothSprite2x16(const Buf& dst, const RECT& dr, const Buf& src, const RECT
                 acc += (16 - opaque - shadow) * Spread(under);
                 if (shadow) acc += shadow * Spread(DarkenShadow(under, mul, mask));
             }
-            acc = ((acc + 0x01004008u) >> 4) & 0x07E0F81Fu;
-            d[n] = static_cast<uint16_t>(acc | (acc >> 16));
+            d[n] = Pack(acc);
+        }
+    });
+}
+
+// ------------------------------------------------------------------ interface pictures, cached
+// The interface is drawn again in every frame, and at the 2x interface scale every one of its
+// pictures went through the filter above: about 0.6 million pixels a frame for the HUD alone,
+// some 5 ms - half the time of a whole frame (Perf/Blit lines 2026-11-15: "stretch 2.5 Mpx
+// 20 ms per tick"). The pictures hardly ever change, so the filtered result is kept: per
+// picture its fully opaque pixels as final colours, its soft edge as colour sums with their
+// coverage (blended with what is under them when drawn - the same arithmetic, the same result).
+// An entry is used only while the source pixels the filter reads (its 1-pixel border included)
+// are exactly what they were; a picture that keeps changing is filtered directly.
+namespace {
+    struct SmoothRun {
+        int y = 0, x0 = 0, x1 = 0;      // row and columns [x0, x1) of the magnified picture
+        bool full = false;              // true: final colours; false: colour sums + coverage
+        size_t off = 0;                 // into color (full) or acc / cover (soft edge)
+    };
+    struct SmoothEntry {
+        const uint8_t* bits = nullptr;
+        int pitch = 0, srcW = 0, srcH = 0;
+        RECT sr{};
+        uint32_t key = 0;
+        bool clamp = false;
+        RECT area{};                    // the source pixels the filter reads
+        std::vector<uint16_t> seen;     // ... as they were when the entry was made
+        std::vector<SmoothRun> runs;
+        std::vector<uint16_t> color;
+        std::vector<uint32_t> acc;
+        std::vector<uint8_t>  cover;    // 1..15 (sixteenths)
+        uint64_t lastUse = 0;
+        size_t   bytes = 0;
+        unsigned changes = 0;           // consecutive uses that found the picture changed
+        unsigned direct = 0;            // uses left that filter directly (a picture that keeps changing)
+    };
+    std::vector<SmoothEntry*> g_smooth;
+    size_t   g_smoothBytes = 0;
+    uint64_t g_smoothUse = 0;
+    constexpr size_t kSmoothMaxBytes = 48u << 20;
+    constexpr size_t kSmoothMaxEntries = 1024;
+
+    size_t EntryBytes(const SmoothEntry& e) {
+        return sizeof(SmoothEntry) + e.seen.capacity() * 2 + e.runs.capacity() * sizeof(SmoothRun) +
+               e.color.capacity() * 2 + e.acc.capacity() * 4 + e.cover.capacity();
+    }
+
+    bool SameSource(const SmoothEntry& e, const Buf& src) {
+        const int aw = e.area.right - e.area.left;
+        const uint16_t* seen = e.seen.data();
+        for (int y = e.area.top; y < e.area.bottom; ++y, seen += aw) {
+            const auto* row = reinterpret_cast<const uint16_t*>(src.bits + static_cast<size_t>(y) * src.pitch) + e.area.left;
+            if (std::memcmp(row, seen, static_cast<size_t>(aw) * 2) != 0) return false;
+        }
+        return true;
+    }
+
+    void Build(SmoothEntry& e, const Buf& src) {
+        const int aw = e.area.right - e.area.left, ah = e.area.bottom - e.area.top;
+        e.seen.resize(static_cast<size_t>(aw) * ah);
+        for (int y = 0; y < ah; ++y) {
+            std::memcpy(e.seen.data() + static_cast<size_t>(y) * aw,
+                        reinterpret_cast<const uint16_t*>(src.bits + static_cast<size_t>(e.area.top + y) * src.pitch) + e.area.left,
+                        static_cast<size_t>(aw) * 2);
+        }
+        e.runs.clear();
+        e.color.clear();
+        e.acc.clear();
+        e.cover.clear();
+        const int dw = 2 * (e.sr.right - e.sr.left), dh = 2 * (e.sr.bottom - e.sr.top);
+        const RECT whole{ 0, 0, dw, dh };
+        const bool clampBefore = t_edgeClamp;
+        t_edgeClamp = e.clamp;
+        SmoothCore(whole, src, e.sr, whole, e.key, kNoColor, false, false,
+                   [&](int y, const uint32_t* ca, const uint32_t* cb, const uint8_t* oa, const uint8_t* ob,
+                       const uint8_t*, const uint8_t*, uint32_t wya, uint32_t wyb) {
+            int n = 0;
+            while (n < dw) {
+                const uint32_t first = wya * oa[n] + wyb * ob[n];
+                if (first == 0) { ++n; continue; }
+                SmoothRun run;
+                run.y = y;
+                run.x0 = n;
+                run.full = first == 16;
+                run.off = run.full ? e.color.size() : e.acc.size();
+                for (; n < dw; ++n) {
+                    const uint32_t o = wya * oa[n] + wyb * ob[n];
+                    if (o == 0 || (o == 16) != run.full) break;
+                    const uint32_t acc = wya * ca[n] + wyb * cb[n];
+                    if (run.full) {
+                        e.color.push_back(Pack(acc));
+                    } else {
+                        e.acc.push_back(acc);
+                        e.cover.push_back(static_cast<uint8_t>(o));
+                    }
+                }
+                run.x1 = n;
+                e.runs.push_back(run);
+            }
+        });
+        t_edgeClamp = clampBefore;
+    }
+
+    void DrawEntry(const SmoothEntry& e, const Buf& dst, const RECT& dr, const RECT& clip) {
+        const int cx0 = clip.left - dr.left, cx1 = clip.right - dr.left;
+        const int cy0 = clip.top - dr.top, cy1 = clip.bottom - dr.top;
+        for (const SmoothRun& r : e.runs) {
+            if (r.y < cy0 || r.y >= cy1) continue;
+            const int x0 = (std::max)(r.x0, cx0), x1 = (std::min)(r.x1, cx1);
+            if (x1 <= x0) continue;
+            auto* d = reinterpret_cast<uint16_t*>(dst.bits + static_cast<size_t>(dr.top + r.y) * dst.pitch) + dr.left;
+            if (r.full) {
+                std::memcpy(d + x0, e.color.data() + r.off + (x0 - r.x0), static_cast<size_t>(x1 - x0) * 2);
+                continue;
+            }
+            const uint32_t* acc = e.acc.data() + r.off - r.x0;
+            const uint8_t* cover = e.cover.data() + r.off - r.x0;
+            for (int x = x0; x < x1; ++x) {
+                d[x] = Pack(acc[x] + (16u - cover[x]) * Spread(d[x]));
+            }
         }
     }
+
+    void TrimCache() {
+        if (g_smoothBytes <= kSmoothMaxBytes && g_smooth.size() <= kSmoothMaxEntries) return;
+        std::sort(g_smooth.begin(), g_smooth.end(), [](const SmoothEntry* a, const SmoothEntry* b) { return a->lastUse > b->lastUse; });
+        while (!g_smooth.empty() && (g_smoothBytes > kSmoothMaxBytes * 3 / 4 || g_smooth.size() > kSmoothMaxEntries * 3 / 4)) {
+            g_smoothBytes -= g_smooth.back()->bytes;
+            delete g_smooth.back();
+            g_smooth.pop_back();
+        }
+    }
+}
+
+void SmoothPicture2x16(const Buf& dst, const RECT& dr, const Buf& src, const RECT& sr, const RECT& clip, uint32_t key) {
+    const int sw = sr.right - sr.left, sh = sr.bottom - sr.top;
+    if (sw <= 0 || sh <= 0 || clip.right <= clip.left || clip.bottom <= clip.top) return;
+    const bool clamp = t_edgeClamp;
+    SmoothEntry* e = nullptr;
+    for (SmoothEntry* c : g_smooth) {
+        if (c->bits == src.bits && c->pitch == src.pitch && c->srcW == src.w && c->srcH == src.h && c->key == key &&
+            c->clamp == clamp && EqualRect(&c->sr, &sr)) {
+            e = c;
+            break;
+        }
+    }
+    if (!e) {
+        e = new SmoothEntry();
+        e->bits = src.bits;
+        e->pitch = src.pitch;
+        e->srcW = src.w;
+        e->srcH = src.h;
+        e->sr = sr;
+        e->key = key;
+        e->clamp = clamp;
+        e->area = RECT{ (std::max)(0L, sr.left - 1), (std::max)(0L, sr.top - 1),
+                        (std::min)(static_cast<LONG>(src.w), sr.right + 1), (std::min)(static_cast<LONG>(src.h), sr.bottom + 1) };
+        g_smooth.push_back(e);
+        e->changes = 0;
+    } else if (e->direct > 0) {
+        // a picture that keeps changing: filtered directly for a while
+        --e->direct;
+        e->lastUse = ++g_smoothUse;
+        SmoothSprite2x16(dst, dr, src, sr, clip, key, kNoColor, 256, nullptr, false, false);
+        return;
+    } else if (SameSource(*e, src)) {
+        e->changes = 0;
+        e->lastUse = ++g_smoothUse;
+        DrawEntry(*e, dst, dr, clip);
+        return;
+    } else if (++e->changes >= 4) {
+        e->changes = 0;
+        e->direct = 120;
+        e->lastUse = ++g_smoothUse;
+        SmoothSprite2x16(dst, dr, src, sr, clip, key, kNoColor, 256, nullptr, false, false);
+        return;
+    }
+    g_smoothBytes -= e->bytes;
+    Build(*e, src);
+    e->bytes = EntryBytes(*e);
+    g_smoothBytes += e->bytes;
+    e->lastUse = ++g_smoothUse;
+    DrawEntry(*e, dst, dr, clip);
+    TrimCache();
 }
 
 } // namespace DDM

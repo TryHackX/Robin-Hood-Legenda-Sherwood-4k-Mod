@@ -289,47 +289,38 @@ namespace {
         return true;
     }
 
+    bool g_snapValid = false;            // the world texture holds this frame's world
+    std::vector<uint32_t> g_snap8888;    // conversion buffer when the card has no RGB565 textures
+
     void ReleaseSnap() {
         SafeRelease(g_snapSrv);
         SafeRelease(g_snapTex);
         g_snapW = g_snapH = 0;
+        g_snapValid = false;
     }
 
-    // the world copy of the smooth zoom in a texture like the frame's; true = use it
-    bool PrepareSnap(const ViewZoom::View& v) {
-        if (!g_snapTex || g_snapW != v.w || g_snapH != v.h) {
+    // the world texture of the smooth zoom (filled by UploadWorld straight from the back buffer)
+    bool EnsureSnap(int w, int h) {
+        if (g_snapTex && g_snapW == w && g_snapH == h) return true;
+        ReleaseSnap();
+        D3D11_TEXTURE2D_DESC td{};
+        td.Width = static_cast<UINT>(w);
+        td.Height = static_cast<UINT>(h);
+        td.MipLevels = 1;
+        td.ArraySize = 1;
+        td.Format = g_has565 ? DXGI_FORMAT_B5G6R5_UNORM : DXGI_FORMAT_B8G8R8X8_UNORM;
+        td.SampleDesc.Count = 1;
+        td.Usage = D3D11_USAGE_DEFAULT;
+        td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        if (FAILED(g_dev->CreateTexture2D(&td, nullptr, &g_snapTex)) ||
+            FAILED(g_dev->CreateShaderResourceView(g_snapTex, nullptr, &g_snapSrv))) {
             ReleaseSnap();
-            D3D11_TEXTURE2D_DESC td{};
-            td.Width = static_cast<UINT>(v.w);
-            td.Height = static_cast<UINT>(v.h);
-            td.MipLevels = 1;
-            td.ArraySize = 1;
-            td.Format = g_has565 ? DXGI_FORMAT_B5G6R5_UNORM : DXGI_FORMAT_B8G8R8X8_UNORM;
-            td.SampleDesc.Count = 1;
-            td.Usage = D3D11_USAGE_DYNAMIC;
-            td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-            td.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
-            if (FAILED(g_dev->CreateTexture2D(&td, nullptr, &g_snapTex)) ||
-                FAILED(g_dev->CreateShaderResourceView(g_snapTex, nullptr, &g_snapSrv))) {
-                ReleaseSnap();
-                return false;
-            }
-            g_snapW = v.w;
-            g_snapH = v.h;
-            Logger::Info("Present: smooth zoom world texture %dx%d.", v.w, v.h);
+            return false;
         }
-        D3D11_MAPPED_SUBRESOURCE map{};
-        if (FAILED(g_ctx->Map(g_snapTex, 0, D3D11_MAP_WRITE_DISCARD, 0, &map))) return false;
-        auto* dst = static_cast<uint8_t*>(map.pData);
-        const auto* src = reinterpret_cast<const uint8_t*>(v.snap);
-        const size_t row = static_cast<size_t>(v.w) * 2;
-        if (g_has565) {
-            for (int y = 0; y < v.h; ++y) std::memcpy(dst + static_cast<size_t>(y) * map.RowPitch, src + y * row, row);
-        } else {
-            RenderDDraw::ConvertRGB565ToXRGB8888_SSE2(v.snap, static_cast<int>(row), reinterpret_cast<uint32_t*>(dst),
-                                                      static_cast<int>(map.RowPitch), v.w, v.h);
-        }
-        g_ctx->Unmap(g_snapTex, 0);
+        g_snapW = w;
+        g_snapH = h;
+        g_snapValid = false;
+        Logger::Info("Present: smooth zoom world texture %dx%d.", w, h);
         return true;
     }
 
@@ -659,8 +650,8 @@ namespace {
             h = crop.bottom - crop.top;
             backdropOn = PrepareBackdrop(frameW, frameH);           // a mission's dialog: only it enlarged
             layerOn = !backdropOn && PrepareLayer(crop, w, h);      // HD menu pictures, where there are some
-        } else if (lupaFrame && lupa.w == w && lupa.h == h) {
-            lupaOn = PrepareSnap(lupa);
+        } else if (lupaFrame && g_snapValid && g_snapTex && g_snapW == w && g_snapH == h) {
+            lupaOn = true;      // the world went to its texture before the windows were drawn
         }
         if (!EnsureTexture(w, h)) {
             return false;
@@ -849,6 +840,58 @@ void Frame(const uint8_t* bits, int pitch, int w, int h) {
         UiScale::MenuZoomUnavailable();
         FrameGDI(bits, pitch, w, h);
     }
+}
+
+bool UploadWorld(const uint8_t* bits, int pitch, int w, int h) {
+    std::lock_guard<std::mutex> lock(g_lock);
+    if (!bits || w <= 0 || h <= 0 || g_backend != Backend::D3D11 || !g_dev || !g_ctx || !EnsureSnap(w, h)) {
+        g_snapValid = false;
+        return false;
+    }
+    if (g_has565) {
+        g_ctx->UpdateSubresource(g_snapTex, 0, nullptr, bits, static_cast<UINT>(pitch), 0);
+    } else {
+        g_snap8888.resize(static_cast<size_t>(w) * h);
+        RenderDDraw::ConvertRGB565ToXRGB8888_SSE2(reinterpret_cast<const uint16_t*>(bits), pitch, g_snap8888.data(), w * 4, w, h);
+        g_ctx->UpdateSubresource(g_snapTex, 0, nullptr, g_snap8888.data(), static_cast<UINT>(w * 4), 0);
+    }
+    g_snapValid = true;
+    return true;
+}
+
+bool ReadWorld(std::vector<uint16_t>& out, int& w, int& h) {
+    std::lock_guard<std::mutex> lock(g_lock);
+    if (!g_snapValid || !g_snapTex || !g_dev || !g_ctx) return false;
+    D3D11_TEXTURE2D_DESC td{};
+    g_snapTex->GetDesc(&td);
+    td.Usage = D3D11_USAGE_STAGING;
+    td.BindFlags = 0;
+    td.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    ID3D11Texture2D* staging = nullptr;
+    if (FAILED(g_dev->CreateTexture2D(&td, nullptr, &staging))) return false;
+    g_ctx->CopyResource(staging, g_snapTex);
+    D3D11_MAPPED_SUBRESOURCE map{};
+    bool ok = SUCCEEDED(g_ctx->Map(staging, 0, D3D11_MAP_READ, 0, &map));
+    if (ok) {
+        w = static_cast<int>(td.Width);
+        h = static_cast<int>(td.Height);
+        out.resize(static_cast<size_t>(w) * h);
+        const auto* src = static_cast<const uint8_t*>(map.pData);
+        for (int y = 0; y < h; ++y) {
+            if (g_has565) {
+                std::memcpy(out.data() + static_cast<size_t>(y) * w, src + static_cast<size_t>(y) * map.RowPitch, static_cast<size_t>(w) * 2);
+            } else {
+                const auto* row = reinterpret_cast<const uint32_t*>(src + static_cast<size_t>(y) * map.RowPitch);
+                for (int x = 0; x < w; ++x) {
+                    const uint32_t c = row[x];
+                    out[static_cast<size_t>(y) * w + x] = static_cast<uint16_t>(((c >> 8) & 0xF800) | ((c >> 5) & 0x07E0) | ((c >> 3) & 0x001F));
+                }
+            }
+        }
+        g_ctx->Unmap(staging, 0);
+    }
+    staging->Release();
+    return ok;
 }
 
 const char* BackendName() {

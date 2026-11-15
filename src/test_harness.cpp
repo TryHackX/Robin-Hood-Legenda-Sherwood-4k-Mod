@@ -83,13 +83,12 @@ namespace {
         }
     }
 
+    // Without an exception: after a mission the engine pointer stays set to freed memory, and an
+    // access violation - even a caught one - reaches the crash logger first, which then wrote a
+    // "FATAL" block for a harmless "stat" (2026-11-15) and has no report left for a real crash.
     bool ReadMem(uintptr_t addr, void* out, size_t n) {
-        __try {
-            std::memcpy(out, reinterpret_cast<const void*>(addr), n);
-            return true;
-        } __except (EXCEPTION_EXECUTE_HANDLER) {
-            return false;
-        }
+        SIZE_T done = 0;
+        return ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<LPCVOID>(addr), out, n, &done) && done == n;
     }
 
     bool CursorPos(float& x, float& y) {
@@ -304,8 +303,13 @@ namespace {
         } else if (!std::strcmp(cmd, "lupa")) {
             // smooth zoom: lupa             (state)
             //              lupa Z           (jump to the effective zoom Z at the next game tick)
+            //              lupa gamein | gameout  (the engine's own zoom animation, as a script starts it)
             float z = 0.0f;
-            if (std::sscanf(args, "%f", &z) == 1 && z > 0.0f) {
+            char word[16]{};
+            if (std::sscanf(args, "%15s", word) == 1 && (!std::strcmp(word, "gamein") || !std::strcmp(word, "gameout"))) {
+                ViewZoom::TestGameZoom(word[4] == 'i' ? +1 : -1);
+                Sleep(1500);    // the animation takes about a second
+            } else if (std::sscanf(args, "%f", &z) == 1 && z > 0.0f) {
                 ViewZoom::TestSetZoom(z);
                 Sleep(400);
             }

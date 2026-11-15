@@ -166,8 +166,30 @@ namespace {
     };
 #pragma pack(pop)
     std::vector<BetweenEntry> g_between;
+    // Per entry how much the generator's two moved source frames disagreed (colour, 0..254 of 255;
+    // 255 = not measured) - hd\sprites\_between\between.q, tools\hd\between_quality.py. The
+    // generator accepted up to 32, its own notes call frames up to ~17 clean and 27-36 soft; in
+    // the game the soft ones alternated with the sharp HD frames ("now HD, now not", ghosts in
+    // fast moves - user report 2026-11-15). Only frames up to HDInBetweenQuality are shown.
+    std::vector<uint8_t> g_betweenQ;
     DataFile g_betweenDat;
     bool   g_betweenTried = false;
+
+    uint32_t Crc32(uint32_t crc, const uint8_t* p, size_t n) {     // as zlib.crc32
+        static uint32_t table[256];
+        static bool ready = false;
+        if (!ready) {
+            for (uint32_t i = 0; i < 256; ++i) {
+                uint32_t c = i;
+                for (int k = 0; k < 8; ++k) c = (c & 1) ? 0xEDB88320u ^ (c >> 1) : c >> 1;
+                table[i] = c;
+            }
+            ready = true;
+        }
+        crc = ~crc;
+        while (n--) crc = table[(crc ^ *p++) & 0xFF] ^ (crc >> 8);
+        return ~crc;
+    }
     std::atomic<bool>     g_betweenOn{ false };
     std::atomic<unsigned> g_betweenDrawn{ 0 };
     std::unordered_map<const uint8_t*, Decoded> g_decoded; // main thread only
@@ -625,6 +647,34 @@ namespace {
         size_t usable = 0;
         for (const BetweenEntry& e : g_between) usable += e.size != 0;
         Logger::Info("HD sprites: %zu in-between frames available (%zu frame pairs known).", usable, g_between.size());
+
+        // their quality (see g_betweenQ): only for exactly this index
+        g_betweenQ.clear();
+        HANDLE qf = CreateFileA((dir + "between.q").c_str(), GENERIC_READ, share, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (qf == INVALID_HANDLE_VALUE) {
+            Logger::Info("HD sprites: no quality list for them (hd\\sprites\\_between\\between.q) - all are used.");
+            return;
+        }
+        struct QHeader { char magic[4]; uint32_t version, count, crc; } qh{};
+        uint32_t crc = Crc32(0, reinterpret_cast<const uint8_t*>(&hdr), sizeof(hdr));
+        crc = Crc32(crc, reinterpret_cast<const uint8_t*>(g_between.data()), g_between.size() * sizeof(BetweenEntry));
+        bool qok = ReadFile(qf, &qh, sizeof(qh), &got, nullptr) && got == sizeof(qh) && std::memcmp(qh.magic, "HDBQ", 4) == 0 &&
+                   qh.version == 1 && qh.count == g_between.size() && qh.crc == crc;
+        if (qok) {
+            g_betweenQ.resize(qh.count);
+            qok = ReadFile(qf, g_betweenQ.data(), qh.count, &got, nullptr) && got == qh.count;
+        }
+        CloseHandle(qf);
+        if (!qok) {
+            g_betweenQ.clear();
+            Logger::Warn("HD sprites: between.q does not belong to this in-between store - all frames are used.");
+            return;
+        }
+        const int limit = SherwoodConfig::Get().hdInBetweenQuality;
+        size_t kept = 0;
+        for (size_t i = 0; i < g_between.size(); ++i) kept += g_between[i].size != 0 && g_betweenQ[i] <= limit;
+        Logger::Info("HD sprites: in-between frames up to a difference of %d of 255 (HDInBetweenQuality): %zu of %zu used.",
+                     limit, kept, usable);
     }
 
     // The frame half-way between `prev` and `cur` (either order), and where its top-left corner
@@ -638,6 +688,9 @@ namespace {
                                              return e.a != k.first ? e.a < k.first : e.b < k.second;
                                          });
         if (it == g_between.end() || it->a != a || it->b != b || it->size == 0) return nullptr;
+        if (!g_betweenQ.empty() && g_betweenQ[static_cast<size_t>(it - g_between.begin())] > SherwoodConfig::Get().hdInBetweenQuality) {
+            return nullptr;         // too soft: the animation as the game shows it
+        }
         *dx = cur == it->a ? it->dxA : it->dxB;
         *dy = cur == it->a ? it->dyA : it->dyB;
         const uint64_t key = (1ull << 62) | (static_cast<uint64_t>(tone & 3) << 40) | static_cast<uint64_t>(it - g_between.begin());

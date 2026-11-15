@@ -456,11 +456,19 @@ namespace {
         const int ph = (std::min)(lines * rowH + 2 * pad, h);
         const int x0 = (w - pw) / 2, y0 = (h - ph) / 2;
 
-        // the picture behind, at an eighth of its brightness
+        // the picture behind, at an eighth of its brightness - but not when the screen shows the
+        // world magnified (smooth zoom, or the backdrop of a dialog shown that way): the frame
+        // holds it at the engine's size, and it showed through the panel at another scale than
+        // around it (user report 2026-11-15) - a plain dark background then
         g_panel.resize(static_cast<size_t>(pw) * ph);
+        const bool plain = ViewZoom::Magnifying() || UiScale::DialogShown();
         for (int y = 0; y < ph; ++y) {
             const auto* sp = reinterpret_cast<const uint16_t*>(src + static_cast<size_t>(y0 + y) * srcPitch) + x0;
             uint16_t* row = g_panel.data() + static_cast<size_t>(y) * pw;
+            if (plain) {
+                std::fill(row, row + pw, static_cast<uint16_t>(0x10A2));   // very dark olive
+                continue;
+            }
             for (int x = 0; x < pw; ++x) row[x] = static_cast<uint16_t>((sp[x] & 0xC718u) >> 3);
         }
         const Canvas cv{ g_panel.data(), pw, ph };
@@ -536,11 +544,13 @@ namespace {
         const int x0 = w - bw - 4 * s, y0 = h - bh - 4 * s;
         if (!dst || !src || x0 < 0 || y0 < 0) return;
         g_panel.resize(static_cast<size_t>(bw) * bh);
+        // dialogs only: their backdrop may be shown magnified - a plain box (see DrawPanel)
         for (int y = 0; y < bh; ++y) {
-            const auto* sp = reinterpret_cast<const uint16_t*>(src + static_cast<size_t>(y0 + y) * srcPitch) + x0;
             uint16_t* row = g_panel.data() + static_cast<size_t>(y) * bw;
-            for (int x = 0; x < bw; ++x) row[x] = static_cast<uint16_t>((sp[x] & 0xE79Cu) >> 2);
+            std::fill(row, row + bw, static_cast<uint16_t>(0x10A2));
         }
+        (void)src;
+        (void)srcPitch;
         const Canvas cv{ g_panel.data(), bw, bh };
         cv.Text(pad, pad, text, s, kHint);
         CopyOut(dst, dstPitch, wide, x0, y0, bw, bh);

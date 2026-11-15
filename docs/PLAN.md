@@ -251,6 +251,10 @@ Do sprawdzenia przy okazji: czy miganie ikon akcji ma teraz właściwe tempo; po
    - ✔ **v1.1.2 — woda z falami** (2026-11-15, „Tak, rób wodę”): `HDWater=2` (domyślnie) / `3` — woda z obrazu HD
      poruszana falami (przesuwana tylko gładka część obrazu, faktura zostaje ostra), pętla liczona w wątku w tle.
      Opis: `docs\HD_MODE.md` §4. ☐ Ocena użytkownika na prawdziwym stawie (test w tle ma tylko Lincoln, bez wody).
+   - ✔ **v1.1.3 — zgłoszenie 2026-11-15 wieczorem** (3 zrzuty): klatki pośrednie tylko czyste (`HDInBetweenQuality=17`,
+     plik `between.q`; „Robin raz HD, raz nie”, duchy, ruchy walki „w innym miejscu”), reguła sąsiadów w shaderze (plamy
+     w dole paska i w menu), panel F10 z jednolitym tłem przy powiększeniu, menu Esc ~55 ms zamiast ~200 ms. Przedmioty
+     na ziemi są w HD (raport `miss`: wszystko poza rogiem paska 29×95). Opis: `docs\HD_MODE.md` §5c i §7.
    - ✔ **Wydanie na GitHubie** (2026-11-14): v1.0.0 (README po angielsku), paczki grafiki HD jako osobne wydanie
      (7 plików ZIP < 2 GB; magazyn postaci w dwóch częściach — mod czyta `sprites.dat` + `sprites.dat.2`).
 5. ◐ Klatki pośrednie animacji postaci (prośba użytkownika; „jak się nie uda, trudno"): eksperyment zakończony

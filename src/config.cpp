@@ -1,5 +1,6 @@
 #include "config.h"
 #include <windows.h>
+#include <algorithm>
 #include <cstdio>
 
 namespace {
@@ -102,6 +103,7 @@ void SherwoodConfig::Load(const std::string& iniPath) {
     hdWater            = ReadInt("Display", "HDWater", hdWater, p);
     hdSprites          = ReadBool("Display", "HDSprites", hdSprites, p);
     hdInBetween        = ReadBool("Display", "HDInBetween", hdInBetween, p);
+    hdInBetweenQuality = (std::max)(0, (std::min)(255, ReadInt("Display", "HDInBetweenQuality", hdInBetweenQuality, p)));
     hdKeyBetween       = ReadInt("Display", "HDKeyBetween", hdKeyBetween, p);
     uiScale            = ReadInt("Display", "UIScale", uiScale, p);
     mapPosition        = ReadInt("Display", "MapPosition", mapPosition, p);

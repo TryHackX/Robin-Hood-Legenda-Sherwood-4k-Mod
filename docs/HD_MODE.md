@@ -292,6 +292,15 @@ Użytkownik po obejrzeniu arkuszy zapytał, czy „będzie gorzej przez ghosty i
 - Narzędzia: `--stats`, `--selftest N`, `--survey N --sheet PLIK [--sheet-range LO HI | --sheet-thin X]`; logi
   `hd\work\make_inbetweens_all.log`, `make_inbetweens__between_partN.log`, pomiary `hd\work\between_log*.csv`
   (kolumna `thin_kept`).
+- **Próg jakości w grze** (2026-11-15, zgłoszenie: „animacja Robina wygląda dziwnie, jakby raz było HD, raz nie”, zrzut
+  z „duchem” w animacji spoczynku; „ruchy walki jakby w innym miejscu” przy zoomie): generator przepuszczał różnicę
+  koloru do 32/255, a sam opisał klatki do ~17 jako czyste, 27–36 jako miękkie. Rozkład użytecznych: mediana 19,9;
+  > 17 — 68 %, > 24 — 27 %; u Robina 73 % ponad 20. Miękkie klatki przeplatały się z ostrymi klatkami HD.
+  `tools\hd\between_quality.py` zapisuje pomiar każdej pary w kolejności indeksu: `hd\sprites\_between\between.q`
+  (`"HDBQ"`, u32 1, u32 liczba, u32 CRC-32 pliku `between.idx`, potem bajt na parę — 457 KB, idzie w paczce moda);
+  DLL pokazuje tylko pary do `HDInBetweenQuality` (domyślnie 17 → 100 722 z 314 756; 24 → 230 821; 32 = jak w 1.1.x).
+  Zły CRC (inny magazyn) → wszystkie, z ostrzeżeniem w logu. Sprawdzone w tle: w walce (szybkie ruchy) klatek pośrednich
+  nie ma w ogóle, u spokojnych postaci są.
 
 ## 6. Tryb testowy w tle (żeby nie zabierać użytkownikowi ekranu)
 - `tools\htest.ps1 [-Ini plik] [-MenuOnly]` — start ukrytej gry (`SHERWOODFIX_TEST=1`), pominięcie filmów, „Graj!".
@@ -445,6 +454,19 @@ w górę), resztę powiększa prezenter — **tylko świat**:
   (waga = 2 × niebieski z obrazka alfa, z 64; maski kanałów z 0x006C11C8); piksele z alfą 0 zostają nietknięte.
   Analogicznie tryb 0x28201 (0x005E8B10, pierścienie, światła bez klatki HD) przy skali 2,0 — per piksel.
 - Zdjęcia porównawcze i pomiary: `tools\out\tooltip_fixed_x2.png` (po), `tooltip_zoom.png` (przed).
+- **Reguła sąsiadów** (2026-11-15, zgłoszenie: plamy w ciemnym dole paska przy zoomie i w menu): piksel
+  półprzezroczystego obrazka interfejsu bywa przypadkiem równy światu (czarny zostaje czarny po przyciemnieniu) — sam
+  wśród pikseli interfejsu pokazywał kropkę powiększonego świata. W shaderze (`WorldAt`) piksel liczy się jako świat tylko,
+  gdy co najwyżej 4 z 8 sąsiadów nie są światem. To samo dla warstwy 1 (obrazy HD menu, `PictureAt`) i 2 (tło okna
+  dialogowego, `BackAt`). Koszt: 18 odczytów tekstur na piksel — dla karty bez znaczenia.
+- **Panel F10** przy powiększeniu (lupa albo powiększone tło okna dialogowego) ma jednolite ciemne tło: jego „obraz
+  pod spodem” z klatki gry jest w skali silnika i prześwitywał w innej skali niż wokół (zgłoszenie 2026-11-15). Licznik
+  FPS w czasie pauzy (menu Esc) pokazuje klatki samej gry, która rysuje tylko przy zmianach — „8 FPS” na zrzucie
+  użytkownika to nie spadek obrazu (log: ~135–140 pokazanych kl./s).
+- **Otwieranie menu Esc przy lupie** (zgłoszenie „lekki lag, zwiecha”): powiększone przyciemnione tło liczyło się na
+  procesorze w liczbach zmiennoprzecinkowych — ~150–170 ms. Teraz tablica przyciemnionych kolorów (65 536 pozycji), wagi
+  całkowite liczone raz na kolumnę/wiersz, 4 wątki: 15 ms; razem z kopią świata (16 ms) i analizą (~25 ms) ~55 ms zamiast
+  ~200 ms (log: `HD menu: dialog start … (N ms)`, `… magnified xM … (N ms)`).
 
 ### Menu i okna gry na cały ekran (`MenuZoom=1`, Direct3D 11, wysokość wewnętrzna ≥ 960)
 Menu i okna (odprawa, menu Esc, wczytywanie/zapis, opcje) rysuje jedna pętla okien dialogowych gry

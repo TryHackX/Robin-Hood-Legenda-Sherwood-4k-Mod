@@ -27,7 +27,9 @@ original DirectDraw wrapper, plus optional HD graphics prepared with AI models f
 - **HD map backgrounds**, **HD characters and objects**, **HD icons**, **HD menu backgrounds** — from pictures
   prepared with AI models (4 variants, switchable while playing), colours matched to the original. Download them as
   ready-made packs — see "HD graphics" below.
-- Optional in-between frames for character animations (RIFE model) — animations 2× smoother.
+- Optional in-between frames for character animations (RIFE model) — animations 2× smoother. Only the clean ones are
+  shown (`HDInBetweenQuality`, quality list `hd\sprites\_between\between.q` included in the mod archive); fast moves
+  whose generated frames came out soft run as in the original.
 - **Smooth zoom** (magnifier): zoom in and out in small steps (game keys, mouse wheel — about the cursor, the buttons
   in the corner), from "the whole level fills the screen" (no black bands) up to 4× closer. The engine renders at 1.0
   or 2.0 (HD pictures) and the graphics card magnifies the rest — only the world, the interface keeps its size; clicks
@@ -59,7 +61,7 @@ original DirectDraw wrapper, plus optional HD graphics prepared with AI models f
 ## Installation — the complete HD version, step by step
 
 You need two releases from the **Releases** page (right side of the repository page):
-[**SherwoodEngineFix 1.1.2**](https://github.com/TryHackX/Robin-Hood-Legenda-Sherwood-4k-Mod/releases/tag/v1.1.2)
+[**SherwoodEngineFix 1.1.3**](https://github.com/TryHackX/Robin-Hood-Legenda-Sherwood-4k-Mod/releases/tag/v1.1.3)
 (the mod itself, 0.2 MB) and
 [**HD graphics pack 1**](https://github.com/TryHackX/Robin-Hood-Legenda-Sherwood-4k-Mod/releases/tag/hd-pack-1)
 (the HD pictures, 7 archives). Download the files listed under **Assets** — not "Source code (zip)" / "Source code
@@ -70,8 +72,8 @@ needed to play.
 `C:\Program Files (x86)\GOG Galaxy\Games\Robin Hood - The Legend of Sherwood`
 (in GOG Galaxy: the game → ⚙ → Manage installation → Show folder).
 
-**Step 2 — the mod.** From `SherwoodEngineFix-v1.1.2.zip` copy `winmm.dll` and `SherwoodFix.ini` into the game
-folder (next to `Game.exe`).
+**Step 2 — the mod.** Unpack `SherwoodEngineFix-v1.1.3.zip` into the game folder (next to `Game.exe`): `winmm.dll`,
+`SherwoodFix.ini` and the small `hd\sprites\_between\between.q` (the quality list of the in-between frames).
 
 **Step 3 — the HD pictures.** Download these archives from *HD graphics pack 1*:
 

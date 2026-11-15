@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(SherwoodEngineFix VERSION 1.1.2 LANGUAGES C CXX)
+project(SherwoodEngineFix VERSION 1.1.3 LANGUAGES C CXX)
 
 # Enforce 32-bit (x86) architecture
 if(NOT CMAKE_SIZEOF_VOID_P EQUAL 4)

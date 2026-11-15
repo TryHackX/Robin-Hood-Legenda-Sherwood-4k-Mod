@@ -12,6 +12,7 @@
 #include <cstring>
 #include <memory>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -123,35 +124,68 @@ namespace {
         // the way the game darkened it (the colour map just learned), bilinear.
         g_backdropShow.clear();
         if (!g_lupaValid || g_lupa.w != w || g_lupa.h != h || level < n / 5 || g_lupa.m <= 1.0f) return;
+        // Integer arithmetic: darkened colour of every RGB565 value once, source columns/rows and
+        // weights (0..256) once per column/row. (With floats per pixel and channel this took ~150 ms
+        // at 2560x1440 - the hitch when the in-game menu opened, user report 2026-11-15.)
+        const ULONGLONG t0 = GetTickCount64();
         g_backdropShow = g_backdrop;
         const float m = g_lupa.m;
         const int worldRows = (std::min)(h, static_cast<int>(g_lupa.worldH));
-        for (int y = 0; y < worldRows; ++y) {
-            const float fy = g_lupa.cropY + (static_cast<float>(y) + 0.5f) / m - 0.5f;
-            const int y0 = (std::max)(0, (std::min)(h - 1, static_cast<int>(fy)));
-            const int y1 = (std::min)(h - 1, y0 + 1);
-            const float wy = (std::max)(0.0f, (std::min)(1.0f, fy - static_cast<float>(y0)));
-            for (int x = 0; x < w; ++x) {
-                const size_t i = static_cast<size_t>(y) * w + x;
-                if (!(g_backdrop[i] & 0xFF000000u) || g_world[i] != g_lupaWorld[i]) continue;   // dialog picture / interface
-                const float fx = g_lupa.cropX + (static_cast<float>(x) + 0.5f) / m - 0.5f;
-                const int x0 = (std::max)(0, (std::min)(w - 1, static_cast<int>(fx)));
-                const int x1 = (std::min)(w - 1, x0 + 1);
-                const float wx = (std::max)(0.0f, (std::min)(1.0f, fx - static_cast<float>(x0)));
-                const uint32_t c00 = To8888(cand[g_lupaWorld[static_cast<size_t>(y0) * w + x0]]);
-                const uint32_t c01 = To8888(cand[g_lupaWorld[static_cast<size_t>(y0) * w + x1]]);
-                const uint32_t c10 = To8888(cand[g_lupaWorld[static_cast<size_t>(y1) * w + x0]]);
-                const uint32_t c11 = To8888(cand[g_lupaWorld[static_cast<size_t>(y1) * w + x1]]);
-                uint32_t out = 0xFF000000u;
-                for (int s = 0; s < 24; s += 8) {
-                    const float a = static_cast<float>((c00 >> s) & 0xFF) * (1.0f - wx) + static_cast<float>((c01 >> s) & 0xFF) * wx;
-                    const float b = static_cast<float>((c10 >> s) & 0xFF) * (1.0f - wx) + static_cast<float>((c11 >> s) & 0xFF) * wx;
-                    out |= static_cast<uint32_t>(a * (1.0f - wy) + b * wy + 0.5f) << s;
-                }
-                g_backdropShow[i] = out;
-            }
+        static std::vector<uint32_t> dark;          // RGB565 -> darkened 0x00RRGGBB
+        dark.resize(65536);
+        for (uint32_t c = 0; c < 65536; ++c) dark[c] = To8888(cand[c]);
+        static std::vector<int> colA, colB, colW;
+        colA.resize(static_cast<size_t>(w));
+        colB.resize(static_cast<size_t>(w));
+        colW.resize(static_cast<size_t>(w));
+        for (int x = 0; x < w; ++x) {
+            const float fx = g_lupa.cropX + (static_cast<float>(x) + 0.5f) / m - 0.5f;
+            const int x0 = (std::max)(0, (std::min)(w - 1, static_cast<int>(fx)));
+            colA[static_cast<size_t>(x)] = x0;
+            colB[static_cast<size_t>(x)] = (std::min)(w - 1, x0 + 1);
+            colW[static_cast<size_t>(x)] = static_cast<int>((std::max)(0.0f, (std::min)(1.0f, fx - static_cast<float>(x0))) * 256.0f + 0.5f);
         }
-        Logger::Info("HD menu: dialog backdrop shows the level magnified x%.2f, as the smooth zoom did.", m);
+        // a + (b - a) * w / 256 for the red-blue pair and green of 0x00RRGGBB at once
+        auto mix = [](uint32_t a, uint32_t b, uint32_t w) {
+            const uint32_t iw = 256 - w;
+            const uint32_t rb = (((a & 0x00FF00FFu) * iw + (b & 0x00FF00FFu) * w) >> 8) & 0x00FF00FFu;
+            const uint32_t g = (((a & 0x0000FF00u) * iw + (b & 0x0000FF00u) * w) >> 8) & 0x0000FF00u;
+            return rb | g;
+        };
+        // rows in bands on a few threads (each writes only its own rows)
+        auto band = [&](int from, int to) {
+            for (int y = from; y < to; ++y) {
+                const float fy = g_lupa.cropY + (static_cast<float>(y) + 0.5f) / m - 0.5f;
+                const int y0 = (std::max)(0, (std::min)(h - 1, static_cast<int>(fy)));
+                const int y1 = (std::min)(h - 1, y0 + 1);
+                const uint32_t wy = static_cast<uint32_t>((std::max)(0.0f, (std::min)(1.0f, fy - static_cast<float>(y0))) * 256.0f + 0.5f);
+                const uint16_t* r0 = g_lupaWorld.data() + static_cast<size_t>(y0) * w;
+                const uint16_t* r1 = g_lupaWorld.data() + static_cast<size_t>(y1) * w;
+                const size_t row = static_cast<size_t>(y) * w;
+                for (int x = 0; x < w; ++x) {
+                    const size_t i = row + x;
+                    if (!(g_backdrop[i] & 0xFF000000u) || g_world[i] != g_lupaWorld[i]) continue;   // dialog picture / interface
+                    const int xa = colA[static_cast<size_t>(x)], xb = colB[static_cast<size_t>(x)];
+                    const uint32_t wx = static_cast<uint32_t>(colW[static_cast<size_t>(x)]);
+                    const uint32_t top = mix(dark[r0[xa]], dark[r0[xb]], wx);
+                    const uint32_t bottom = mix(dark[r1[xa]], dark[r1[xb]], wx);
+                    g_backdropShow[i] = 0xFF000000u | mix(top, bottom, wy);
+                }
+            }
+        };
+        const int parts = static_cast<int>((std::max)(1u, (std::min)(4u, std::thread::hardware_concurrency())));
+        std::vector<std::thread> helpers;
+        try {
+            for (int p = 1; p < parts; ++p) helpers.emplace_back(band, worldRows * p / parts, worldRows * (p + 1) / parts);
+        } catch (...) {
+            // no threads: the rest on this one
+        }
+        const int done = static_cast<int>(helpers.size()) + 1;
+        band(0, worldRows * 1 / parts);
+        if (done < parts) band(worldRows * done / parts, worldRows);
+        for (std::thread& t : helpers) t.join();
+        Logger::Info("HD menu: dialog backdrop shows the level magnified x%.2f, as the smooth zoom did (%u ms).", m,
+                     static_cast<unsigned>(GetTickCount64() - t0));
     }
 
     // counters (test harness)
@@ -405,6 +439,7 @@ void NoteDialogStart() {
     g_worldValid = false;
     g_lupaValid = false;
     if (!UiScale::MenuZoomOn() || *reinterpret_cast<void* const*>(0x006C0FA8) == nullptr) return;
+    const ULONGLONG t0 = GetTickCount64();
     g_worldValid = DDM::CopyFront(g_world, g_worldW, g_worldH);
     ViewZoom::View v;
     if (g_worldValid && ViewZoom::LastWorld(v) && v.w == g_worldW && v.h == g_worldH) {
@@ -413,6 +448,8 @@ void NoteDialogStart() {
         g_lupa.snap = nullptr;
         g_lupaValid = true;
     }
+    Logger::Info("HD menu: dialog start - level copied%s (%u ms).", g_lupaValid ? " with the magnified world" : "",
+                 static_cast<unsigned>(GetTickCount64() - t0));
 }
 
 int Describe(char* out, int size) {

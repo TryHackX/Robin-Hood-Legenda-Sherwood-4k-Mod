@@ -15,8 +15,25 @@ New-Item -ItemType Directory -Force $pkg | Out-Null
 Copy-Item $dll $pkg
 Copy-Item (Join-Path $root 'release\SherwoodFix.ini') $pkg
 Copy-Item (Join-Path $root 'README.md') $pkg
+# quality of the in-between frames of the HD pack (tools\hd\between_quality.py): small, belongs to the mod
+$q = Join-Path $root 'hd\sprites\_between\between.q'
+if (Test-Path $q) {
+    $qdir = Join-Path $pkg 'hd\sprites\_between'
+    New-Item -ItemType Directory -Force $qdir | Out-Null
+    Copy-Item $q $qdir
+}
 if (Test-Path $zip) { Remove-Item -Force $zip }
-Compress-Archive -Path (Join-Path $pkg '*') -DestinationPath $zip
+# entries named with forward slashes, as the ZIP format wants (Compress-Archive and ZipFile of Windows
+# PowerShell 5.1 write "hd\sprites\...", which some unpackers take for one file name)
+Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
+$fs = [IO.File]::Open($zip, [IO.FileMode]::Create)
+$za = New-Object IO.Compression.ZipArchive($fs, [IO.Compression.ZipArchiveMode]::Create)
+foreach ($f in Get-ChildItem $pkg -Recurse -File) {
+    $name = $f.FullName.Substring($pkg.Length + 1).Replace('\', '/')
+    [void][IO.Compression.ZipFileExtensions]::CreateEntryFromFile($za, $f.FullName, $name, [IO.Compression.CompressionLevel]::Optimal)
+}
+$za.Dispose()
+$fs.Dispose()
 Remove-Item -Recurse -Force $pkg
 
 $hash = (Get-FileHash $zip -Algorithm SHA256).Hash

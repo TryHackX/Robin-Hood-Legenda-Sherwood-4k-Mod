@@ -27,6 +27,7 @@ struct SherwoodConfig {
                                  // (chimney smoke: 1..3 = over the HD picture)
     bool hdSprites = true;       // 2.0 zoom: draw upscaled sprite frames from hd\sprites\<variant>\ where they exist
     bool hdInBetween = false;    // experimental: generated in-between frames of sprite animations (hd\sprites\_between)
+    int  hdInBetweenQuality = 17; // ... only those whose two moved source frames differ by at most this (of 255; 32 = all)
     int uiScale = 0;             // internal width >= 2048: 2 = the game's windows (HUD, map, dialogs) drawn x2 from their screen corners
     int mapPosition = 1;         // with uiScale: where the opened map lies - 0 where the game puts it (top, middle), 1 top-right corner
     bool mapDragCamera = true;   // dragging on the opened map's picture moves the camera (the window is moved by its edges)

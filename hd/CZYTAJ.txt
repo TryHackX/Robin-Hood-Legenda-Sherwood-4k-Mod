@@ -15,7 +15,17 @@ TEGO UŻYWA GRA
 
   menu\<wariant>\*.mhd      Tła menu (menu główne, opcje, wczytywanie...) powiększone tym samym modelem co mapy; gra pokazuje
                             je przy MenuZoom=1 i HDMenu=1. Nowe tła mod sam zbiera do work\menu_frames\, robi je:
-                            python -I tools/hd/upscale_menu.py
+                            python -I tools/hd/upscale_menu.py   (pliki .alias = to samo tło w menu otwartym w misji)
+  menu\remake\*.mhd         Nowe tła menu (remake, na cały ekran 16:9) - mają pierwszeństwo przy HDMenuRemake=1
+                            (F10 -> "MENU W HD"). Wstawia je:  python -I tools/hd/menu_remake.py import
+  fonts\*.hdfont            Czcionki gry 2x większe (model SGI): napisy w misji, w menu i w oknach.
+  menu_parts\*.hdp          Przyciski, pergamin odprawy, pieczęcie, portrety 2x większe (model SGI). Nowe obrazki mod
+                            zbiera do work\menu_parts\, robi je:  python -I tools/hd/upscale_menu_parts.py
+
+REMAKE TEŁ MENU (gra tego nie czyta)
+  remake\                   Tła do przerobienia przez AI do obrazów, zrzuty z układem przycisków, PROMPTY.txt (jak to
+                            zrobić i prompty). Gotowe obrazy wrzuca się do remake\gotowe\ (NN_nazwa.jpg/png).
+                            Robi to:  python -I tools/hd/menu_remake.py export
 
 DO OGLĄDANIA I PORÓWNAŃ (gra tego nie czyta)
   maps_hd\<wariant>\*.png   Podglądy map HD z normalnymi nazwami: dokładnie te same piksele co w plikach .hdmap.
@@ -23,7 +33,8 @@ DO OGLĄDANIA I PORÓWNAŃ (gra tego nie czyta)
                                       python tools/hd/hdmap_to_png.py --variants all   (wszystkie, ok. 0,7 GB każdy)
   maps_hd\_stare\           Nieaktualne próby (np. pierwsza mapa sprzed korekty kolorów). Można usunąć.
   maps_png\*.png            Oryginalne mapy gry (do porównań; także wejście dla modeli AI).
-  menu_png\<wariant>\*.png  Podglądy teł menu HD (i _oryginal\ - tła z gry).
+  menu_png\<wariant>\*.png  Podglądy teł menu HD (i _oryginal\ - tła z gry, remake\ - nowe tła).
+  menu_parts_png\*.png      Podglądy przycisków, pergaminu, pieczęci i portretów HD (na szachownicy).
   compare\                  Arkusze i animacje porównawcze: przed/po, warianty, klatki pośrednie.
 
 DLA NARZĘDZI (gra tego nie czyta)

@@ -16,12 +16,21 @@
   AI; `import` fits the painted pictures and puts them into `hd\menu\remake\`. F10 -> "MENU W HD (TLA, NAPISY)" chooses
   between the original, HD and remade backgrounds (`HDMenuRemake=1` in `SherwoodFix.ini`).
 
+## New menu backgrounds (optional download)
+`SherwoodEngineFix-menu-remake-1.zip` (45 MB): five new menu backgrounds - main menu, options (also player choice and
+films), graphics / sound options, save / load (also keys), credits - painted anew by an image AI (Gemini) after the
+original pictures and fitted to the game's buttons and texts. They fill the whole widescreen screen. Unpack into the
+game folder (it adds `hd\menu\remake\`). Switch in the game: F10 -> "MENU W HD (TLA, NAPISY)" -> "TAK, TLA Z REMAKE
+GDY SA" (the default) / "TAK, TLA HD (AI)" (the upscaled originals of the HD pack) / "NIE (ORYGINAL)".
+
 ## Installation
-1. Unpack this archive into the game folder (next to `Game.exe`): `winmm.dll`, `SherwoodFix.ini`, `hd\fonts\*.hdfont`,
-   `hd\menu_parts\*.hdp`, `hd\menu\<variant>\*.alias` and `hd\sprites\_between\between.q`. Updating from 1.1.x:
-   everything except `SherwoodFix.ini` (yours keeps working; the new option `HDMenuRemake` is on by default).
+1. Unpack `SherwoodEngineFix-v1.1.5.zip` into the game folder (next to `Game.exe`): `winmm.dll`, `SherwoodFix.ini`,
+   `hd\fonts\*.hdfont`, `hd\menu_parts\*.hdp`, `hd\menu\<variant>\*.alias` and `hd\sprites\_between\between.q`.
+   Updating from 1.1.x: everything except `SherwoodFix.ini` (yours keeps working; the new option `HDMenuRemake` is on
+   by default).
 2. For HD graphics download the archives of the **HD graphics pack** release and unpack them into the game folder
    (unchanged, no new download needed).
-3. Start the game as usual. Mod settings in the game: **F10**.
+3. Optional: the new menu backgrounds (above) - unpack `SherwoodEngineFix-menu-remake-1.zip` into the game folder.
+4. Start the game as usual. Mod settings in the game: **F10**.
 
 Uninstall: delete `winmm.dll`. On a 1080p monitor set `Width=1920` and `Height=1080` in `SherwoodFix.ini`.

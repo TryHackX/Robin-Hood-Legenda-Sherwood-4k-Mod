@@ -102,7 +102,13 @@ holds `hd\maps\…`, `hd\sprites\…` and `hd\menu\…`. Check: `hd\sprites\_com
 `sprites.dat` **and** `sprites.dat.2` (from the two character archives). If Windows asks to replace files, answer yes.
 The downloaded `.zip` files can be deleted afterwards.
 
-**Step 4 — play.** Start the game as usual (GOG Galaxy or the shortcut). At the start of a mission the name of the HD
+**Step 4 (optional) — new menu backgrounds.** `SherwoodEngineFix-menu-remake-1.zip` (45 MB, in the
+[1.1.5 release](https://github.com/TryHackX/Robin-Hood-Legenda-Sherwood-4k-Mod/releases/tag/v1.1.5)): five menu
+backgrounds painted anew by an image AI after the original ones, filling the whole widescreen screen. Unpack into the
+game folder (it adds `hd\menu\remake\`). In the game: F10 → "MENU W HD (TLA, NAPISY)" switches between the new
+backgrounds, the upscaled originals and the original menus.
+
+**Step 5 — play.** Start the game as usual (GOG Galaxy or the shortcut). At the start of a mission the name of the HD
 variant appears at the top of the screen for 3 s. F8 compares with the original graphics, F10 opens the mod's
 settings.
 

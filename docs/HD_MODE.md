@@ -553,7 +553,9 @@ Zbieranie: `tools\collect_menus.ps1` (przechodzi ekrany menu ukrytej gry). Polec
   → `hd\remake\` (obraz HD, zrzut z układem przycisków: `tools\menu_layout_shots.ps1`, `PROMPTY.txt` z promptami),
   obrazy z AI (Gemini/ChatGPT) do `hd\remake\gotowe\NN_*.jpg|png`, `menu_remake.py import` → dopasowanie do 16:9,
   mniejsze powiększane modelem (SGI) do 2730×1536, alias. Pierwszy komplet (5 teł z Gemini, 2752×1536 JPG, czyste) —
-  2026-11-15. Zmiana w F10 działa od razu (warstwa odbudowana z zapamiętanego obrazu menu).
+  2026-11-15, opublikowany za zgodą użytkownika („Tak, dodaj”) jako osobny plik wydania v1.1.5:
+  `SherwoodEngineFix-menu-remake-1.zip` (45 MB, `tools\make_remake_pack.ps1`). Zmiana w F10 działa od razu (warstwa
+  odbudowana z zapamiętanego obrazu menu).
 
 ### Panel ustawień moda (F10, `SettingsKey=121`)
 Rysowany w prezenterze do tekstury klatki (składany w zwykłej pamięci z obrazu źródłowego — czytanie zmapowanej

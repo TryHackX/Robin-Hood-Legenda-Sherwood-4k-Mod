@@ -29,6 +29,21 @@ if ($fonts.Count -gt 0) {
     New-Item -ItemType Directory -Force $fdir | Out-Null
     $fonts | Copy-Item -Destination $fdir
 }
+# HD pictures of menus and dialogs (buttons, the briefing's parchment, seals, portraits; tools\hd\upscale_menu_parts.py)
+$parts = @(Get-ChildItem (Join-Path $root 'hd\menu_parts\*.hdp') -ErrorAction SilentlyContinue)
+if ($parts.Count -gt 0) {
+    $pdir = Join-Path $pkg 'hd\menu_parts'
+    New-Item -ItemType Directory -Force $pdir | Out-Null
+    $parts | Copy-Item -Destination $pdir
+}
+# aliases of the HD menu backgrounds of the HD pack (menus opened in a mission find them by these)
+foreach ($d in @(Get-ChildItem (Join-Path $root 'hd\menu') -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -ne 'remake' })) {
+    $al = @(Get-ChildItem (Join-Path $d.FullName '*.alias') -ErrorAction SilentlyContinue)
+    if ($al.Count -eq 0) { continue }
+    $adir = Join-Path $pkg ("hd\menu\" + $d.Name)
+    New-Item -ItemType Directory -Force $adir | Out-Null
+    $al | Copy-Item -Destination $adir
+}
 if (Test-Path $zip) { Remove-Item -Force $zip }
 # entries named with forward slashes, as the ZIP format wants (Compress-Archive and ZipFile of Windows
 # PowerShell 5.1 write "hd\sprites\...", which some unpackers take for one file name)

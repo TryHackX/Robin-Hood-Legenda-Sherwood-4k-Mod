@@ -57,6 +57,19 @@ def model_2x(desc, dtype, rgb, pad):
     return out[pad * 2:pad * 2 + h * 2, pad * 2:pad * 2 + w * 2]
 
 
+def keyed_contour(mask, sigma=0.8, half=0.05):
+    """Coverage of a colour-keyed strip, twice the size, with a smooth contour: the 0/1 mask blurred a little,
+    4x bicubic, a narrow soft step at 0.5, area-reduced to 2x. The model's own coverage of such a mask kept the
+    staircase as irregular lumps with a wide half-transparent rim - the world showed through as light dots along
+    the black outline (user report 2026-11-15, "pikseloza na krawedziach czarnych")."""
+    import cv2
+    b = cv2.GaussianBlur(mask.astype(np.float32), (0, 0), sigma)
+    up = cv2.resize(b, (mask.shape[1] * 4, mask.shape[0] * 4), interpolation=cv2.INTER_CUBIC)
+    t = np.clip((up - (0.5 - half)) / (2 * half), 0, 1)
+    t = t * t * (3 - 2 * t)
+    return np.clip(cv2.resize(t, (mask.shape[1] * 2, mask.shape[0] * 2), interpolation=cv2.INTER_AREA), 0, 1)
+
+
 def upscale(name, strips):
     import torch
     from upscale_sprites import bleed, PAD
@@ -73,8 +86,11 @@ def upscale(name, strips):
         rgb = to_rgb(col).astype(np.float32)
         filled = bleed(rgb, cov > 0)
         c2 = model_2x(desc, dtype, filled, PAD)
-        a2 = model_2x(desc, dtype, np.repeat((cov * 255.0)[..., None], 3, -1), PAD).mean(-1)
-        out.append((np.clip(c2, 0, 255), np.clip(a2 / 255.0, 0, 1)))
+        if alp is None:
+            a2 = keyed_contour(cov)                             # 0/1 mask: smooth contour, narrow edge
+        else:
+            a2 = np.clip(model_2x(desc, dtype, np.repeat((cov * 255.0)[..., None], 3, -1), PAD).mean(-1) / 255.0, 0, 1)
+        out.append((np.clip(c2, 0, 255), a2))
     del desc
     torch.cuda.empty_cache()
     return out

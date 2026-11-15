@@ -7,6 +7,7 @@
 #include "view_zoom.h"
 #include "ddm/ddm.h"
 #include "ddm/ddm_hd_menu.h"
+#include "ddm/ddm_hd_patch.h"
 
 #include <MinHook.h>
 #include <algorithm>
@@ -622,6 +623,9 @@ namespace {
         ++g_dialogLoopDepth;
         o_DialogLoop(dlg, edx);
         --g_dialogLoopDepth;
+        // HD letters and pictures of the dialogs (ddm_hd_patch.h): the next one draws itself anew
+        // (not at the start: the briefing has drawn its parchment by then)
+        if (g_dialogLoopDepth == 0) DDM::HD::Patch::Reset();
     }
 
     // Test harness only: 0x005ECBD0 DrawLine(id, a, b, c) thiscall, ret 0x10 - who draws which

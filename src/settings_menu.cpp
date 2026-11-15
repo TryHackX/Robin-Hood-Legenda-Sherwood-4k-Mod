@@ -55,7 +55,7 @@ namespace {
             case kZoomStep:      return "KROK ZOOMU";
             case kZoomMax:       return "NAJWIEKSZE PRZYBLIZENIE";
             case kMenuZoom:      return "MENU I OKNA GRY";
-            case kHdMenu:        return "TLA MENU W HD (AI)";
+            case kHdMenu:        return "MENU W HD (TLA, NAPISY)";
             case kVSync:         return "SYNCHRONIZACJA PIONOWA (VSYNC)";
             case kFilter:        return "FILTR SKALOWANIA OBRAZU";
             case kScroll:        return "PLYNNE PRZEWIJANIE MAPY";
@@ -127,7 +127,9 @@ namespace {
             case kZoomStep:      std::snprintf(out, n, "%d%%", ViewZoom::StepPercent()); break;
             case kZoomMax:       std::snprintf(out, n, "%.1fX", ViewZoom::MaxPercent() / 100.0); break;
             case kMenuZoom:      std::snprintf(out, n, "%s", UiScale::MenuZoomOn() ? "NA CALY EKRAN" : "ORYGINALNE (MALE)"); break;
-            case kHdMenu:        yesNo(cfg.hdMenu); break;
+            case kHdMenu:
+                std::snprintf(out, n, "%s", !cfg.hdMenu ? "NIE (ORYGINAL)" : (cfg.hdMenuRemake ? "TAK, TLA Z REMAKE GDY SA" : "TAK, TLA HD (AI)"));
+                break;
             case kVSync:         yesNo(cfg.vsync); break;
             case kFilter:
                 std::snprintf(out, n, "%s", cfg.shaderFilter == 0 ? "OSTRE PIKSELE" : (cfg.shaderFilter == 1 ? "OSTRY BILINEARNY" : "MIEKKI"));
@@ -231,10 +233,16 @@ namespace {
                 WriteIni("Display", "MenuZoom", on ? 1 : 0);
                 break;
             }
-            case kHdMenu:
-                cfg.hdMenu = !cfg.hdMenu;
+            case kHdMenu: {
+                // HD with remade backgrounds -> HD (AI upscale) -> original -> ...
+                const int state = !cfg.hdMenu ? 0 : (cfg.hdMenuRemake ? 2 : 1);
+                const int next = ((state + (dir < 0 ? 1 : 2)) % 3);
+                cfg.hdMenu = next != 0;
+                cfg.hdMenuRemake = next == 2;
                 WriteIni("Display", "HDMenu", cfg.hdMenu ? 1 : 0);
+                WriteIni("Display", "HDMenuRemake", cfg.hdMenuRemake ? 1 : 0);
                 break;
+            }
             case kVSync:
                 cfg.vsync = !cfg.vsync;
                 WriteIni("Display", "VSync", cfg.vsync ? 1 : 0);

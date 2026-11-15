@@ -37,6 +37,7 @@ struct SherwoodConfig {
     bool menuZoom = true;        // Direct3D 11, internal height >= 960: menus and dialogs (laid out for 1024x768) shown on the whole window
     int settingsKey = 0x79;      // virtual key of the mod's settings panel (F10); 0 = no panel
     bool hdMenu = true;          // with menuZoom: upscaled menu pictures (hd\menu\<variant>\) where they exist
+    bool hdMenuRemake = true;    // ... and remade ones (hd\menu\remake\, tools\hd\import_menu_remake.py) before those
     int hdKeyBetween = 0x78;     // virtual key that switches them on and off (F9); 0 = none
 
     // [Performance]

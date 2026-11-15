@@ -257,7 +257,15 @@ Do sprawdzenia przy okazji: czy miganie ikon akcji ma teraz właściwe tempo; po
      na ziemi są w HD (raport `miss`: wszystko poza rogiem paska 29×95). Opis: `docs\HD_MODE.md` §5c i §7.
    - ✔ **v1.1.4 — czcionka HD w interfejsie misji** („Tak, czcionka HD”): paski fontów gry rozpoznawane po treści,
      litery z wersji ×2 zrobionych modelem SGI (`tools\hd\upscale_fonts.py`), nowe fonty zbierane same do
-     `hd\work\fonts`. Opis: `docs\HD_MODE.md` §5d. ☐ Tekst w menu i oknach dialogowych (warstwa tekstu w prezenterze).
+     `hd\work\fonts`. Opis: `docs\HD_MODE.md` §5d. ✔ Tekst w menu i oknach dialogowych — v1.1.5.
+   - ✔ **v1.1.5 — menu i okna w HD, nowe tła, menu Esc bez zwiechy** (2026-11-15, „lecisz te wszystkie rzeczy co
+     zostały”, „pixelozy na krawędziach czarnych”, „tło w menu… wygenerować nowe”): gładki czarny obrys fontu HD;
+     napisy, przyciski, pergamin odprawy, pieczęcie i portrety w menu i oknach rysowane drugi raz w HD do „cieni”
+     powierzchni (`docs\HD_MODE.md` §5e); tła menu w HD także w menu otwartych w misji (aliasy), błąd „pierścienia”
+     w opcjach z misji poprawiony; tła z remake'u (`hd\menu\remake\`, `tools\hd\menu_remake.py` export/import, prompty;
+     pierwszy komplet 5 teł z Gemini od użytkownika), F10 z trzema stanami; menu Esc ~80 ms zamiast ~390 ms (barwienie
+     tła przez tablicę kolorów, bit w bit jak gra). Wnętrza budynków sprawdzone: postać w domu jest ukryta, dach zostaje
+     — gra nie pokazuje wnętrz, nic do poprawy. ☐ Listy GDI (klawiszologia, zapisy) nadal powiększane.
    - ✔ **Wydanie na GitHubie** (2026-11-14): v1.0.0 (README po angielsku), paczki grafiki HD jako osobne wydanie
      (7 plików ZIP < 2 GB; magazyn postaci w dwóch częściach — mod czyta `sprites.dat` + `sprites.dat.2`).
 5. ◐ Klatki pośrednie animacji postaci (prośba użytkownika; „jak się nie uda, trudno"): eksperyment zakończony

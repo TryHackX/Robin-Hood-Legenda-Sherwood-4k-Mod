@@ -9,6 +9,7 @@
 #include "ddm/ddm_hd.h"
 #include "ddm/ddm_hd_font.h"
 #include "ddm/ddm_hd_menu.h"
+#include "ddm/ddm_hd_patch.h"
 #include "ddm/ddm_hd_sprites.h"
 
 #include <MinHook.h>
@@ -334,6 +335,11 @@ namespace {
             char text[256];
             DDM::HD::Menu::Describe(text, sizeof(text));
             Ack(seq, "ok %s", text);
+        } else if (!std::strcmp(cmd, "patch")) {
+            // HD letters and pictures of menus and dialogs (ddm_hd_patch.h): counters
+            char text[320];
+            DDM::HD::Patch::Describe(text, sizeof(text));
+            Ack(seq, "ok %s", text);
         } else if (!std::strcmp(cmd, "uiwins")) {
             // the mission's windows: rectangle and what each drew in the last frame
             static char text[8192];
@@ -377,14 +383,21 @@ namespace {
             Ack(seq, "ok dbg=%u", DDM::HD::DebugFlags());
         } else if (!std::strcmp(cmd, "trace")) {
             // the next N surface calls (Blt / Lock / Flip / present) as text: what a frame is made of
+            // "trace N NAME bg" starts it and answers at once (the next commands - a key that opens a
+            // dialog - land inside it); the file closes by itself after N calls.
             int count = 0;
             char name[128]{};
-            if (std::sscanf(args, "%d %127s", &count, name) != 2 || count <= 0 || count > 200000) {
-                Ack(seq, "err usage: trace COUNT NAME");
+            char opt[16]{};
+            if (std::sscanf(args, "%d %127s %15s", &count, name, opt) < 2 || count <= 0 || count > 400000) {
+                Ack(seq, "err usage: trace COUNT NAME [bg]");
                 return;
             }
             const std::string path = g_dir + name + ".txt";
             DDM::TraceCalls(path.c_str(), count);
+            if (!std::strcmp(opt, "bg")) {
+                Ack(seq, "ok started %s", path.c_str());
+                return;
+            }
             const DWORD t0 = GetTickCount();
             while (DDM::TraceActive() && GetTickCount() - t0 < 8000) Sleep(10);
             const bool done = !DDM::TraceActive();

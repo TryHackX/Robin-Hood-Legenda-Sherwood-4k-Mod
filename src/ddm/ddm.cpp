@@ -3,6 +3,7 @@
 #include "ddm_hd.h"
 #include "ddm_hd_font.h"
 #include "ddm_hd_menu.h"
+#include "ddm_hd_patch.h"
 #include "ddm_hd_sprites.h"
 #include "ddm_present.h"
 #include "../config.h"
@@ -143,6 +144,12 @@ void TraceLine(const char* fmt, ...) {
     va_start(args, fmt);
     std::vfprintf(g_traceFile, fmt, args);
     va_end(args);
+    // when it happened (ms, QPC) - where a frame's time goes
+    static LARGE_INTEGER s_freq{};
+    if (!s_freq.QuadPart) QueryPerformanceFrequency(&s_freq);
+    LARGE_INTEGER now{};
+    QueryPerformanceCounter(&now);
+    std::fprintf(g_traceFile, " @%.3f", static_cast<double>(now.QuadPart) * 1000.0 / static_cast<double>(s_freq.QuadPart));
     std::fputc('\n', g_traceFile);
     if (g_traceLeft.fetch_sub(1) <= 1) {
         std::fclose(g_traceFile);
@@ -617,6 +624,7 @@ HRESULT Surface::DoBlt(const RECT* dstRect, Surface* src, const RECT* srcRect, D
         if (ClipToBounds(d, w, h)) {
             Fill16(buf(), d, static_cast<uint16_t>(fx->dwFillColor));
             Diag::AddValue(Diag::C_PX_FILL, static_cast<uint64_t>(d.right - d.left) * (d.bottom - d.top));
+            HD::Patch::OnOverwrite(buf(), d);
         }
         return DD_OK;
     }
@@ -626,6 +634,7 @@ HRESULT Surface::DoBlt(const RECT* dstRect, Surface* src, const RECT* srcRect, D
             Diag::Scope t(Diag::C_BLT_FILL);
             if (ClipToBounds(d, w, h)) {
                 Fill16(buf(), d, fx->dwROP == BLACKNESS ? 0x0000 : 0xFFFF);
+                HD::Patch::OnOverwrite(buf(), d);
             }
             return DD_OK;
         }
@@ -722,12 +731,22 @@ HRESULT Surface::DoBlt(const RECT* dstRect, Surface* src, const RECT* srcRect, D
         const uint64_t px = static_cast<uint64_t>(c.right - c.left) * (c.bottom - c.top);
         if (keyed) {
             Diag::Scope t(Diag::C_BLT_KEY);
+            // menus with the menu zoom: letters and pictures again in HD (ddm_hd_patch.h)
+            static HD::Patch::Op op;    // main thread only
+            bool patch = false;
+            if (Diag::IsMainThread()) {
+                op.Clear();
+                patch = HD::Patch::BeginKeyed(buf(), dx, dy, src->buf(), c, keyColor, op);
+            }
             CopyKey16(buf(), dx, dy, src->buf(), c, keyColor);
+            if (patch) HD::Patch::End(op);
             Diag::AddValue(Diag::C_PX_KEY, px);
         } else {
             Diag::Scope t(Diag::C_BLT_COPY);
             Copy16(buf(), dx, dy, src->buf(), c);
             Diag::AddValue(Diag::C_PX_COPY, px);
+            HD::Patch::OnCopy(buf(), dx, dy, src->buf(), c, g.primary && (this == g.primary || this == g.primary->back),
+                              g.primary && (src == g.primary || src == g.primary->back));
             // a menu screen composed in a surface of the screen's size, copied to the screen
             if (g.primary && (this == g.primary || this == g.primary->back) && src != g.primary && src != g.primary->back &&
                 src->w == w && src->h == h && Diag::IsMainThread()) {
@@ -739,6 +758,10 @@ HRESULT Surface::DoBlt(const RECT* dstRect, Surface* src, const RECT* srcRect, D
 
     // stretched and/or mirrored
     Diag::Scope t(Diag::C_BLT_STRETCH);
+    {
+        RECT oc = d;
+        if (ClipToBounds(oc, w, h)) HD::Patch::OnOverwrite(buf(), oc);   // no longer what a shadow there shows
+    }
     if (uiScaled) {
         // a window of the game, twice as large: filtered (colour key respected); none of the
         // HD substitutions below concern the interface
@@ -853,6 +876,23 @@ void PresentPrimary() {
     if (!p || !p->st.bits) return;
     Diag::Add(Diag::C_PRESENT);
     DDM_TRACE("PRESENT %p(%dx%d)", static_cast<void*>(p), p->w, p->h);
+    {
+        // a hitch between two frames (25..500 ms: longer ones are loading screens) - at most one line a second
+        static LARGE_INTEGER s_freq{}, s_last{}, s_logged{};
+        LARGE_INTEGER now{};
+        QueryPerformanceCounter(&now);
+        if (!s_freq.QuadPart) QueryPerformanceFrequency(&s_freq);
+        const double patchMs = HD::Patch::TakeTimeUs() / 1000.0;     // HD letters / pictures of menus in that time
+        if (s_last.QuadPart) {
+            const double ms = static_cast<double>(now.QuadPart - s_last.QuadPart) * 1000.0 / static_cast<double>(s_freq.QuadPart);
+            if (ms >= 25.0 && ms < 500.0 && now.QuadPart - s_logged.QuadPart > s_freq.QuadPart) {
+                s_logged = now;
+                Logger::Info("Present: %.0f ms between two frames%s (HD menu patches %.1f ms of it).", ms,
+                             UiScale::DialogLoopRunning() ? " (a dialog of the game)" : "", patchMs);
+            }
+        }
+        s_last = now;
+    }
     Present::Frame(p->st.bits, p->pitch, p->w, p->h);
     if (Diag::IsMainThread()) {
         Watchdog::Beat();   // a frame reached the screen: menus and videos count as alive too

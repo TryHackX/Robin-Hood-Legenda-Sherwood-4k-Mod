@@ -6,7 +6,9 @@
 #include "../test_harness.h"
 #include "../ui_scale.h"
 #include "../view_zoom.h"
+#include "ddm_hd.h"
 #include "ddm_hd_menu.h"
+#include "ddm_hd_patch.h"
 
 #include <d3d11.h>
 #include <dxgi1_5.h>
@@ -55,6 +57,7 @@ namespace {
         float fullX, fullY, fullW, fullH;    // the whole frame's rectangle on the output (layer 2)
         float lupaM, lupaWorldH;             // layer 3: magnification, frame rows that hold the world
         float lupaX, lupaY;                  // layer 3: frame position at the output's top-left corner
+        float patchOn, pad0, pad1, pad2;     // menus: HD patches (t6 frame pixel it belongs to, t7 HD) over the layers
     };
 
     // the world before the mission's windows were drawn (layer 3), same format as the frame texture
@@ -104,9 +107,11 @@ namespace {
         "Texture2D backdrop : register(t3);\n"
         "Texture2D world : register(t4);\n"
         "Texture2D backShow : register(t5);\n"
+        "Texture2D<uint> patchRef : register(t6);\n"
+        "Texture2D patchHd : register(t7);\n"
         "SamplerState smpPoint : register(s0);\n"
         "SamplerState smpLinear : register(s1);\n"
-        "cbuffer C : register(b0) { float2 texSize; float2 outSize; float mode; float layer; float2 cropOrigin; float4 full; float4 lupa; };\n"
+        "cbuffer C : register(b0) { float2 texSize; float2 outSize; float mode; float layer; float2 cropOrigin; float4 full; float4 lupa; float4 extra; };\n"
         "uint Pack565(float3 c) {\n"
         "  return ((((uint)(c.r * 255.0 + 0.5)) >> 3) << 11) | ((((uint)(c.g * 255.0 + 0.5)) >> 2) << 5) | (((uint)(c.b * 255.0 + 0.5)) >> 3);\n"
         "}\n"
@@ -136,6 +141,16 @@ namespace {
         "int CountNot_WorldAt(int2 t) { int n = 0; [unroll] for (int dy = -1; dy <= 1; ++dy) [unroll] for (int dx = -1; dx <= 1; ++dx) if ((dx != 0 || dy != 0) && !WorldAt(t + int2(dx, dy))) ++n; return n; }\n"
         "int CountNot_BackAt(int2 t) { int n = 0; [unroll] for (int dy = -1; dy <= 1; ++dy) [unroll] for (int dx = -1; dx <= 1; ++dx) if ((dx != 0 || dy != 0) && !BackAt(t + int2(dx, dy))) ++n; return n; }\n"
         "int CountNot_PictureAt(int2 t) { int n = 0; [unroll] for (int dy = -1; dy <= 1; ++dy) [unroll] for (int dx = -1; dx <= 1; ++dx) if ((dx != 0 || dy != 0) && !PictureAt(t + int2(dx, dy))) ++n; return n; }\n"
+        // menus (ddm_hd_patch.h): does the frame still hold the pixel an HD patch was made for? Letters
+        // are thin - only neighbours that have a patch and no longer match count against it (a lone
+        // match among changed patch pixels is chance)
+        "int PatchState(int2 p) {\n"
+        "  p = clamp(p, int2(0, 0), int2(texSize) - 1);\n"
+        "  uint o = patchRef.Load(int3(p, 0));\n"
+        "  if (o == 0) return 0;\n"
+        "  return Pack565(tex.Load(int3(p, 0)).rgb) == (o & 0xFFFF) ? 1 : 2;\n"
+        "}\n"
+        "int CountPatchOther(int2 t) { int n = 0; [unroll] for (int dy = -1; dy <= 1; ++dy) [unroll] for (int dx = -1; dx <= 1; ++dx) if ((dx != 0 || dy != 0) && PatchState(t + int2(dx, dy)) == 2) ++n; return n; }\n"
         "float3 Filtered(Texture2D t, float2 texel, float2 scale) {\n"
         "  if (mode < 0.5) return t.Sample(smpPoint, texel / texSize).rgb;\n"
         "  if (mode > 1.5) return t.Sample(smpLinear, texel / texSize).rgb;\n"
@@ -147,6 +162,14 @@ namespace {
         "  return t.Sample(smpLinear, (i + ff) / texSize).rgb;\n"
         "}\n"
         "float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target {\n"
+        "  if (extra.x > 0.5) {\n"
+        "    int2 t = int2(min(floor(uv * texSize), texSize - 1.0));\n"
+        "    if (PatchState(t) == 1 && CountPatchOther(t) <= 4) {\n"
+        // inside the pixel's own 2x2 block (its neighbours may hold other things)
+        "      float2 hp = clamp(uv * texSize * 2.0, float2(t) * 2.0 + 0.5, float2(t) * 2.0 + 1.5);\n"
+        "      return float4(patchHd.Sample(smpLinear, hp / (texSize * 2.0)).rgb, 1.0);\n"
+        "    }\n"
+        "  }\n"
         "  if (layer > 2.5) {\n"
         "    float2 fp = uv * texSize;\n"
         "    if (fp.y < lupa.y) {\n"
@@ -401,7 +424,91 @@ namespace {
         return true;
     }
 
+    // HD patches of menus and dialogs (ddm_hd_patch.h): one pair of textures per presented storage
+    // (the flip chain alternates two), like the HD menu layer
+    struct PatchSlot {
+        ID3D11Texture2D* ref = nullptr;
+        ID3D11ShaderResourceView* refSrv = nullptr;
+        ID3D11Texture2D* hd = nullptr;
+        ID3D11ShaderResourceView* hdSrv = nullptr;
+        int w = 0, h = 0;
+        uintptr_t identity = 0;
+        unsigned lastUse = 0;
+    };
+    PatchSlot g_patch[2];
+    unsigned  g_patchUse = 0;
+
+    void ReleasePatch(PatchSlot& s) {
+        SafeRelease(s.refSrv);
+        SafeRelease(s.ref);
+        SafeRelease(s.hdSrv);
+        SafeRelease(s.hd);
+        s.w = s.h = 0;
+        s.identity = 0;
+    }
+
+    // the shadow of the presented storage `frameBits` over `crop` (w x h): uploaded; nullptr = none
+    PatchSlot* PreparePatch(const uint8_t* frameBits, const RECT& crop, int w, int h) {
+        DDM::HD::Menu::Layer layer;
+        uintptr_t identity = 0;
+        if (!DDM::HD::Patch::GetPatch(frameBits, crop, layer, identity) || layer.w != w || layer.h != h) return nullptr;
+        PatchSlot* slot = nullptr;
+        for (auto& s : g_patch) {
+            if (s.identity == identity && s.w == w && s.h == h && s.ref) slot = &s;
+        }
+        bool full = false;
+        if (!slot) {
+            slot = g_patch[0].lastUse <= g_patch[1].lastUse ? &g_patch[0] : &g_patch[1];
+            if (!slot->ref || slot->w != w || slot->h != h) {
+                ReleasePatch(*slot);
+                D3D11_TEXTURE2D_DESC td{};
+                td.Width = static_cast<UINT>(w);
+                td.Height = static_cast<UINT>(h);
+                td.MipLevels = 1;
+                td.ArraySize = 1;
+                td.Format = DXGI_FORMAT_R32_UINT;
+                td.SampleDesc.Count = 1;
+                td.Usage = D3D11_USAGE_DEFAULT;
+                td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+                bool ok = SUCCEEDED(g_dev->CreateTexture2D(&td, nullptr, &slot->ref)) &&
+                          SUCCEEDED(g_dev->CreateShaderResourceView(slot->ref, nullptr, &slot->refSrv));
+                td.Width = static_cast<UINT>(w * 2);
+                td.Height = static_cast<UINT>(h * 2);
+                td.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+                ok = ok && SUCCEEDED(g_dev->CreateTexture2D(&td, nullptr, &slot->hd)) &&
+                     SUCCEEDED(g_dev->CreateShaderResourceView(slot->hd, nullptr, &slot->hdSrv));
+                if (!ok) {
+                    ReleasePatch(*slot);
+                    return nullptr;
+                }
+                slot->w = w;
+                slot->h = h;
+                Logger::Info("Present: HD patch textures %dx%d (HD %dx%d).", w, h, w * 2, h * 2);
+            }
+            slot->identity = identity;
+            full = true;
+        }
+        slot->lastUse = ++g_patchUse;
+        // a new shadow: all of its refs (they clear what an earlier one left in the texture), of the HD
+        // part only what was drawn (the rest is never shown: its refs are 0)
+        if (full) g_ctx->UpdateSubresource(slot->ref, 0, nullptr, layer.orig, static_cast<UINT>(w * 4), 0);
+        if (layer.dirty.right > layer.dirty.left && layer.dirty.bottom > layer.dirty.top) {
+            const RECT& d = layer.dirty;
+            if (!full) {
+                const D3D11_BOX box1{ static_cast<UINT>(d.left), static_cast<UINT>(d.top), 0, static_cast<UINT>(d.right), static_cast<UINT>(d.bottom), 1 };
+                g_ctx->UpdateSubresource(slot->ref, 0, &box1, layer.orig + static_cast<size_t>(d.top) * w + d.left, static_cast<UINT>(w * 4), 0);
+            }
+            const D3D11_BOX box2{ static_cast<UINT>(d.left * 2), static_cast<UINT>(d.top * 2), 0,
+                                  static_cast<UINT>(d.right * 2), static_cast<UINT>(d.bottom * 2), 1 };
+            g_ctx->UpdateSubresource(slot->hd, 0, &box2, layer.hd + static_cast<size_t>(d.top * 2) * (w * 2) + d.left * 2,
+                                     static_cast<UINT>(w * 2 * 4), 0);
+        }
+        return slot;
+    }
+
     void ReleaseD3D() {
+        ReleasePatch(g_patch[0]);
+        ReleasePatch(g_patch[1]);
         ReleaseLayer();
         ReleaseBackdrop();
         ReleaseSnap();
@@ -659,15 +766,20 @@ namespace {
         bool layerOn = false;
         bool backdropOn = false;
         bool lupaOn = false;
+        PatchSlot* patch = nullptr;
         const int frameW = w, frameH = h;
+        const uint8_t* const frameBits = bits;
         ViewZoom::View lupa;
         const bool lupaFrame = ViewZoom::TakeView(lupa);           // the mission's world, magnified
         if (UiScale::MenuZoomCrop(w, h, crop)) {
             bits += static_cast<size_t>(crop.top) * pitch + static_cast<size_t>(crop.left) * 2;
             w = crop.right - crop.left;
             h = crop.bottom - crop.top;
-            backdropOn = PrepareBackdrop(frameW, frameH);           // a mission's dialog: only it enlarged
-            layerOn = !backdropOn && PrepareLayer(crop, w, h);      // HD menu pictures, where there are some
+            const unsigned dbg = DDM::HD::DebugFlags();              // test harness: 64/128/256 leave a layer out
+            backdropOn = !(dbg & 256u) && PrepareBackdrop(frameW, frameH);           // a mission's dialog: only it enlarged
+            layerOn = !backdropOn && !(dbg & 128u) && PrepareLayer(crop, w, h);      // HD menu pictures, where there are some
+            patch = PreparePatch(frameBits, crop, w, h);                            // HD letters and pictures over both
+            if (dbg & 64u) patch = nullptr;
         } else if (lupaFrame && g_snapValid && g_snapTex && g_snapW == w && g_snapH == h) {
             lupaOn = true;      // the world went to its texture before the windows were drawn
         }
@@ -715,6 +827,7 @@ namespace {
             }
             c.cropX = static_cast<float>(crop.left);
             c.cropY = static_cast<float>(crop.top);
+            c.patchOn = patch ? 1.0f : 0.0f;
             int fx = 0, fy = 0, fw = 0, fh = 0;
             FitRect(frameW, frameH, static_cast<int>(g_bbW), static_cast<int>(g_bbH), fx, fy, fw, fh);
             c.fullX = static_cast<float>(fx);
@@ -740,10 +853,11 @@ namespace {
         g_ctx->VSSetShader(g_vs, nullptr, 0);
         g_ctx->PSSetShader(g_ps, nullptr, 0);
         g_ctx->PSSetConstantBuffers(0, 1, &g_cb);
-        ID3D11ShaderResourceView* srvs[6] = { g_srv, layerOn ? g_layerOrigSrv : nullptr, layerOn ? g_layerHdSrv : nullptr,
+        ID3D11ShaderResourceView* srvs[8] = { g_srv, layerOn ? g_layerOrigSrv : nullptr, layerOn ? g_layerHdSrv : nullptr,
                                               backdropOn ? g_backdropSrv : nullptr, lupaOn ? g_snapSrv : nullptr,
-                                              (backdropOn && g_backShowOn) ? g_backShowSrv : nullptr };
-        g_ctx->PSSetShaderResources(0, 6, srvs);
+                                              (backdropOn && g_backShowOn) ? g_backShowSrv : nullptr,
+                                              patch ? patch->refSrv : nullptr, patch ? patch->hdSrv : nullptr };
+        g_ctx->PSSetShaderResources(0, 8, srvs);
         ID3D11SamplerState* samplers[2] = { g_smpPoint, g_smpLinear };
         g_ctx->PSSetSamplers(0, 2, samplers);
         g_ctx->Draw(3, 0);

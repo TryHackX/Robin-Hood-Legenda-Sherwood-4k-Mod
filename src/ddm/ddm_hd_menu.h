@@ -48,6 +48,10 @@ namespace DDM::HD::Menu {
     // screen is still the level (the backdrop is made from it).
     void NoteDialogStart();
 
+    // The HD menu picture under crop pixel (cx, cy) of `crop`, when the canvas there still holds the
+    // picture's pixel `px` (RGB565): its 2x2 block (BGRA, rows `stride` pixels apart); else nullptr.
+    const uint32_t* HdUnder(const RECT& crop, int cx, int cy, uint16_t px, int& stride);
+
     // test harness: counters
     int Describe(char* out, int size);
 }

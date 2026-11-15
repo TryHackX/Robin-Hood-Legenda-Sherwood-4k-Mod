@@ -199,6 +199,35 @@ bool KeyedGlyph2x(const Buf& dst, const RECT& d, const RECT& clip, const Buf& st
     return true;
 }
 
+bool FindAlphaGlyph(const uint16_t* src, const uint16_t* alpha, HdGlyph& out) {
+    Buf sb{}, ab{};
+    if (!FindLockedBuf(src, sb) || !FindLockedBuf(alpha, ab) || sb.bits == ab.bits) return false;
+    const HdStrip* hd = Strip(sb, &ab);
+    if (!hd) return false;
+    const size_t off = static_cast<size_t>(reinterpret_cast<const uint8_t*>(src) - sb.bits);
+    out.colour = hd->colour.data();
+    out.alpha = hd->alpha.data();
+    out.w = hd->w;
+    out.h = hd->h;
+    out.hx = 2 * static_cast<int>((off % static_cast<size_t>(sb.pitch)) / 2);
+    out.hy = 2 * static_cast<int>(off / static_cast<size_t>(sb.pitch));
+    ++g_drawn;
+    return true;
+}
+
+bool FindKeyedGlyph(const Buf& strip, const RECT& s, HdGlyph& out) {
+    const HdStrip* hd = Strip(strip, nullptr);
+    if (!hd) return false;
+    out.colour = hd->colour.data();
+    out.alpha = hd->alpha.data();
+    out.w = hd->w;
+    out.h = hd->h;
+    out.hx = 2 * static_cast<int>(s.left);
+    out.hy = 2 * static_cast<int>(s.top);
+    ++g_drawn;
+    return true;
+}
+
 void SetDump(const char* dir) {
     g_dumpDir = dir ? dir : "";
     if (!g_dumpDir.empty() && g_dumpDir.back() != '\\') g_dumpDir += '\\';

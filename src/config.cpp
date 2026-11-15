@@ -114,6 +114,7 @@ void SherwoodConfig::Load(const std::string& iniPath) {
     menuZoom           = ReadBool("Display", "MenuZoom", menuZoom, p);
     settingsKey        = ReadInt("Display", "SettingsKey", settingsKey, p);
     hdMenu             = ReadBool("Display", "HDMenu", hdMenu, p);
+    hdMenuRemake       = ReadBool("Display", "HDMenuRemake", hdMenuRemake, p);
 
     // [Performance]
     highResolutionTimer       = ReadBool("Performance", "HighResolutionTimer", highResolutionTimer, p);

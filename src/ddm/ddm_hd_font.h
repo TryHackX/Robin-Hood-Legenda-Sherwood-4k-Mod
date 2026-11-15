@@ -20,6 +20,20 @@ namespace DDM::HD::Font {
     // rect `s` of `strip` onto `d` of `dst` (visible part `clip`). True: drawn from the HD strip.
     bool KeyedGlyph2x(const Buf& dst, const RECT& d, const RECT& clip, const Buf& strip, const RECT& s, uint16_t key);
 
+    // A glyph drawn at its size (menus and dialogs with the menu zoom, ddm_hd_patch.h): where its
+    // HD version lies. colour / alpha: the HD strip (w x h), (hx, hy): the HD pixel that belongs to
+    // the 1x pixel the game starts the glyph at (twice its position in the strip).
+    struct HdGlyph {
+        const uint16_t* colour = nullptr;   // RGB565
+        const uint8_t*  alpha = nullptr;    // 0..255
+        int w = 0, h = 0;                   // HD strip size
+        int hx = 0, hy = 0;
+    };
+    // `src` / `alpha` point at the glyph's top-left pixel in a strip and its alpha strip (locked).
+    bool FindAlphaGlyph(const uint16_t* src, const uint16_t* alpha, HdGlyph& out);
+    // rect `s` of a colour-keyed strip
+    bool FindKeyedGlyph(const Buf& strip, const RECT& s, HdGlyph& out);
+
     // Test harness: write every strip seen from now on to `dir` (font_*.raw), until stopped.
     void SetDump(const char* dir);
     int  Describe(char* out, int size);

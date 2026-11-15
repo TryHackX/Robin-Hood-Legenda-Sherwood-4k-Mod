@@ -24,6 +24,7 @@ namespace {
     struct Source {
         unsigned serial = 0, gen = 0, genWrite = 0;
         uint64_t key = 0;
+        uint64_t inner = 0;       // InnerKeyOf, when needed (0: not computed)
         bool valid = false;
     };
     Source g_src;
@@ -57,6 +58,7 @@ namespace {
     unsigned g_backdropGen = 0;
     Source   g_backdropSrc;
     bool     g_backdropValid = false;
+    bool     g_backdropNone = false;     // the last backdrop was no darkened level at all (a menu picture)
     // the level on the screen when the dialog started (the backdrop is made from it)
     std::vector<uint16_t> g_world;
     int  g_worldW = 0, g_worldH = 0;
@@ -83,41 +85,91 @@ namespace {
     // result belongs to the dialog; there the darkened level is put in (for the backdrop shown at
     // its size) and alpha says "dialog".
     void BuildBackdrop(const uint16_t* comp, int w, int h) {
+        LARGE_INTEGER q0{}, q1{}, qf{};
+        QueryPerformanceCounter(&q0);
         g_backdropShow.clear();
         g_backdrop.resize(static_cast<size_t>(w) * h);
         const size_t n = static_cast<size_t>(w) * h;
+        static std::vector<uint32_t> to8888;        // RGB565 -> 0x00RRGGBB, once
+        if (to8888.empty()) {
+            to8888.resize(65536);
+            for (uint32_t c = 0; c < 65536; ++c) to8888[c] = To8888(static_cast<uint16_t>(c));
+        }
         const bool haveWorld = g_worldValid && g_worldW == w && g_worldH == h;
-        if (!haveWorld) {
-            for (size_t i = 0; i < n; ++i) g_backdrop[i] = 0xFF000000u | To8888(comp[i]);
+        RECT crop{};
+        if (!haveWorld || !UiScale::MenuCropRect(w, h, crop)) {
+            for (size_t i = 0; i < n; ++i) g_backdrop[i] = 0xFF000000u | to8888[comp[i]];
+            g_backdropNone = false;
             return;
         }
+        // Only the part the menu zoom shows is looked at (2026-11-15: the whole frame took ~30 ms when
+        // the in-game menu opened): the presenter tests the backdrop only there, and outside it the game
+        // never draws a dialog - the old darkened level stays, shown as it is.
         static std::vector<uint16_t> cand;
         static std::vector<int32_t> votes;
         cand.assign(65536, 0);
         votes.assign(65536, 0);
-        for (size_t i = 0; i < n; ++i) {
+        auto vote = [&](size_t i) {
             const uint16_t a = g_world[i], b = comp[i];
             int32_t& v = votes[a];
             if (v == 0) { cand[a] = b; v = 1; }
             else if (cand[a] == b) ++v;
             else --v;
+        };
+        for (int y = crop.top; y < crop.bottom; ++y) {
+            const size_t row = static_cast<size_t>(y) * w;
+            for (int x = crop.left; x < crop.right; ++x) vote(row + x);
         }
-        size_t level = 0;
-        for (size_t i = 0; i < n; ++i) {
-            const uint16_t dark = cand[g_world[i]];
-            if (comp[i] == dark) {
-                g_backdrop[i] = 0xFF000000u | To8888(comp[i]);
-                ++level;
-            } else {
-                g_backdrop[i] = To8888(dark);       // alpha 0: a picture of the dialog lies here
+        // every 4th pixel of the rest: the colours seen only there get their darkened colour too (the
+        // level magnified by the smooth zoom below takes its colours from the whole frame)
+        for (int y = 0; y < h; y += 2) {
+            const size_t row = static_cast<size_t>(y) * w;
+            const bool rowIn = y >= crop.top && y < crop.bottom;
+            for (int x = 0; x < w; x += 2) {
+                if (rowIn && x >= crop.left && x < crop.right) continue;
+                vote(row + x);
             }
         }
-        // a backdrop that is not the darkened level at all (a menu picture): all enlarged
-        if (level < n / 5) {
+        // The options opened from the in-game menu cover the shown part with a picture of their own:
+        // counted over the whole frame they were 87 % level - the level showed through where dark pixels
+        // of the picture matched it by chance (a dotted ring by the title, 2026-11-15). Black pixels prove
+        // nothing (the vote maps every dark level colour to the black of such a picture) - only the
+        // others count.
+        size_t shownLevel = 0, shown = 0;
+        for (int y = 0; y < h; ++y) {
+            const size_t row = static_cast<size_t>(y) * w;
+            uint32_t* out = g_backdrop.data() + row;
+            const uint16_t* c = comp + row;
+            const bool rowIn = y >= crop.top && y < crop.bottom;
+            for (int x = 0; x < w; ++x) {
+                if (!rowIn || x < crop.left || x >= crop.right) {
+                    out[x] = 0xFF000000u | to8888[c[x]];
+                    continue;
+                }
+                const uint16_t dark = cand[g_world[row + x]];
+                const bool level = c[x] == dark;
+                out[x] = level ? 0xFF000000u | to8888[c[x]] : to8888[dark];   // alpha 0: a picture of the dialog lies here
+                if (c[x] != 0) {
+                    ++shown;
+                    shownLevel += level ? 1u : 0u;
+                }
+            }
+        }
+        if (shown == 0) shown = 1;
+        // a backdrop that is not the darkened level at all (a menu picture): all enlarged - or its
+        // HD menu picture, when there is one (OnScreenCopy)
+        const bool none = shownLevel * 10 < shown * 4;
+        g_backdropNone = none;
+        if (none) {
             for (size_t i = 0; i < n; ++i) g_backdrop[i] &= 0x00FFFFFFu;
         }
-        Logger::Info("HD menu: dialog backdrop - %.0f %% darkened level (shown at its size), the rest enlarged with the dialog.",
-                     100.0 * static_cast<double>(level) / static_cast<double>(n));
+        QueryPerformanceCounter(&q1);
+        QueryPerformanceFrequency(&qf);
+        Logger::Info("HD menu: dialog backdrop - %.0f %% of the shown part darkened level%s (%.1f ms).",
+                     100.0 * static_cast<double>(shownLevel) / static_cast<double>(shown),
+                     none ? " - too little: all enlarged with the dialog" : " (shown at its size), the rest enlarged with the dialog",
+                     static_cast<double>(q1.QuadPart - q0.QuadPart) * 1000.0 / static_cast<double>(qf.QuadPart));
+        const size_t level = none ? 0 : n;      // (the magnified world below: only over a darkened level)
 
         // The level was shown magnified (smooth zoom): where the backdrop shows the world (not the
         // interface: the frame equals the world copy there), it shows the magnified world, darkened
@@ -133,7 +185,7 @@ namespace {
         const int worldRows = (std::min)(h, static_cast<int>(g_lupa.worldH));
         static std::vector<uint32_t> dark;          // RGB565 -> darkened 0x00RRGGBB
         dark.resize(65536);
-        for (uint32_t c = 0; c < 65536; ++c) dark[c] = To8888(cand[c]);
+        for (uint32_t c = 0; c < 65536; ++c) dark[c] = to8888[cand[c]];
         static std::vector<int> colA, colB, colW;
         colA.resize(static_cast<size_t>(w));
         colB.resize(static_cast<size_t>(w));
@@ -230,10 +282,19 @@ namespace {
         ++g_generation;
     }
 
-    void CheckVariant() {
+    std::string g_variantKey;     // the variant and whether remade pictures come first
+    // what the canvases were made from: the source pixels of the shown part, and its key
+    std::vector<uint16_t> g_srcCrop;
+    uint64_t g_curKey = 0, g_curInner = 0;
+
+    // true: the variant changed (the canvases were emptied)
+    bool CheckVariant() {
         const char* v = DDM::HD::MenuVariantName();
-        if (g_variant != v) {
-            g_variant = v;
+        const std::string want = std::string(v ? v : "") + (SherwoodConfig::Get().hdMenuRemake ? "|remake" : "");
+        if (g_variantKey == want) return false;
+        {
+            g_variantKey = want;
+            g_variant = v ? v : "";
             g_pics.clear();
             if (!g_orig.empty()) {
                 std::fill(g_orig.begin(), g_orig.end(), 0u);
@@ -242,17 +303,45 @@ namespace {
                 g_anyLayer = false;
             }
         }
+        return true;
     }
 
     // hd\menu\<variant>\<key>.mhd: "MNHD", u32 1, u16 cropW, cropH, l, t, w, h, then 2w x 2h BGRA
+    // A remade picture (hd\menu\remake\, tools\hd\import_menu_remake.py) comes before the variant's
+    // upscaled one when HDMenuRemake=1. <key>.alias (16 hex digits) names the picture of another key:
+    // the same menu picture with something else around it (see InnerKeyOf).
+    std::shared_ptr<Picture> ReadMhd(const std::string& path);
+    std::shared_ptr<Picture> LoadFrom(const std::string& folder, uint64_t key) {
+        char name[64];
+        std::snprintf(name, sizeof(name), "%016llx", static_cast<unsigned long long>(key));
+        const std::string base = GameDir() + "hd\\menu\\" + folder + "\\" + name;
+        if (auto p = ReadMhd(base + ".mhd")) return p;
+        FILE* f = nullptr;
+        if (fopen_s(&f, (base + ".alias").c_str(), "rb") == 0 && f) {
+            char text[17]{};
+            const size_t n = std::fread(text, 1, 16, f);
+            std::fclose(f);
+            if (n == 16) return ReadMhd(GameDir() + "hd\\menu\\" + folder + "\\" + text + ".mhd");
+        }
+        return nullptr;
+    }
+
     std::shared_ptr<Picture> Load(uint64_t key) {
         const auto it = g_pics.find(key);
         if (it != g_pics.end()) return it->second;
         std::shared_ptr<Picture> pic;
         if (g_variant != "off" && !g_variant.empty()) {
-            char name[64];
-            std::snprintf(name, sizeof(name), "%016llx.mhd", static_cast<unsigned long long>(key));
-            const std::string path = GameDir() + "hd\\menu\\" + g_variant + "\\" + name;
+            if (SherwoodConfig::Get().hdMenuRemake) pic = LoadFrom("remake", key);
+            if (!pic) pic = LoadFrom(g_variant, key);
+        }
+        if (g_pics.size() > 64) g_pics.clear();     // a handful of menu screens; never grows without bound
+        g_pics[key] = pic;
+        return pic;
+    }
+
+    std::shared_ptr<Picture> ReadMhd(const std::string& path) {
+        std::shared_ptr<Picture> pic;
+        {
             FILE* f = nullptr;
             if (fopen_s(&f, path.c_str(), "rb") == 0 && f) {
                 struct { char magic[4]; uint32_t version; uint16_t cropW, cropH, l, t, w, h; } hdr{};
@@ -273,11 +362,26 @@ namespace {
                 }
                 std::fclose(f);
                 if (!pic) Logger::Warn("HD menu: %s could not be read - ignored.", path.c_str());
+                else Logger::Info("HD menu: %s (%ux%u at %u,%u).", path.c_str(), hdr.w, hdr.h, hdr.l, hdr.t);
             }
         }
-        if (g_pics.size() > 64) g_pics.clear();     // a handful of menu screens; never grows without bound
-        g_pics[key] = pic;
         return pic;
+    }
+
+    // The menu picture without what lies around it: the game's 1024x768 layout is centred in the
+    // frame and its pictures fill the rows 142..624 of it (crop pixels 171..1195 x 142..624 at
+    // 1365x768); 2 pixels in from that. Menus opened in a mission (options, load / save) have the
+    // darkened level around their picture instead of black - their whole key never matches the main
+    // menu's. tools\hd\upscale_menu.py writes <inner key>.alias next to each picture.
+    constexpr int kInnerL = 173, kInnerT = 144, kInnerR = 1193, kInnerB = 622;
+    uint64_t InnerKeyOf(const Buf& src, const RECT& crop) {
+        if (crop.right - crop.left != 1365 || crop.bottom - crop.top != 768) return 0;
+        uint64_t h = 0xCBF29CE484222325ull ^ 0x494E4E52ull;   // "INNR"
+        for (int y = crop.top + kInnerT; y < crop.top + kInnerB; ++y) {
+            const uint8_t* row = src.bits + static_cast<size_t>(y) * src.pitch + static_cast<size_t>(crop.left + kInnerL) * 2;
+            h = Fnv1a64(row, static_cast<size_t>(kInnerR - kInnerL) * 2, h);
+        }
+        return h ? h : 1;
     }
 
     // hd\work\menu_frames\<key>.mnf: "MNUF", u32 1, u16 cropW, cropH, frameW, frameH, then the
@@ -322,12 +426,39 @@ namespace {
             g_dirty.bottom = (std::max)(g_dirty.bottom, static_cast<LONG>(b));
         }
     }
+
+    // canvases over crop pixels [l, r) x [t, b) from the source pixels kept in g_srcCrop
+    void FillCanvases(const std::shared_ptr<Picture>& pic, int l, int t, int r, int b) {
+        const bool usable = pic && pic->cropW == g_cw && pic->cropH == g_ch;
+        if (usable) ++g_hdCopies;
+        for (int cy = t; cy < b; ++cy) {
+            const uint16_t* sp = g_srcCrop.data() + static_cast<size_t>(cy) * g_cw;
+            uint32_t* orow = g_orig.data() + static_cast<size_t>(cy) * g_cw;
+            for (int cx = l; cx < r; ++cx) {
+                const int px = cx - (usable ? pic->l : 0), py = cy - (usable ? pic->t : 0);
+                if (usable && px >= 0 && py >= 0 && px < pic->w && py < pic->h) {
+                    orow[cx] = 0x10000u | sp[cx];
+                    const uint32_t* hp = pic->px.data() + static_cast<size_t>(py * 2) * (pic->w * 2) + static_cast<size_t>(px * 2);
+                    uint32_t* hrow = g_hd.data() + static_cast<size_t>(cy * 2) * (g_cw * 2) + static_cast<size_t>(cx * 2);
+                    hrow[0] = hp[0];
+                    hrow[1] = hp[1];
+                    hrow[g_cw * 2] = hp[pic->w * 2];
+                    hrow[g_cw * 2 + 1] = hp[pic->w * 2 + 1];
+                    g_anyLayer = true;
+                } else {
+                    orow[cx] = 0;
+                }
+            }
+        }
+        AddDirty(l, t, r, b);
+    }
 }
 
 void OnScreenCopy(const Buf& src, unsigned serial, unsigned gen, unsigned genWrite, const RECT& s, int dx, int dy) {
     const auto& cfg = SherwoodConfig::Get();
     if (!UiScale::MenuZoomOn()) return;
-    if (*reinterpret_cast<void* const*>(0x006C0FA8) != nullptr) {
+    const bool mission = *reinterpret_cast<void* const*>(0x006C0FA8) != nullptr;
+    if (mission) {
         // In a mission: the mission's own frames are copied this way too - only a dialog's
         // backdrop matters (the frozen picture of the level, different every time: no HD picture)
         g_backdropValid = false;
@@ -348,15 +479,19 @@ void OnScreenCopy(const Buf& src, unsigned serial, unsigned gen, unsigned genWri
             BuildBackdrop(comp.data(), src.w, src.h);
             ++g_backdropGen;
         }
-        g_backdropValid = true;
-        return;
+        if (!g_backdropNone) {
+            g_backdropValid = true;
+            return;
+        }
+        // a menu picture over everything (the options or load / save opened from the in-game
+        // menu): its HD picture as in the main menu
     }
     g_backdropValid = false;
     if (!cfg.hdMenu) return;
     RECT crop{};
     if (!UiScale::MenuCropRect(src.w, src.h, crop)) return;
     ++g_copies;
-    CheckVariant();
+    const bool variantChanged = CheckVariant();
 
     // which picture: computed once per state of the source surface
     if (!g_src.valid || g_src.serial != serial || g_src.gen != gen || g_src.genWrite != genWrite) {
@@ -364,11 +499,20 @@ void OnScreenCopy(const Buf& src, unsigned serial, unsigned gen, unsigned genWri
         g_src.gen = gen;
         g_src.genWrite = genWrite;
         g_src.key = KeyOf(src, crop);
+        g_src.inner = 0;
         g_src.valid = true;
         ++g_keys;
     }
-    const std::shared_ptr<Picture> pic = Load(g_src.key);
-    if (!pic) WriteForTool(g_src.key, src, crop);
+    std::shared_ptr<Picture> pic = Load(g_src.key);
+    if (!pic) {
+        if (mission) {
+            // the level around the picture: by the picture alone (no work file - every visit differs)
+            if (!g_src.inner) g_src.inner = InnerKeyOf(src, crop);
+            if (g_src.inner) pic = Load(g_src.inner);
+        } else {
+            WriteForTool(g_src.key, src, crop);
+        }
+    }
 
     // the canvases follow the copy (crop pixels)
     if (g_orig.empty() || crop.left != g_crop.left || crop.top != g_crop.top || crop.right != g_crop.right || crop.bottom != g_crop.bottom) {
@@ -380,35 +524,26 @@ void OnScreenCopy(const Buf& src, unsigned serial, unsigned gen, unsigned genWri
     const int r = (std::min)(static_cast<int>(crop.right), dx + static_cast<int>(s.right - s.left));
     const int b = (std::min)(static_cast<int>(crop.bottom), dy + static_cast<int>(s.bottom - s.top));
     if (r <= l || b <= t) return;
-    const bool usable = pic && pic->cropW == g_cw && pic->cropH == g_ch;
-    if (usable) ++g_hdCopies;
+    g_curKey = g_src.key;
+    g_curInner = g_src.inner;
+    if (g_srcCrop.size() != static_cast<size_t>(g_cw) * g_ch) g_srcCrop.assign(static_cast<size_t>(g_cw) * g_ch, 0);
     for (int y = t; y < b; ++y) {
         const int sy = static_cast<int>(s.top) + (y - dy);
-        const auto* sp = reinterpret_cast<const uint16_t*>(src.bits + static_cast<size_t>(sy) * src.pitch);
-        const int cy = y - crop.top;
-        uint32_t* orow = g_orig.data() + static_cast<size_t>(cy) * g_cw;
-        for (int x = l; x < r; ++x) {
-            const int cx = x - crop.left;
-            const int px = cx - (usable ? pic->l : 0), py = cy - (usable ? pic->t : 0);
-            if (usable && px >= 0 && py >= 0 && px < pic->w && py < pic->h) {
-                const int sx = static_cast<int>(s.left) + (x - dx);
-                orow[cx] = 0x10000u | sp[sx];
-                const uint32_t* hp = pic->px.data() + static_cast<size_t>(py * 2) * (pic->w * 2) + static_cast<size_t>(px * 2);
-                uint32_t* hrow = g_hd.data() + static_cast<size_t>(cy * 2) * (g_cw * 2) + static_cast<size_t>(cx * 2);
-                hrow[0] = hp[0];
-                hrow[1] = hp[1];
-                hrow[g_cw * 2] = hp[pic->w * 2];
-                hrow[g_cw * 2 + 1] = hp[pic->w * 2 + 1];
-                g_anyLayer = true;
-            } else {
-                orow[cx] = 0;
-            }
-        }
+        const auto* sp = reinterpret_cast<const uint16_t*>(src.bits + static_cast<size_t>(sy) * src.pitch) + (static_cast<int>(s.left) - dx);
+        std::memcpy(g_srcCrop.data() + static_cast<size_t>(y - crop.top) * g_cw + (l - crop.left), sp + l,
+                    static_cast<size_t>(r - l) * 2);
     }
-    AddDirty(l - crop.left, t - crop.top, r - crop.left, b - crop.top);
+    if (variantChanged) FillCanvases(pic, 0, 0, g_cw, g_ch);       // the emptied canvases again, all of them
+    else FillCanvases(pic, l - crop.left, t - crop.top, r - crop.left, b - crop.top);
 }
 
 bool GetLayer(const RECT& crop, Layer& out) {
+    // the variant or the remade pictures switched (F10): the canvases again from the last picture
+    if (CheckVariant() && !g_srcCrop.empty() && g_srcCrop.size() == g_orig.size()) {
+        std::shared_ptr<Picture> pic = Load(g_curKey);
+        if (!pic && g_curInner) pic = Load(g_curInner);
+        FillCanvases(pic, 0, 0, g_cw, g_ch);
+    }
     if (!SherwoodConfig::Get().hdMenu || g_orig.empty() || !g_anyLayer) return false;
     if (crop.left != g_crop.left || crop.top != g_crop.top || crop.right != g_crop.right || crop.bottom != g_crop.bottom) return false;
     out.orig = g_orig.data();
@@ -419,6 +554,16 @@ bool GetLayer(const RECT& crop, Layer& out) {
     out.generation = g_generation;
     g_anyDirty = false;
     return true;
+}
+
+const uint32_t* HdUnder(const RECT& crop, int cx, int cy, uint16_t px, int& stride) {
+    if (!g_anyLayer || g_orig.empty() || crop.left != g_crop.left || crop.top != g_crop.top || crop.right != g_crop.right ||
+        crop.bottom != g_crop.bottom || cx < 0 || cy < 0 || cx >= g_cw || cy >= g_ch) {
+        return nullptr;
+    }
+    if (g_orig[static_cast<size_t>(cy) * g_cw + cx] != (0x10000u | px)) return nullptr;
+    stride = g_cw * 2;
+    return g_hd.data() + static_cast<size_t>(cy * 2) * stride + static_cast<size_t>(cx * 2);
 }
 
 bool GetBackdrop(Backdrop& out) {

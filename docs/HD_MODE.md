@@ -323,10 +323,34 @@ Użytkownik po obejrzeniu arkuszy zapytał, czy „będzie gorzej przez ghosty i
   pogrubia, DAT2 zostawia drobne ślady). Pliki fontów HD (2 × 0,7 MB) idą w paczce moda.
 - Sprawdzone w tle: dymek „Pokaż / ukryj pole widzenia nieprzyjaciela” przy zoomie 3× i napis z pieniędzmi — ostre,
   ciemny obrys jak w oryginale (`tools\out\tooltip_hdfont_cmp.png`, `money_hdfont_x2.png`); test ciągły bez błędów.
-- **Nie obejmuje menu i okien dialogowych** (menu główne, odprawa, menu Esc, opcje): tam gra rysuje litery w skali 1×
-  raz przy otwarciu okna, a prezenter powiększa całość ×1,875. Pomysł na dalej: warstwa tekstu w prezenterze — przy
-  każdej literze zapamiętać tło przed i po narysowaniu, a w prezenterze, dopóki klatka ma tam „po”, złożyć powiększone
-  „przed” (albo obraz HD menu) z literą HD.
+- Menu i okna dialogowe: §5e.
+
+## 5e. Napisy i obrazki menu w HD — „cienie” powierzchni (2026-11-15, v1.1.5; `src\ddm\ddm_hd_patch.cpp`)
+Przy `MenuZoom` gra rysuje menu i okna w skali 1× (środek klatki), a prezenter powiększa tę część ×1,875. Każda litera
+i każdy obrazek, który gra tam rysuje, jest rysowany drugi raz, 2× większy, do **cienia** powierzchni (tylko nad
+pokazywaną częścią 1365×768: `ref` = piksel klatki, do którego należy blok HD, 0 = brak; `hd` = 2× BGRA):
+- litery: procedura 1:1 z pokryciem `0x00622EB4` (brat `0x00622FD4`; tryb GBLT `0x20401` → `0x005E8410`) i fonty
+  z kluczem kopiowane DirectDraw 1:1 — z fontu HD (§5d; nowe paski zbierane same, `upscale_fonts.py --model sgi`);
+- obrazki: `BlendBlit` 1:1 (`0x00622550` z kluczem `0x07C0` / `0x00622028` bez; piksele „znacznika” przyciemniają tło
+  — cień przycisku) i kopie DirectDraw 1:1 z kluczem (pergamin odprawy 496×463, portrety, pieczęcie). Wersje HD:
+  `hd\menu_parts\<klucz>.hdp` („HDMP”, 2w×2h BGRA z pokryciem + bajt cienia na piksel), robi je
+  `tools\hd\upscale_menu_parts.py` (SGI; aomr dawał pergaminowi „robaczkową” fakturę — `menu_parts_compare.py`)
+  z obrazków zbieranych przez moda do `hd\work\menu_parts\` (tylko gdy jest `hd\work`);
+- tło pod literą/obrazkiem w HD: cień (gdy jego `ref` zgadza się z pikselem „przed”), obraz HD menu (warstwa 1,
+  `Menu::HdUnder`) albo stare piksele powiększone dwuliniowo; brzeg litery HD może sięgać piksela, którego wersja 1×
+  nie ruszyła (gładki kontur), obrazka — tylko nad tłem HD;
+- kopie 1:1 między powierzchniami wielkości klatki przenoszą cienie (gra składa okna w osobnych powierzchniach);
+  kopia z małej powierzchni (tło spod kursora) zostawia blok tylko tam, gdzie piksel znów jest „swój”; wypełnienia
+  i rozciągania kasują; kursor gry (`0x005F1700`) nie robi łatek. Cienie są per pamięć powierzchni (flip zamienia
+  pamięci), do 5 × 21 MB, kasowane po wyjściu z pętli okien. Cała kopia ekranu do innej powierzchni = składanie okna
+  (odprawa rysuje pergamin, zanim ruszy pętla okien) — taka powierzchnia przyjmuje łatki od razu.
+- Prezenter (`ddm_present.cpp`): tekstury t6 (ref, R32_UINT) i t7 (HD) na każdą z dwóch pamięci, wysyłane prostokątem
+  zmian; shader pokazuje blok HD (próbkowany tylko wewnątrz swojego bloku 2×2) przed warstwami 1–2, gdy piksel klatki
+  = `ref`, a z 8 sąsiadów co najwyżej 4 *mających* łatkę już się nie zgadza (cienkie litery — sąsiedzi bez łatki się
+  nie liczą). Polecenie testowe `patch` = liczniki; `dbg 64/128/256` = bez łatek / warstwy 1 / tła dialogu.
+- Wynik (test w tle): odprawa, menu Esc, opcje (także z misji), wczytywanie, menu główne — litery, przyciski,
+  pergamin, pieczęć, portret ostre; kursor nad napisami nie zostawia śladów (0 różnych pikseli). Niepokryte: listy
+  rysowane przez GDI (Arial: klawiszologia, lista zapisów) — zostają powiększone.
 
 ## 6. Tryb testowy w tle (żeby nie zabierać użytkownikowi ekranu)
 - `tools\htest.ps1 [-Ini plik] [-MenuOnly]` — start ukrytej gry (`SHERWOODFIX_TEST=1`), pominięcie filmów, „Graj!".
@@ -493,6 +517,14 @@ w górę), resztę powiększa prezenter — **tylko świat**:
   procesorze w liczbach zmiennoprzecinkowych — ~150–170 ms. Teraz tablica przyciemnionych kolorów (65 536 pozycji), wagi
   całkowite liczone raz na kolumnę/wiersz, 4 wątki: 15 ms; razem z kopią świata (16 ms) i analizą (~25 ms) ~55 ms zamiast
   ~200 ms (log: `HD menu: dialog start … (N ms)`, `… magnified xM … (N ms)`).
+  **v1.1.5:** pomiar całej przerwy między klatkami (log `Present: N ms between two frames … (HD menu patches M ms)`,
+  ślad rysowania z czasem `@ms` w każdej linii) pokazał ~390 ms przy otwarciu menu — 290 ms z tego to procedura gry
+  `0x0053B330` (cdecl: id powierzchni, odcień, współczynnik), która barwi tło okna na zielono: na każdy piksel RGB565 →
+  liczby (czerwony ×2/32, zielony /64, niebieski /32, × współczynnik), `0x0053CBC0` (RGB→HSV), `0x0053CA30` (HSV→RGB
+  z nowym odcieniem), trzy `_ftol`. Hak liczy tablicę 65 536 kolorów raz na (odcień, współczynnik) tymi samymi
+  krokami (pomocnicze funkcje gry, x87 jak w oryginale) i mapuje powierzchnię: **3 ms**, sprawdzone w trybie testowym
+  z procedurą gry — 0 różnych pikseli na 3 686 400. Analiza tła tylko w pokazywanej części (reszta co 4. piksel do
+  nauki barw): 10–15 ms zamiast ~30. Menu Esc: **~70–90 ms zamiast ~390 ms** (resztę zajmuje gra: fonty okna z plików).
 
 ### Menu i okna gry na cały ekran (`MenuZoom=1`, Direct3D 11, wysokość wewnętrzna ≥ 960)
 Menu i okna (odprawa, menu Esc, wczytywanie/zapis, opcje) rysuje jedna pętla okien dialogowych gry
@@ -511,6 +543,17 @@ dat2), koryguje kolory do oryginału i zapisuje `hd\menu\<wariant>\<klucz>.mhd` 
 Prezenter: dwie tekstury (R32_UINT oryginalne piksele, BGRA 2× HD) aktualizowane prostokątem zmian; shader pokazuje
 piksel HD tam, gdzie piksel klatki jest nadal oryginalnym pikselem tła (porównanie RGB565), resztę jak dotąd.
 Zbieranie: `tools\collect_menus.ps1` (przechodzi ekrany menu ukrytej gry). Polecenie testowe `menuhd` = liczniki.
+- **Menu otwarte w misji** (opcje, wczytaj/zapisz z menu Esc): wokół obrazu menu jest przyciemniony poziom, więc klucz
+  całej części nie pasuje. Klucz „wnętrza” (`InnerKeyOf`: piksele 173..1193 × 144..622 części 1365×768) i pliki
+  `<klucz wnętrza>.alias` (16 cyfr = klucz obrazu) obok obrazów (`upscale_menu.py` pisze je zawsze, `--aliases`
+  same). Tło takiego ekranu nie jest już „tłem dialogu”: udział przyciemnionego poziomu liczony tylko w pokazywanej
+  części i bez czarnych pikseli (wcześniej 87 % → w czarnych miejscach obrazu przebijał poziom: kropkowany pierścień).
+- **Tła z remake'u** (`HDMenuRemake=1`, F10 „MENU W HD” → „TAK, TŁA Z REMAKE GDY SĄ”): `hd\menu\remake\<klucz>.mhd`
+  ma pierwszeństwo przed wariantem, pole = cała część 16:9 (bez czarnych pasów). Obieg: `tools\hd\menu_remake.py export`
+  → `hd\remake\` (obraz HD, zrzut z układem przycisków: `tools\menu_layout_shots.ps1`, `PROMPTY.txt` z promptami),
+  obrazy z AI (Gemini/ChatGPT) do `hd\remake\gotowe\NN_*.jpg|png`, `menu_remake.py import` → dopasowanie do 16:9,
+  mniejsze powiększane modelem (SGI) do 2730×1536, alias. Pierwszy komplet (5 teł z Gemini, 2752×1536 JPG, czyste) —
+  2026-11-15. Zmiana w F10 działa od razu (warstwa odbudowana z zapamiętanego obrazu menu).
 
 ### Panel ustawień moda (F10, `SettingsKey=121`)
 Rysowany w prezenterze do tekstury klatki (składany w zwykłej pamięci z obrazu źródłowego — czytanie zmapowanej

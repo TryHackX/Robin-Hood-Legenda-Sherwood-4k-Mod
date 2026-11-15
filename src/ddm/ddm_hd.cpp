@@ -1,5 +1,6 @@
 #include "ddm_hd.h"
 #include "ddm_hd_font.h"
+#include "ddm_hd_patch.h"
 #include "ddm_hd_sprites.h"
 #include "../config.h"
 #include "../diag.h"
@@ -704,6 +705,208 @@ namespace {
                 out[x] = static_cast<uint16_t>(r | g | b);
             }
         }
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // Menus and dialogs with the menu zoom (ddm_hd_patch.h) - the game's 1:1 routines:
+    //   0x00622EB4 text with an alpha picture, cdecl (src, dst, alpha, w, h, ...) - the 1:1 brother
+    //              of 0x00622FD4 (the general blitter's mode 0x20401 via 0x005E8410)
+    //   0x00622550 / 0x00622028 pictures with a shadow marker, keyed (0x07C0) / plain, cdecl
+    //              (src, dst, w, h, srcSkip, dstSkip, factor, marker) - the 1:1 brothers of
+    //              0x0062261C / 0x006220EC (BlendBlit 0x005EC5F0: buttons, the cursor)
+    //   0x005F1700 the pointer draws the cursor (thiscall): its pictures are not patches
+    // Each is left to the game; what it drew is drawn again in HD into the surface's shadow.
+    using PFN_AlphaText1x = void(__cdecl*)(const uint16_t* src, uint16_t* dst, const uint16_t* alpha, uint32_t w, uint32_t h,
+                                           int a6, int a7, int a8);
+    PFN_AlphaText1x o_AlphaText1x = nullptr;
+
+    void __cdecl Hook_AlphaText1x(const uint16_t* src, uint16_t* dst, const uint16_t* alpha, uint32_t w, uint32_t h,
+                                  int a6, int a7, int a8) {
+        static Patch::Op op;    // main thread only
+        bool patch = false;
+        if (w && h && w < 4096 && h < 4096 && Diag::IsMainThread()) {
+            op.Clear();
+            patch = Patch::BeginAlphaGlyph(src, dst, alpha, static_cast<int>(w), static_cast<int>(h), op);
+        }
+        o_AlphaText1x(src, dst, alpha, w, h, a6, a7, a8);
+        if (patch) Patch::End(op);
+    }
+
+    using PFN_Shadow1x = void(__cdecl*)(const uint16_t* src, uint16_t* dst, uint32_t w, uint32_t h, int srcSkip, int dstSkip,
+                                        uint32_t factor, uint32_t marker);
+    PFN_Shadow1x o_Shadow1xKeyed = nullptr;
+    PFN_Shadow1x o_Shadow1xPlain = nullptr;
+
+    template <bool Keyed>
+    void Shadow1x(const uint16_t* src, uint16_t* dst, uint32_t w, uint32_t h, int srcSkip, int dstSkip, uint32_t factor, uint32_t marker) {
+        static Patch::Op op;    // main thread only
+        bool patch = false;
+        if (w && h && w < 4096 && h < 4096 && Diag::IsMainThread()) {
+            op.Clear();
+            patch = Patch::BeginShadowPicture(src, dst, static_cast<int>(w), static_cast<int>(h), factor, marker, Keyed, op);
+        }
+        (Keyed ? o_Shadow1xKeyed : o_Shadow1xPlain)(src, dst, w, h, srcSkip, dstSkip, factor, marker);
+        if (patch) Patch::End(op);
+    }
+    void __cdecl Hook_Shadow1xKeyed(const uint16_t* src, uint16_t* dst, uint32_t w, uint32_t h, int srcSkip, int dstSkip,
+                                    uint32_t factor, uint32_t marker) {
+        Shadow1x<true>(src, dst, w, h, srcSkip, dstSkip, factor, marker);
+    }
+    void __cdecl Hook_Shadow1xPlain(const uint16_t* src, uint16_t* dst, uint32_t w, uint32_t h, int srcSkip, int dstSkip,
+                                    uint32_t factor, uint32_t marker) {
+        Shadow1x<false>(src, dst, w, h, srcSkip, dstSkip, factor, marker);
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // The in-game menu's backdrop (2026-11-15, "lekki lag zwiecha" when Esc opens the menu): the game
+    // colours the whole picture of the level behind a dialog - 0x0053B330, cdecl (surface id, hue,
+    // factor), returns al: per pixel RGB565 -> floats (red * 2/32, green /64, blue /32, all * factor),
+    // 0x0053CBC0 (RGB -> HSV), 0x0053CA30 (HSV -> RGB with the hue replaced), three _ftol (x32, x64,
+    // x32). At 2560x1440 that is 3.7 million times two calls and three FPU mode switches: 290 ms of
+    // the ~400 ms the menu took to appear. The result depends on the pixel alone: a table of all 65536
+    // colours is made per (hue, factor) by running the same steps - the game's own helpers, the x87
+    // arithmetic as in the original, on the same FPU settings: bit-identical - and the surface is
+    // mapped through it (~10 ms).
+    using PFN_Colorize = uint8_t(__cdecl*)(int id, uint32_t hue, float factor);
+    PFN_Colorize o_Colorize = nullptr;
+    using PFN_RgbToHsv = void(__cdecl*)(float r, float g, float b, float* h, float* s, float* v);
+    using PFN_HsvToRgb = void(__cdecl*)(float h, float s, float v, float* r, float* g, float* b);
+    using PFN_SurfLock = uint8_t(__fastcall*)(void* mgr, void* edx, int id, void* info, int flags);
+    using PFN_SurfUnlock = void(__fastcall*)(void* mgr, void* edx, void* info);
+    constexpr uintptr_t kAddrSurfaceManager = 0x006C11D0;
+
+    // v * c * k (* 2), x87 as the original: the product stays in the FPU until the store
+    float X87Scale(int v, float c, float k, int twice) {
+        float scaled;
+        __asm {
+            fild v
+            fmul c
+            fmul k
+            cmp twice, 0
+            je single
+            fadd st(0), st(0)
+        single:
+            fstp scaled
+        }
+        return scaled;
+    }
+
+    // _ftol(v * c) with the game's own _ftol (0x00642B7C: truncation)
+    int X87Ftol(float v, float c) {
+        int whole;
+        static const uintptr_t ftol = 0x00642B7C;
+        __asm {
+            fld v
+            fmul c
+            call dword ptr [ftol]
+            mov whole, eax
+        }
+        return whole;
+    }
+
+    const uint16_t* ColorizeTable(uint32_t hue, float factor) {
+        struct Table { uint32_t hue = 0xFFFFFFFFu; float factor = -1.0f; unsigned use = 0; std::vector<uint16_t> map; };
+        static Table tables[2];
+        static unsigned use = 0;
+        for (Table& t : tables) {
+            if (t.hue == hue && t.factor == factor && t.map.size() == 65536) {
+                t.use = ++use;
+                return t.map.data();
+            }
+        }
+        Table& t = tables[0].use <= tables[1].use ? tables[0] : tables[1];
+        const auto rgbToHsv = reinterpret_cast<PFN_RgbToHsv>(0x0053CBC0);
+        const auto hsvToRgb = reinterpret_cast<PFN_HsvToRgb>(0x0053CA30);
+        int hv = static_cast<int>(hue & 0xFFFF);
+        float hueF;
+        __asm {
+            fild hv
+            fstp hueF
+        }
+        t.map.resize(65536);
+        for (uint32_t p = 0; p < 65536; ++p) {
+            const float r = X87Scale(static_cast<int>(p >> 11), 0.03125f, factor, 1);
+            const float g = X87Scale(static_cast<int>((p >> 5) & 0x3F), 0.015625f, factor, 0);
+            const float b = X87Scale(static_cast<int>(p & 0x1F), 0.03125f, factor, 0);
+            float h = 0, s = 0, v = 0, ro = 0, go = 0, bo = 0;
+            rgbToHsv(r, g, b, &h, &s, &v);
+            hsvToRgb(hueF, s, v, &ro, &go, &bo);
+            const int G = X87Ftol(go, 64.0f) & 0x3F;
+            const int R = X87Ftol(ro, 32.0f);
+            const int B = X87Ftol(bo, 32.0f) & 0x1F;
+            t.map[p] = static_cast<uint16_t>((R << 11) | (G << 5) | B);
+        }
+        t.hue = hue;
+        t.factor = factor;
+        t.use = ++use;
+        return t.map.data();
+    }
+
+    uint8_t __cdecl Hook_Colorize(int id, uint32_t hue, float factor) {
+        auto* mgr = *reinterpret_cast<uint8_t* const*>(kAddrSurfaceManager);
+        if (!mgr || *reinterpret_cast<const uint16_t*>(mgr + 0x10C) != 16 || !Diag::IsMainThread()) {
+            return o_Colorize(id, hue, factor);     // 15-bit colour: the game's own way
+        }
+        LARGE_INTEGER q0{}, q1{}, qf{};
+        QueryPerformanceCounter(&q0);
+        alignas(8) uint8_t info[64] = {};           // the game's lock record (24 bytes used)
+        const auto lock = reinterpret_cast<PFN_SurfLock>(0x005E5A00);
+        const auto unlock = reinterpret_cast<PFN_SurfUnlock>(0x005E5EA0);
+        static bool verified = false;
+        if (!verified && TestHarness::Enabled()) {
+            // test mode, once: the table against the game's own routine on the same picture
+            verified = true;
+            if (!lock(mgr, nullptr, id, info, 0)) return 0;
+            const int w = *reinterpret_cast<const uint16_t*>(info + 4), h = *reinterpret_cast<const uint16_t*>(info + 6);
+            const int pitch = *reinterpret_cast<const int*>(info + 8);
+            const uint8_t* bits = *reinterpret_cast<uint8_t* const*>(info + 0x10);
+            std::vector<uint16_t> expect(static_cast<size_t>(w) * h);
+            const uint16_t* map = ColorizeTable(hue & 0xFFFF, factor);
+            for (int y = 0; y < h; ++y) {
+                const auto* row = reinterpret_cast<const uint16_t*>(bits + static_cast<size_t>(y) * pitch);
+                for (int x = 0; x < w; ++x) expect[static_cast<size_t>(y) * w + x] = map[row[x]];
+            }
+            unlock(mgr, nullptr, info);
+            const uint8_t r = o_Colorize(id, hue, factor);
+            std::memset(info, 0, sizeof(info));
+            if (lock(mgr, nullptr, id, info, 0)) {
+                const uint8_t* after = *reinterpret_cast<uint8_t* const*>(info + 0x10);
+                size_t diff = 0;
+                for (int y = 0; y < h; ++y) {
+                    const auto* row = reinterpret_cast<const uint16_t*>(after + static_cast<size_t>(y) * pitch);
+                    for (int x = 0; x < w; ++x) diff += row[x] != expect[static_cast<size_t>(y) * w + x] ? 1u : 0u;
+                }
+                unlock(mgr, nullptr, info);
+                Logger::Info("Dialogs: backdrop colouring checked against the game's routine: %zu of %d pixels differ.", diff, w * h);
+            }
+            return r;
+        }
+        if (!lock(mgr, nullptr, id, info, 0)) return 0;
+        const int w = *reinterpret_cast<const uint16_t*>(info + 4), h = *reinterpret_cast<const uint16_t*>(info + 6);
+        const int pitch = *reinterpret_cast<const int*>(info + 8);
+        uint8_t* bits = *reinterpret_cast<uint8_t* const*>(info + 0x10);
+        if (bits && w > 0 && h > 0 && pitch >= w * 2) {
+            const uint16_t* map = ColorizeTable(hue & 0xFFFF, factor);
+            for (int y = 0; y < h; ++y) {
+                auto* row = reinterpret_cast<uint16_t*>(bits + static_cast<size_t>(y) * pitch);
+                for (int x = 0; x < w; ++x) row[x] = map[row[x]];
+            }
+        }
+        unlock(mgr, nullptr, info);
+        QueryPerformanceCounter(&q1);
+        QueryPerformanceFrequency(&qf);
+        Logger::Info("HD menu: the dialog's backdrop coloured (hue %u, x%.2f) %dx%d in %.1f ms.", hue & 0xFFFF, factor, w, h,
+                     static_cast<double>(q1.QuadPart - q0.QuadPart) * 1000.0 / static_cast<double>(qf.QuadPart));
+        return 1;
+    }
+
+    using PFN_DrawPointer = void(__fastcall*)(void* self, void* edx);
+    PFN_DrawPointer o_DrawPointer = nullptr;
+
+    void __fastcall Hook_DrawPointer(void* self, void* edx) {
+        Patch::SetCursorDrawing(true);
+        o_DrawPointer(self, edx);
+        Patch::SetCursorDrawing(false);
     }
 
     // ---------------------------------------------------------------------------------------
@@ -1708,6 +1911,38 @@ void InstallHooks() {
         const bool text = HookRoutine(0x00622FD4, kAlphaText2x, sizeof(kAlphaText2x), reinterpret_cast<void*>(&Hook_AlphaText2x),
                                       reinterpret_cast<void**>(&o_AlphaText2x));
         Logger::Info("HD: 2x text with an alpha picture @ 0x00622FD4 blended per pixel: %d.", text ? 1 : 0);
+    }
+    if (SherwoodConfig::Get().menuZoom && SherwoodConfig::Get().hdMenu) {
+        // push ebp / mov ebp,esp / pushal / mov edx,[ebp+0x18] / mov ecx,[ebp+0x14] / or ecx,ecx
+        static const uint8_t kAlphaText1x[] = { 0x55, 0x89, 0xE5, 0x60, 0x8B, 0x55, 0x18, 0x8B, 0x4D, 0x14, 0x09, 0xC9 };
+        // push ebp / mov ebp,esp / pushal / mov ecx,[ebp+0x10] / mov edx,[ebp+0x14] / or ecx,ecx
+        static const uint8_t kShadow1x[] = { 0x55, 0x89, 0xE5, 0x60, 0x8B, 0x4D, 0x10, 0x8B, 0x55, 0x14, 0x09, 0xC9 };
+        // push -1 / push 0x672DE0 / mov eax, fs:[0]
+        static const uint8_t kPointer[] = { 0x6A, 0xFF, 0x68, 0xE0, 0x2D, 0x67, 0x00, 0x64, 0xA1, 0x00, 0x00, 0x00, 0x00 };
+        const bool t1 = HookRoutine(0x00622EB4, kAlphaText1x, sizeof(kAlphaText1x), reinterpret_cast<void*>(&Hook_AlphaText1x),
+                                    reinterpret_cast<void**>(&o_AlphaText1x));
+        const bool k1 = HookRoutine(0x00622550, kShadow1x, sizeof(kShadow1x), reinterpret_cast<void*>(&Hook_Shadow1xKeyed),
+                                    reinterpret_cast<void**>(&o_Shadow1xKeyed));
+        const bool p1 = HookRoutine(0x00622028, kShadow1x, sizeof(kShadow1x), reinterpret_cast<void*>(&Hook_Shadow1xPlain),
+                                    reinterpret_cast<void**>(&o_Shadow1xPlain));
+        const bool cur = HookRoutine(0x005F1700, kPointer, sizeof(kPointer), reinterpret_cast<void*>(&Hook_DrawPointer),
+                                     reinterpret_cast<void**>(&o_DrawPointer));
+        Logger::Info("HD menus: 1:1 text / pictures / cursor hooked for HD letters and pictures: %d %d %d %d.", t1 ? 1 : 0, k1 ? 1 : 0,
+                     p1 ? 1 : 0, cur ? 1 : 0);
+    }
+    {
+        // push -1 / push 0x666C38 / mov eax, fs:[0]
+        static const uint8_t kColorize[] = { 0x6A, 0xFF, 0x68, 0x38, 0x6C, 0x66, 0x00, 0x64, 0xA1, 0x00, 0x00, 0x00, 0x00 };
+        // the helpers it calls, as expected (fld [esp+8] / fcomp [esp+0xC]; push ecx / fld [esp+0xC]) and _ftol
+        static const uint8_t kRgbToHsv[] = { 0xD9, 0x44, 0x24, 0x08, 0xD8, 0x5C, 0x24, 0x0C };
+        static const uint8_t kHsvToRgb[] = { 0x51, 0xD9, 0x44, 0x24, 0x0C };
+        static const uint8_t kFtol[] = { 0x55, 0x8B, 0xEC, 0x83, 0xC4, 0xF4 };
+        const bool helpers = std::memcmp(reinterpret_cast<const void*>(0x0053CBC0), kRgbToHsv, sizeof(kRgbToHsv)) == 0 &&
+                             std::memcmp(reinterpret_cast<const void*>(0x0053CA30), kHsvToRgb, sizeof(kHsvToRgb)) == 0 &&
+                             std::memcmp(reinterpret_cast<const void*>(0x00642B7C), kFtol, sizeof(kFtol)) == 0;
+        const bool colorize = helpers && HookRoutine(0x0053B330, kColorize, sizeof(kColorize), reinterpret_cast<void*>(&Hook_Colorize),
+                                                     reinterpret_cast<void**>(&o_Colorize));
+        Logger::Info("Dialogs: the backdrop colouring @ 0x0053B330 through a colour table: %d.", colorize ? 1 : 0);
     }
     Sprites::InstallHooks();
 }

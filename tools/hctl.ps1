@@ -46,7 +46,8 @@ function Send-One([string]$c) {
 }
 
 function Save-Shot([string]$command, [string]$name) {
-    $ans = Send-One "$command $name"
+    # the game writes the BMP into its harness folder by the bare name; the PNG may go into a subfolder
+    $ans = Send-One "$command $(Split-Path -Leaf $name)"
     if ($ans -notmatch '^ok (.+\.bmp) (\d+)x(\d+)') { Write-Output "${command}: $ans"; return }
     $bmpPath = $matches[1]
     Add-Type -AssemblyName System.Drawing
@@ -65,6 +66,7 @@ function Save-Shot([string]$command, [string]$name) {
     $g.PixelOffsetMode = 'Half'
     $g.DrawImage($src, (New-Object System.Drawing.Rectangle 0, 0, $w, $h), $rect, [System.Drawing.GraphicsUnit]::Pixel)
     $out = Join-Path $root "tools\out\$name.png"
+    New-Item -ItemType Directory -Force (Split-Path -Parent $out) | Out-Null
     $dst.Save($out, [System.Drawing.Imaging.ImageFormat]::Png)
     $g.Dispose(); $dst.Dispose(); $src.Dispose()
     Remove-Item $bmpPath -ErrorAction SilentlyContinue

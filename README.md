@@ -45,10 +45,13 @@ original DirectDraw wrapper, plus optional HD graphics prepared with AI models f
 **Interface**
 - Mission interface 2× larger (each window grows from its own screen corner, clicks land where you see them), with an
   **HD font**: the letters of tooltips, messages, money and names come from upscaled versions of the game's own fonts
-  (`hd\fonts\`, included in the mod archive) instead of being magnified 2×. Menus and dialogs: not yet.
+  (`hd\fonts\`, included in the mod archive) instead of being magnified 2×.
 - Minimap in the top-right corner; dragging on it moves the camera, the map window is moved by its edges.
 - Menus and game dialogs (briefing, Esc menu, save/load, options) shown full-screen instead of a small 1024×768 box
-  in the middle.
+  in the middle — **in HD**: menu backgrounds upscaled by AI (HD pack), and the letters, buttons, the briefing's
+  parchment, seals and portraits drawn from HD versions (`hd\fonts\`, `hd\menu_parts\`, in the mod archive). Optional
+  **remade menu backgrounds** that fill the whole widescreen (`hd\menu\remake\`, made with `tools\hd\menu_remake.py`
+  from pictures painted by an image AI; F10 → "MENU W HD"). The in-game menu (Esc) opens in ~0.08 s instead of ~0.4 s.
 - **In-game settings panel — F10** (HD graphics, interface, minimap, smooth zoom, menus, VSync, filter, FPS counter,
   cursor speed); changes apply at once and are saved to `SherwoodFix.ini`.
 - The game's options screen shows the real processor name and memory size (it showed "GenuineIntel" and at most
@@ -63,8 +66,8 @@ original DirectDraw wrapper, plus optional HD graphics prepared with AI models f
 ## Installation — the complete HD version, step by step
 
 You need two releases from the **Releases** page (right side of the repository page):
-[**SherwoodEngineFix 1.1.4**](https://github.com/TryHackX/Robin-Hood-Legenda-Sherwood-4k-Mod/releases/tag/v1.1.4)
-(the mod itself, 0.2 MB) and
+[**SherwoodEngineFix 1.1.5**](https://github.com/TryHackX/Robin-Hood-Legenda-Sherwood-4k-Mod/releases/tag/v1.1.5)
+(the mod itself, a few MB) and
 [**HD graphics pack 1**](https://github.com/TryHackX/Robin-Hood-Legenda-Sherwood-4k-Mod/releases/tag/hd-pack-1)
 (the HD pictures, 7 archives). Download the files listed under **Assets** — not "Source code (zip)" / "Source code
 (tar.gz)": GitHub adds those two to every release by itself, they hold only the source code (~0.4 MB) and are not
@@ -74,9 +77,10 @@ needed to play.
 `C:\Program Files (x86)\GOG Galaxy\Games\Robin Hood - The Legend of Sherwood`
 (in GOG Galaxy: the game → ⚙ → Manage installation → Show folder).
 
-**Step 2 — the mod.** Unpack `SherwoodEngineFix-v1.1.4.zip` into the game folder (next to `Game.exe`): `winmm.dll`,
-`SherwoodFix.ini`, the HD fonts `hd\fonts\*.hdfont` and the small `hd\sprites\_between\between.q` (the quality list of
-the in-between frames).
+**Step 2 — the mod.** Unpack `SherwoodEngineFix-v1.1.5.zip` into the game folder (next to `Game.exe`): `winmm.dll`,
+`SherwoodFix.ini`, the HD fonts `hd\fonts\*.hdfont`, the HD pictures of menus and dialogs `hd\menu_parts\*.hdp`, small
+`hd\menu\<variant>\*.alias` files (the HD menu backgrounds of the pack found in menus opened during a mission) and the
+small `hd\sprites\_between\between.q` (the quality list of the in-between frames).
 
 **Step 3 — the HD pictures.** Download these archives from *HD graphics pack 1*:
 

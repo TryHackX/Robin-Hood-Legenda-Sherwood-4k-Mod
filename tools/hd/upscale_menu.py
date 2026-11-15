@@ -12,6 +12,9 @@ Output: hd\\menu\\<variant>\\<key>.mhd       what the mod loads: "MNHD", u32 1, 
         hd\\menu_png\\_oryginal\\<key>.png, hd\\menu_png\\<variant>\\<key>.png   for looking at
 Colours: the HD picture gets the colours and brightness of the original (color_fix of upscale_variants.py).
 Finished files are skipped unless --redo.
+Aliases: hd\\menu\\<variant>\\<inner key>.alias (16 hex digits = the picture's key) next to every picture - the mod finds
+the picture by the menu picture alone when something else lies around it (menus opened in a mission have the level
+there). Written with every run; --aliases writes only them.
 """
 import argparse
 import struct
@@ -77,9 +80,33 @@ def write_mhd(path: Path, crop_w, crop_h, box, hd_rgb: np.ndarray):
     tmp.replace(path)
 
 
+def inner_key(px: np.ndarray):
+    """The mod's InnerKeyOf (src/ddm/ddm_hd_menu.cpp): FNV-1a 64 over crop pixels 173..1193 x 144..622 of a 1365x768
+    shown part - the menu picture without what lies around it."""
+    if px.shape != (768, 1365):
+        return None
+    h = 0xCBF29CE484222325 ^ 0x494E4E52
+    for b in np.ascontiguousarray(px[144:622, 173:1193]).astype("<u2").tobytes():
+        h = ((h ^ b) * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
+    return h or 1
+
+
+def write_aliases(frames: dict, folders):
+    """<inner key>.alias -> <key> in every folder that holds <key>.mhd."""
+    for key, (px, _) in frames.items():
+        ik = inner_key(px)
+        if ik is None:
+            continue
+        for folder in folders:
+            if (folder / f"{key}.mhd").exists():
+                (folder / f"{ik:016x}.alias").write_text(key, encoding="ascii")
+                log(f"  {folder.name}: {ik:016x}.alias -> {key}")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--variants", nargs="*", default=DEFAULT)
+    ap.add_argument("--aliases", action="store_true", help="only write the .alias files of the finished pictures")
     ap.add_argument("--png-only", action="store_true", help="only write the originals as PNG")
     ap.add_argument("--redo", action="store_true")
     ap.add_argument("--tile", type=int, default=192)
@@ -106,6 +133,9 @@ def main():
         if not out.exists() or args.redo:
             Image.fromarray(rgb_from_565(px)).save(out)
         log(f"{p.stem}: {px.shape[1]}x{px.shape[0]}, picture {box[2]}x{box[3]} at {box[0]},{box[1]}")
+    if args.aliases:
+        write_aliases(frames, [d for d in STORE.iterdir() if d.is_dir()])
+        return
     if args.png_only or not frames:
         return
 
@@ -146,6 +176,7 @@ def main():
             log(f"  {k}: {w}x{h} -> {w * 2}x{h * 2} in {time.time() - t0:.1f} s")
         del desc
         torch.cuda.empty_cache()
+    write_aliases(frames, [STORE / n for n in args.variants if (STORE / n).is_dir()])
 
 
 if __name__ == "__main__":

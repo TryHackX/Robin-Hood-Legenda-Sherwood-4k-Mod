@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(SherwoodEngineFix VERSION 1.1.4 LANGUAGES C CXX)
+project(SherwoodEngineFix VERSION 1.1.5 LANGUAGES C CXX)
 
 # Enforce 32-bit (x86) architecture
 if(NOT CMAKE_SIZEOF_VOID_P EQUAL 4)
@@ -46,6 +46,7 @@ add_library(winmm SHARED
     ddm/ddm_blit.cpp
     ddm/ddm_hd.cpp
     ddm/ddm_hd_font.cpp
+    ddm/ddm_hd_patch.cpp
     ddm/ddm_hd_sprites.cpp
     ddm/ddm_hd_menu.cpp
     ddm/ddm_present.cpp

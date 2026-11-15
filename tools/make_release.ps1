@@ -15,12 +15,21 @@ New-Item -ItemType Directory -Force $pkg | Out-Null
 Copy-Item $dll $pkg
 Copy-Item (Join-Path $root 'release\SherwoodFix.ini') $pkg
 Copy-Item (Join-Path $root 'README.md') $pkg
-# quality of the in-between frames of the HD pack (tools\hd\between_quality.py): small, belongs to the mod
-$q = Join-Path $root 'hd\sprites\_between\between.q'
-if (Test-Path $q) {
-    $qdir = Join-Path $pkg 'hd\sprites\_between'
+# quality of the in-between frames of the HD pack (tools\hd\between_quality.py): small, belongs to the mod -
+# between.q for the current store, between.v1.q for the first pack's store (the DLL takes the one that matches)
+$qdir = Join-Path $pkg 'hd\sprites\_between'
+foreach ($name in 'between.q', 'between.v1.q') {
+    $q = Join-Path $root "hd\sprites\_between\$name"
+    if (-not (Test-Path $q)) { continue }
     New-Item -ItemType Directory -Force $qdir | Out-Null
     Copy-Item $q $qdir
+}
+# run-time frames (icons above heads, markers, light at night ...; tools\hd\upscale_icons.py): small, newer than the pack's
+$icons = @(Get-ChildItem (Join-Path $root 'hd\sprites\_icons\icons.*') -ErrorAction SilentlyContinue)
+if ($icons.Count -eq 2) {
+    $idir = Join-Path $pkg 'hd\sprites\_icons'
+    New-Item -ItemType Directory -Force $idir | Out-Null
+    $icons | Copy-Item -Destination $idir
 }
 # HD fonts (tools\hd\upscale_fonts.py): small, belong to the mod
 $fonts = @(Get-ChildItem (Join-Path $root 'hd\fonts\*.hdfont') -ErrorAction SilentlyContinue)

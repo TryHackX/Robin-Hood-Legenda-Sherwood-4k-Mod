@@ -134,11 +134,22 @@ def load_index(name):
     return {(e[0], e[1]): e for e in np.frombuffer(raw, ENTRY, count, 16).tolist()}
 
 
+SHARP_STORE = [0]     # 1: made with --sharp (between.idx header, last word; tools\hd\between_quality.py reads it)
+
+
+def store_is_sharp(name):
+    idx = store_dir(name) / "between.idx"
+    if not idx.exists():
+        return False
+    raw = idx.read_bytes()[:16]
+    return len(raw) == 16 and raw[:4] == b"HDBT" and struct.unpack_from("<I", raw, 12)[0] == 1
+
+
 def save_index(name, entries):
     d = store_dir(name)
     arr = np.array([entries[k] for k in sorted(entries)], dtype=ENTRY) if entries else np.zeros(0, ENTRY)
     tmp = d / "between.tmp"
-    tmp.write_bytes(b"HDBT" + struct.pack("<III", 1, len(arr), 0) + arr.tobytes())
+    tmp.write_bytes(b"HDBT" + struct.pack("<III", 1, len(arr), SHARP_STORE[0]) + arr.tobytes())
     for _ in range(100):
         try:
             tmp.replace(d / "between.idx")
@@ -148,12 +159,32 @@ def save_index(name, entries):
 
 
 def game_running():
+    """The player's game runs: a Game.exe with a VISIBLE window. The hidden test instance (tools\\htest.ps1) keeps
+    its window hidden and does not count - the generator goes on while the mod is tested in the background.
+    (A window title is no sign: the hidden window has one too - 2026-11-15 the generator paused for a test.)"""
     try:
-        out = subprocess.run(["tasklist", "/FI", "IMAGENAME eq Game.exe", "/NH"], capture_output=True, text=True,
-                             errors="replace", timeout=20).stdout
+        out = subprocess.run(["tasklist", "/FO", "CSV", "/NH", "/FI", "IMAGENAME eq Game.exe"], capture_output=True,
+                             text=True, errors="replace", timeout=20).stdout
     except (OSError, subprocess.SubprocessError):
         return False
-    return "game.exe" in out.lower()
+    pids = {int(row[1]) for row in csv.reader(out.splitlines()) if len(row) > 1 and row[0].lower() == "game.exe"}
+    if not pids:
+        return False
+    import ctypes
+    from ctypes import wintypes
+    user32 = ctypes.windll.user32
+    found = []
+    proc_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+
+    def each(hwnd, _):
+        pid = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        if pid.value in pids and user32.IsWindowVisible(hwnd):
+            found.append(hwnd)
+        return True
+
+    user32.EnumWindows(proc_type(each), 0)
+    return bool(found)
 
 
 _last_game_check = [0.0]
@@ -203,6 +234,9 @@ class Maker:
             torch.cuda.set_per_process_memory_fraction(card_share)
         self.net = rife_net.load(it.WEIGHTS)
         self.bg = torch.tensor(it.BG, device="cuda").view(1, 3, 1, 1)
+        # sharp: every pixel of the middle frame from ONE of the two moved frames (the one the network trusts more
+        # there) instead of their mix - where the two disagree the mix was soft / doubled (2026-11-15)
+        self.sharp = False
 
     def release(self):
         self.torch.cuda.empty_cache()
@@ -227,7 +261,7 @@ class Maker:
             _, flow, mask = self.net(ta, tb, 0.5)
             flow, mask = flow.float(), mask.float()
             wa, wb = self.rife.warp(big_a, flow[:, :2]), self.rife.warp(big_b, flow[:, 2:4])
-            mid = wa * mask + wb * (1 - mask)
+            mid = torch.where(mask > 0.5, wa, wb) if self.sharp else wa * mask + wb * (1 - mask)
             # quality check: do the two source frames, each moved to the middle, agree?
             pa, pb = self.rife.warp(ta, flow[:, :2]), self.rife.warp(tb, flow[:, 2:4])
             figure = (mid[:, 3:4] > 0.5).float()
@@ -490,6 +524,8 @@ def run_jobs(args):
             "--batch-pixels", str(args.batch_pixels)]
     if args.half:
         base.append("--half")
+    if args.sharp:
+        base.append("--sharp")
     parts = [f"{MAIN}_part{i}" for i in range(args.jobs)]
     old_log = log_path(MAIN)
     if args.redo and old_log.exists() and not any(store_dir(p).exists() for p in parts):
@@ -547,6 +583,9 @@ def main():
                     help='endings of .rhs file names, or folders ending with "/" (see hd\\work\\frame_index.csv)')
     ap.add_argument("--magnify", type=int, default=4)
     ap.add_argument("--half", action="store_true", help="half precision for the network (checked with --selftest)")
+    ap.add_argument("--sharp", action="store_true",
+                    help="each pixel from one of the two moved frames instead of their mix (no soft / doubled frames; "
+                         "tools\\hd\\inbetween_sharp_test.py); the store is marked as such")
     ap.add_argument("--jobs", type=int, default=1, help="processes side by side (each needs its share of card memory)")
     ap.add_argument("--card-share", type=float, default=0.0,
                     help="cap on the graphics card memory of one process, share of the card (0 = none; --jobs N: 0.7/N)")
@@ -571,6 +610,7 @@ def main():
                          "these were always rejected)")
     ap.add_argument("--batch-pixels", type=int, default=2_500_000, help="magnified pixels per batch")
     args = ap.parse_args()
+    SHARP_STORE[0] = 1 if args.sharp else 0
 
     if args.stats:
         entries = load_index(args.store)
@@ -629,6 +669,7 @@ def main():
         return
 
     maker = Maker(args.magnify, args.half, args.card_share)
+    maker.sharp = args.sharp
     sdir = store_dir(args.store)
     sdir.mkdir(parents=True, exist_ok=True)
     dat_path = sdir / "between.dat"

@@ -9,9 +9,12 @@ TEGO UŻYWA GRA
   sprites\_icons\           Ikony i znaczniki w HD: portret nad wybranym bohaterem, "Z" nad śpiącym, gwiazdki,
                             znaki zapytania, pierścień pod postacią. Brakujące ikony z nowych misji mod zapisuje
                             sam do work\runtime_frames\, a dorabia je:  python tools/hd/upscale_icons.py --model ultrasharp
-  sprites\_between\         Klatki pośrednie animacji WSZYSTKICH postaci (ok. 3 GB, model RIFE). Włączanie w grze: F9
-                            (albo HDInBetween=1 w SherwoodFix.ini). Usunięcie folderu wyłącza je całkowicie.
-                            Robi je od nowa:  python -I tools/hd/make_inbetweens.py --files Characters/ --jobs 3 --redo
+  sprites\_between\         Klatki pośrednie animacji WSZYSTKICH postaci (ok. 3 GB, model RIFE; od 2026-11-15 ostre - każdy
+                            piksel z jednej z dwóch klatek, bez mieszania). Włączanie w grze: F9 (albo HDInBetween=1
+                            w SherwoodFix.ini). Usunięcie folderu wyłącza je całkowicie. between.q / between.v1.q = listy
+                            jakości (nowy / pierwszy magazyn). Robi je od nowa:
+                            python -I tools/hd/make_inbetweens.py --files Characters/ --jobs 3 --redo --sharp
+                            python -I tools/hd/between_quality.py
 
   menu\<wariant>\*.mhd      Tła menu (menu główne, opcje, wczytywanie...) powiększone tym samym modelem co mapy; gra pokazuje
                             je przy MenuZoom=1 i HDMenu=1. Nowe tła mod sam zbiera do work\menu_frames\, robi je:

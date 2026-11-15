@@ -37,6 +37,7 @@ namespace {
 
     bool g_enabled = false;
     bool g_checked = false;
+    volatile uint32_t g_ambiance = 0;   // command "ambiance": the next level's ambiance (0 = as the level says)
     std::atomic<unsigned> g_desktopCallsBlocked{ 0 }; // pointer / injection / foreground calls swallowed (see IsolateDesktop)
     HANDLE g_marker = nullptr; // named event: "a test instance is running"
     std::string g_dir;         // ...\tools\out\harness\ (with trailing backslash)
@@ -335,6 +336,12 @@ namespace {
             char text[256];
             DDM::HD::Menu::Describe(text, sizeof(text));
             Ack(seq, "ok %s", text);
+        } else if (!std::strcmp(cmd, "ambiance")) {
+            // the next mission start on another picture of its town: 1 day, 2 fog, 4 night, 0 = as the level says
+            unsigned v = 0;
+            std::sscanf(args, "%u", &v);
+            g_ambiance = v;
+            Ack(seq, "ok ambiance=%u (from the next mission start)", v);
         } else if (!std::strcmp(cmd, "patch")) {
             // HD letters and pictures of menus and dialogs (ddm_hd_patch.h): counters
             char text[320];
@@ -493,6 +500,36 @@ namespace {
     HWND WINAPI Stub_SetCapture(HWND)              { ++g_desktopCallsBlocked; return nullptr; }
 
     // Returns the number of entries that could NOT be replaced.
+    // ---- other ambiances of the level in the background test (night, fog) -------------------------
+    // The first campaign mission is all the test can start. 0x004C1AB0 (thiscall, ret 0x10) reads the
+    // level's header: [engine+0x4AD0] = ambiance (1 day, 2 fog, 4 night, 8 attack, 16.. custom; the map
+    // comes from Data\Levels\<ambiance>\, the night / fog code tests == 4 / == 2) and [engine+0x4CC0]
+    // (300 for fog and night, else 400). Its caller reads the ambiance right after it returns - set here,
+    // the same mission runs on the night or fog picture of its town. Test instance only.
+    using PFN_LevelHeader = uint32_t(__fastcall*)(uint8_t* engine, void* edx, void* a1, void* a2, void* a3, void* a4);
+    PFN_LevelHeader o_LevelHeader = nullptr;
+
+    uint32_t __fastcall Hook_LevelHeader(uint8_t* engine, void* edx, void* a1, void* a2, void* a3, void* a4) {
+        const uint32_t r = o_LevelHeader(engine, edx, a1, a2, a3, a4);
+        const uint32_t want = g_ambiance;
+        if (want && engine) {
+            const uint32_t was = *reinterpret_cast<uint32_t*>(engine + 0x4AD0);
+            *reinterpret_cast<uint32_t*>(engine + 0x4AD0) = want;
+            *reinterpret_cast<uint16_t*>(engine + 0x4CC0) = static_cast<uint16_t>((want == 2 || want == 4) ? 300 : 400);
+            Logger::Info("TEST MODE: level ambiance %u replaced by %u.", was, want);
+        }
+        return r;
+    }
+
+    void InstallAmbianceHook() {
+        static const uint8_t kProlog[] = { 0x53, 0x56, 0x8B, 0x74, 0x24, 0x0C, 0x57, 0x6A, 0x04, 0x68, 0x54, 0x4F, 0x4F, 0x46 };
+        auto* target = reinterpret_cast<void*>(0x004C1AB0);
+        const bool ok = std::memcmp(target, kProlog, sizeof(kProlog)) == 0 &&
+                        MH_CreateHook(target, reinterpret_cast<void*>(&Hook_LevelHeader), reinterpret_cast<void**>(&o_LevelHeader)) == MH_OK &&
+                        MH_EnableHook(target) == MH_OK;
+        Logger::Info("TEST MODE: level ambiance switch (command 'ambiance') %s.", ok ? "ready" : "NOT available");
+    }
+
     int IsolateDesktop(bool& cursorPosSafe) {
         struct Entry { const char* name; void* stub; };
         static const Entry kEntries[] = {
@@ -566,6 +603,7 @@ void Init() {
 
     bool cursorPosSafe = false;
     const int notIsolated = IsolateDesktop(cursorPosSafe);
+    InstallAmbianceHook();
     if (!cursorPosSafe) {
         // a hidden instance that can grab the player's pointer must not run at all
         Logger::Error("TEST MODE: SetCursorPos could not be taken away from the game - ending the test instance.");

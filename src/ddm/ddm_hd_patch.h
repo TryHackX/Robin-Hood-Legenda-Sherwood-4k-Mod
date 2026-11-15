@@ -66,6 +66,10 @@ namespace DDM::HD::Patch {
     // The game's cursor is being drawn (0x005F1700): its pictures are not patches.
     void SetCursorDrawing(bool on);
 
+    // Text the game draws with GDI (TextOutA / TextOutW into a surface's DC: lists of saved games, key
+    // bindings, Arial): drawn again with the same font twice as large, smoothed. Import slots of Game.exe.
+    bool InstallGdiText();
+
     // The last dialog loop ended: all shadows go.
     void Reset();
 

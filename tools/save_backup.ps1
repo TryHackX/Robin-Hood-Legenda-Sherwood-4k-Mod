@@ -6,7 +6,9 @@
 #   tools\save_backup.ps1 -Restore   put back changed or new files except Restart* (the game writes
 #                                    those at every mission start) - the user's Continue point and
 #                                    Profiles come back as they were
-param([switch]$Check, [switch]$Restore)
+#   tools\save_backup.ps1 -Restore -All   ... Restart* too (after a test that started a mission differently,
+#                                    e.g. at night with the harness command "ambiance")
+param([switch]$Check, [switch]$Restore, [switch]$All)
 
 $root = Split-Path -Parent $PSScriptRoot
 $saves = Join-Path $root 'DATA\Savegame'
@@ -35,7 +37,7 @@ Get-ChildItem $saves -Recurse -File | ForEach-Object {
 if (-not $changed) { Write-Output "saves unchanged against $rel"; exit 0 }
 foreach ($c in $changed) {
     $leaf = Split-Path -Leaf $c.Path
-    if ($Restore -and $leaf -notlike 'Restart*') {
+    if ($Restore -and ($All -or $leaf -notlike 'Restart*')) {
         if ($c.Kind -eq 'CHG') {
             Copy-Item -Path (Join-Path $bak $c.Path) -Destination (Join-Path $saves $c.Path) -Force
             Write-Output "restored $($c.Path)"

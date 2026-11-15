@@ -27,9 +27,10 @@ original DirectDraw wrapper, plus optional HD graphics prepared with AI models f
 - **HD map backgrounds**, **HD characters and objects**, **HD icons**, **HD menu backgrounds** — from pictures
   prepared with AI models (4 variants, switchable while playing), colours matched to the original. Download them as
   ready-made packs — see "HD graphics" below.
-- Optional in-between frames for character animations (RIFE model) — animations 2× smoother. Only the clean ones are
-  shown (`HDInBetweenQuality`, quality list `hd\sprites\_between\between.q` included in the mod archive); fast moves
-  whose generated frames came out soft run as in the original.
+- Optional in-between frames for character animations (RIFE model) — animations 2× smoother. Since 2026-11-15 the
+  frames are **sharp** (every pixel taken from one of the two moved frames instead of mixing them), so all accepted
+  ones are shown — about 3× more transitions than before (`SherwoodHD-3-klatki-posrednie.zip`, updated in HD graphics
+  pack 1; the quality lists for both the new and the first pack come with the mod archive).
 - **Smooth zoom** (magnifier): zoom in and out in small steps (game keys, mouse wheel — about the cursor, the buttons
   in the corner), from "the whole level fills the screen" (no black bands) up to 4× closer. The engine renders at 1.0
   or 2.0 (HD pictures) and the graphics card magnifies the rest — only the world, the interface keeps its size; clicks
@@ -66,7 +67,7 @@ original DirectDraw wrapper, plus optional HD graphics prepared with AI models f
 ## Installation — the complete HD version, step by step
 
 You need two releases from the **Releases** page (right side of the repository page):
-[**SherwoodEngineFix 1.1.5**](https://github.com/TryHackX/Robin-Hood-Legenda-Sherwood-4k-Mod/releases/tag/v1.1.5)
+[**SherwoodEngineFix 1.1.6**](https://github.com/TryHackX/Robin-Hood-Legenda-Sherwood-4k-Mod/releases/tag/v1.1.6)
 (the mod itself, a few MB) and
 [**HD graphics pack 1**](https://github.com/TryHackX/Robin-Hood-Legenda-Sherwood-4k-Mod/releases/tag/hd-pack-1)
 (the HD pictures, 7 archives). Download the files listed under **Assets** — not "Source code (zip)" / "Source code
@@ -77,19 +78,14 @@ needed to play.
 `C:\Program Files (x86)\GOG Galaxy\Games\Robin Hood - The Legend of Sherwood`
 (in GOG Galaxy: the game → ⚙ → Manage installation → Show folder).
 
-**Step 2 — the mod.** Unpack `SherwoodEngineFix-v1.1.5.zip` into the game folder (next to `Game.exe`): `winmm.dll`,
-`SherwoodFix.ini`, the HD fonts `hd\fonts\*.hdfont`, the HD pictures of menus and dialogs `hd\menu_parts\*.hdp`, small
-`hd\menu\<variant>\*.alias` files (the HD menu backgrounds of the pack found in menus opened during a mission) and the
-small `hd\sprites\_between\between.q` (the quality list of the in-between frames).
-
-**Step 3 — the HD pictures.** Download these archives from *HD graphics pack 1*:
+**Step 2 — the HD pictures.** Download these archives from *HD graphics pack 1*:
 
 | Archive | Download | Unpacked | Contents | |
 |---|---|---|---|---|
 | `SherwoodHD-1-postacie-a.zip` | 1.1 GB | 2.0 GB | characters and all their animations (part 1), icons | **required** |
 | `SherwoodHD-1-postacie-b.zip` | 1.1 GB | 2.0 GB | characters and all their animations (part 2) | **required** |
 | `SherwoodHD-2-tla-dat2.zip` | 0.7 GB | 1.1 GB | all 20 map backgrounds, roofs, trees, objects, menu backgrounds (default variant `dat2`) | **required** |
-| `SherwoodHD-3-klatki-posrednie.zip` | 1.6 GB | 3.0 GB | in-between frames: character animations 2× smoother (F9) | recommended |
+| `SherwoodHD-3-klatki-posrednie.zip` | 1.6 GB | 3.0 GB | in-between frames: character animations 2× smoother (F9); new sharp frames since 2026-11-15 | recommended |
 | `SherwoodHD-wariant-aomr.zip` | 0.7 GB | 1.1 GB | another look of the backgrounds (F6 / F7) | optional |
 | `SherwoodHD-wariant-sgi.zip` | 0.7 GB | 1.4 GB | another look of the backgrounds (F6 / F7) | optional |
 | `SherwoodHD-wariant-ultrasharp.zip` | 0.7 GB | 1.1 GB | another look of the backgrounds (F6 / F7) | optional |
@@ -101,6 +97,13 @@ game folder → *Extract* (7-Zip / WinRAR work too). The archives contain the `h
 holds `hd\maps\…`, `hd\sprites\…` and `hd\menu\…`. Check: `hd\sprites\_common\` must contain `sprites.idx`,
 `sprites.dat` **and** `sprites.dat.2` (from the two character archives). If Windows asks to replace files, answer yes.
 The downloaded `.zip` files can be deleted afterwards.
+
+**Step 3 — the mod (after the HD pictures).** Unpack `SherwoodEngineFix-v1.1.6.zip` into the game folder (next to
+`Game.exe`) — **after** the HD archives: it carries the newest of the small HD files, which replace older ones from the
+pack: `winmm.dll`, `SherwoodFix.ini`, the HD fonts `hd\fonts\*.hdfont`, the HD pictures of menus and dialogs
+`hd\menu_parts\*.hdp`, the run-time icons `hd\sprites\_icons\` (newer than the pack's), small `hd\menu\<variant>\*.alias`
+files (the HD menu backgrounds found in menus opened during a mission) and the quality lists of the in-between frames
+`hd\sprites\_between\between.q` / `between.v1.q` (the mod takes the one that belongs to the installed frames).
 
 **Step 4 (optional) — new menu backgrounds.** `SherwoodEngineFix-menu-remake-1.zip` (45 MB, in the
 [1.1.5 release](https://github.com/TryHackX/Robin-Hood-Legenda-Sherwood-4k-Mod/releases/tag/v1.1.5)): five menu

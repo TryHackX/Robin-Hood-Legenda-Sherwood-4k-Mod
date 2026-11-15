@@ -301,6 +301,21 @@ Użytkownik po obejrzeniu arkuszy zapytał, czy „będzie gorzej przez ghosty i
   DLL pokazuje tylko pary do `HDInBetweenQuality` (domyślnie 17 → 100 722 z 314 756; 24 → 230 821; 32 = jak w 1.1.x).
   Zły CRC (inny magazyn) → wszystkie, z ostrzeżeniem w logu. Sprawdzone w tle: w walce (szybkie ruchy) klatek pośrednich
   nie ma w ogóle, u spokojnych postaci są.
+- **Ostre klatki pośrednie** (2026-11-15, v1.1.6, „więcej płynnych animacji”): miękkość brała się z jednego kroku —
+  `mid = wa·mask + wb·(1−mask)`, mieszania dwóch przesuniętych klatek; gdzie się nie zgadzają, mieszanina jest rozmyta
+  albo podwójna. Tryb `--sharp`: każdy piksel (na powiększeniu ×4) z JEDNEJ z dwóch klatek — tej, której sieć tam ufa
+  bardziej (`mask > 0,5`); ostatnie zmniejszenie ×4 (średnia z obszaru) wygładza styk. Porównanie
+  `tools\hd\inbetween_sharp_test.py` na 60 parach z miary 17–32 (`hd\compare\posrednie_ostre.png`: A | mieszanie | ostre | B):
+  kolczuga i ręce rycerza (31,7) bez podwójnego wzoru, cienkie elementy lepiej (mediana zachowania 0,98 zamiast 0,92).
+  Całość od nowa: `make_inbetweens.py --files Characters/ --jobs 3 --redo --sharp` — 61 min (3 procesy), **457 198 par,
+  320 646 przyjętych** (dawniej 314 756), 3,04 GB; magazyn oznaczony w nagłówku `between.idx` (ostatnie słowo = 1).
+  `between_quality.py` skaluje miarę ×17/32 → przy domyślnym `HDInBetweenQuality=17` gra pokazuje **wszystkie
+  320 646** (dawniej 100 722). Stara lista jako `between.v1.q` (DLL bierze listę z pasującym CRC: gracze ze starą
+  paczką mają dalej tylko czyste klatki). Test ciągły z walkami: 37 286 klatek pośrednich w 4 min (dawniej ~18 tys.),
+  0 błędów; seria zrzutów walki przy zoomie 3×: postacie na swoich miejscach, ostre. Nowa paczka
+  `SherwoodHD-3-klatki-posrednie.zip` (1,62 GiB) zastąpiła starą w wydaniu `hd-pack-1`.
+- Generator wstrzymuje się tylko przy grze z WIDOCZNYM oknem (ukryta instancja testowa też ma tytuł okna — pierwsza
+  wersja tego sprawdzenia zatrzymała generowanie na czas testu).
 
 ## 5d. Czcionka HD (2026-11-15, „Tak, czcionka HD”; `src\ddm\ddm_hd_font.cpp`)
 - Fonty gry to bitmapy `DATA\Interface\Fonts\*.bfn` / `Dialog.fnt` („SBFONT”, krój Lydian i inne; pliki TTF wymienione
@@ -349,8 +364,28 @@ pokazywaną częścią 1365×768: `ref` = piksel klatki, do którego należy blo
   = `ref`, a z 8 sąsiadów co najwyżej 4 *mających* łatkę już się nie zgadza (cienkie litery — sąsiedzi bez łatki się
   nie liczą). Polecenie testowe `patch` = liczniki; `dbg 64/128/256` = bez łatek / warstwy 1 / tła dialogu.
 - Wynik (test w tle): odprawa, menu Esc, opcje (także z misji), wczytywanie, menu główne — litery, przyciski,
-  pergamin, pieczęć, portret ostre; kursor nad napisami nie zostawia śladów (0 różnych pikseli). Niepokryte: listy
-  rysowane przez GDI (Arial: klawiszologia, lista zapisów) — zostają powiększone.
+  pergamin, pieczęć, portret ostre; kursor nad napisami nie zostawia śladów (0 różnych pikseli).
+- **Tekst GDI** (v1.1.6: lista klawiszy, lista zapisów — Arial, `*.tfn`): gra pisze go `TextOutA`/`TextOutW`
+  (sloty importów `0x00677068` / `0x0067707C`) do DC powierzchni (`GetDC` → sekcja DIB, `DDM::SurfaceOfDC`),
+  **znak po znaku**, przezroczyście, wyrównany do lewej i góry. Hak liczy pudełko znaku (`GetTextExtentPoint32`,
+  `GetTextMetrics`, `GetTextAlign`; zapas pół szerokości znaku na boki — ogon „j” sięga pod poprzednią literę — i pół
+  dolnego wydłużenia; przycięte do `GetClipBox`), pozwala grze narysować znak, a potem rysuje go drugi raz tą samą
+  czcionką 2× większą z wygładzaniem (`ANTIALIASED_QUALITY`, biały na czarnym = pokrycie, gamma 0,75 — nie
+  wygładzone litery gry wyglądają grubiej) i składa jak literę fontu HD (to, co narysowano, = piksele „przed” ≠ „po”).
+  Tło `OPAQUE` wchodzi do rysunku. Oryginał miał kolorowe obwódki ClearType — wersja HD jest czysta.
+
+## 5f. Noc i mgła (sprawdzone 2026-11-15, v1.1.6)
+- Rodzaj mapy to flaga w polu silnika `+0x4AD0` (1 dzień, 2 mgła, 4 noc, 8 atak, 16..128 mapy własne), czytana
+  z nagłówka poziomu przez `0x004C1AB0` (thiscall, `ret 0x10`); mapa idzie z `Data\Levels\<rodzaj>\`, kod nocy / mgły
+  sprawdza `== 4` / `== 2`, a `+0x4CC0` (300 dla mgły i nocy, 400 inaczej) ustawia ta sama funkcja. Polecenie testowe
+  **`ambiance N`** ustawia rodzaj dla następnego startu misji (tylko instancja testowa) — pierwsza misja kampanii
+  biegnie wtedy na nocnej albo mglistej Lincoln. Zapisy: `tools\save_backup.ps1 -Restore -All` (także `Restart*`).
+- Wszystkie 20 map (dzień, mgła, noc, własna) ma tła HD. Noc: postacie i zwierzęta NIE są przyciemniane — w oryginale
+  też nie (porównanie `hd off`: świnia tak samo jasna); raport `miss` pokazał 9 klatek tworzonych w locie bez HD
+  (ikona 21×28, 8 klatek 32×32 rysowanych mieszaniem — światło nocą) → `rtdump` + `upscale_icons.py --model ultrasharp`
+  dorobiło 17 klatek (magazyn ikon 397 klatek; idzie w archiwum moda). Mgła: wszystko w HD (raport `miss` jak w dzień —
+  tylko róg paska 29×95), postacie przygaszone mgłą jak w grze.
+- Niesprawdzalne w tle: misje z drużyną (kilka portretów) i prawdziwy staw (Nottingham) — potrzebny postęp kampanii.
 
 ## 6. Tryb testowy w tle (żeby nie zabierać użytkownikowi ekranu)
 - `tools\htest.ps1 [-Ini plik] [-MenuOnly]` — start ukrytej gry (`SHERWOODFIX_TEST=1`), pominięcie filmów, „Graj!".

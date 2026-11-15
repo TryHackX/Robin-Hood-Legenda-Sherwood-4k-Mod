@@ -11,6 +11,10 @@ between.idx, so the store itself stays as it is.
 
 between.q: "HDBQ", u32 version 1, u32 count (= entries of between.idx), u32 CRC-32 of between.idx,
            then count bytes: the colour difference rounded up (0..254), 255 = not measured.
+Sharp store (make_inbetweens.py --sharp, 2026-11-15; flag 1 in the last word of the between.idx header): no frame
+is a mix of the two any more, the soft look is gone - the value is scaled so that the generator's own limit (32)
+lands on the DLL's default 17: with HDInBetweenQuality=17 every accepted frame is shown. Players with the old
+store keep its file (between.v1.q, the DLL takes the one whose CRC matches).
 """
 import csv
 import glob
@@ -32,9 +36,11 @@ ENTRY = np.dtype([("a", "<u4"), ("b", "<u4"), ("off", "<u8"), ("size", "<u4"), (
 def main():
     idx_path = os.path.join(DIR, 'between.idx')
     raw = open(idx_path, 'rb').read()
-    magic, ver, count, _ = struct.unpack_from('<4sIII', raw, 0)
+    magic, ver, count, sharp = struct.unpack_from('<4sIII', raw, 0)
     if magic != b'HDBT' or ver != 1:
         sys.exit('not an in-between index: ' + idx_path)
+    scale = 17.0 / 32.0 if sharp == 1 else 1.0
+    print('store made %s' % ('sharp: values scaled 17/32 (limit 32 -> 17)' if sharp == 1 else 'by mixing: values as measured'))
     entries = np.frombuffer(raw, ENTRY, count, 16)
     colour = {}
     for p in glob.glob(os.path.join(ROOT, 'hd', 'work', 'between_log*.csv')):
@@ -52,7 +58,7 @@ def main():
         if c is None:
             missing += used[i]
             continue
-        q[i] = min(254, int(math.ceil(c)))
+        q[i] = min(254, int(math.ceil(c * scale - 1e-9)))
     h = zlib.crc32(raw) & 0xFFFFFFFF            # the index this file belongs to
     with open(os.path.join(DIR, 'between.q'), 'wb') as f:
         f.write(struct.pack('<4sIII', b'HDBQ', 1, count, h))

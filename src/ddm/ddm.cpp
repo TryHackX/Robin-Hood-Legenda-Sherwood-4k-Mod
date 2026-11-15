@@ -1547,6 +1547,18 @@ bool SurfaceAlive(uintptr_t serial, const uint8_t* bits) {
     return false;
 }
 
+bool SurfaceOfDC(void* dc, Buf& out) {
+    if (!dc) return false;
+    std::lock_guard<std::recursive_mutex> lock(g.lock);
+    for (Surface* s : g.surfaces) {
+        if (s->st.dc == static_cast<HDC>(dc) && s->st.bits) {
+            out = s->buf();
+            return true;
+        }
+    }
+    return false;
+}
+
 bool FindLockedBuf(const void* address, Buf& out) {
     const auto* p = static_cast<const uint8_t*>(address);
     for (unsigned i = 0; i < kLockHistory; ++i) {

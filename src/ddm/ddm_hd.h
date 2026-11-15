@@ -24,6 +24,9 @@ namespace DDM {
     // True while the surface with this serial number exists and its pixels are at `bits`.
     bool SurfaceAlive(uintptr_t serial, const uint8_t* bits);
 
+    // The surface whose GDI device context (GetDC) is `dc`: its pixels.
+    bool SurfaceOfDC(void* dc, Buf& out);
+
     // The picture on the screen now (the front surface: the frame presented last), RGB565.
     bool CopyFront(std::vector<uint16_t>& out, int& w, int& h);
     // The frame being drawn (the back surface of the flip chain), RGB565.

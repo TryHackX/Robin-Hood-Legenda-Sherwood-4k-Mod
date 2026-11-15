@@ -265,7 +265,12 @@ Do sprawdzenia przy okazji: czy miganie ikon akcji ma teraz właściwe tempo; po
      w opcjach z misji poprawiony; tła z remake'u (`hd\menu\remake\`, `tools\hd\menu_remake.py` export/import, prompty;
      pierwszy komplet 5 teł z Gemini od użytkownika), F10 z trzema stanami; menu Esc ~80 ms zamiast ~390 ms (barwienie
      tła przez tablicę kolorów, bit w bit jak gra). Wnętrza budynków sprawdzone: postać w domu jest ukryta, dach zostaje
-     — gra nie pokazuje wnętrz, nic do poprawy. ☐ Listy GDI (klawiszologia, zapisy) nadal powiększane.
+     — gra nie pokazuje wnętrz, nic do poprawy. ✔ Listy GDI — v1.1.6.
+   - ✔ **v1.1.6 — listy w HD, noc i mgła, ostre klatki pośrednie** (2026-11-15, „leć wszystko i listy w hd i klatki
+     pośrednie i cała reszta”): tekst GDI (lista klawiszy, zapisów) rysowany drugi raz czcionką 2× z wygładzaniem;
+     noc i mgła sprawdzone w tle poleceniem `ambiance` (`docs\HD_MODE.md` §5f; nocą 17 nowych klatek tworzonych w locie
+     dorobionych w HD); klatki pośrednie od nowa w trybie ostrym — 320 646 pokazywanych zamiast 100 722, nowa paczka 3.
+     ☐ Misje z drużyną i staw w Nottingham — po postępie kampanii gracza (test w tle ma tylko pierwszą misję).
    - ✔ **Wydanie na GitHubie** (2026-11-14): v1.0.0 (README po angielsku), paczki grafiki HD jako osobne wydanie
      (7 plików ZIP < 2 GB; magazyn postaci w dwóch częściach — mod czyta `sprites.dat` + `sprites.dat.2`).
 5. ◐ Klatki pośrednie animacji postaci (prośba użytkownika; „jak się nie uda, trudno"): eksperyment zakończony

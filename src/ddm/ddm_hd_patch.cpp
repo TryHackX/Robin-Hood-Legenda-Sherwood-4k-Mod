@@ -1,4 +1,5 @@
 #include "ddm_hd_patch.h"
+#include "ddm.h"
 #include "ddm_hd.h"
 #include "ddm_hd_font.h"
 #include "ddm_hd_menu.h"
@@ -10,6 +11,7 @@
 
 #include <windows.h>
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <memory>
@@ -331,6 +333,213 @@ bool Active() {
     return BaseOn() && UiScale::DialogLoopRunning();
 }
 
+// ---- text drawn by GDI ---------------------------------------------------------------------------
+namespace {
+    using PFN_TextOutA = BOOL(WINAPI*)(HDC, int, int, LPCSTR, int);
+    using PFN_TextOutW = BOOL(WINAPI*)(HDC, int, int, LPCWSTR, int);
+    PFN_TextOutA o_TextOutA = nullptr;
+    PFN_TextOutW o_TextOutW = nullptr;
+    unsigned g_gdiTexts = 0, g_gdiTextsHd = 0;
+
+    // the game's fonts twice as large and smoothed (by the LOGFONT they were made from)
+    struct BigFont {
+        LOGFONTA lf{};
+        HFONT font = nullptr;
+    };
+    std::vector<BigFont> g_bigFonts;
+
+    HFONT Bigger(HDC dc) {
+        LOGFONTA lf{};
+        const HGDIOBJ cur = GetCurrentObject(dc, OBJ_FONT);
+        if (!cur || GetObjectA(cur, sizeof(lf), &lf) == 0) return nullptr;
+        for (const BigFont& b : g_bigFonts) {
+            if (std::memcmp(&b.lf, &lf, sizeof(lf)) == 0) return b.font;
+        }
+        LOGFONTA big = lf;
+        big.lfHeight *= 2;
+        big.lfWidth *= 2;
+        big.lfQuality = ANTIALIASED_QUALITY;
+        const HFONT f = CreateFontIndirectA(&big);
+        if (!f) return nullptr;
+        if (g_bigFonts.size() >= 16) {
+            DeleteObject(g_bigFonts.front().font);
+            g_bigFonts.erase(g_bigFonts.begin());
+        }
+        g_bigFonts.push_back(BigFont{ lf, f });
+        return f;
+    }
+
+    // scratch picture for the text twice as large (32 bits, top-down)
+    HDC      g_tdc = nullptr;
+    HBITMAP  g_tbm = nullptr;
+    uint32_t* g_tbits = nullptr;
+    int      g_tw = 0, g_th = 0;
+    std::vector<uint16_t> g_tcol;
+    std::vector<uint8_t>  g_tcov;
+
+    bool Scratch(int w, int h) {
+        if (w <= 0 || h <= 0 || w > 4096 || h > 1024) return false;
+        if (g_tbm && w <= g_tw && h <= g_th) return true;
+        if (!g_tdc) g_tdc = CreateCompatibleDC(nullptr);
+        if (!g_tdc) return false;
+        BITMAPINFO bi{};
+        bi.bmiHeader.biSize = sizeof(bi.bmiHeader);
+        bi.bmiHeader.biWidth = (std::max)(w, g_tw);
+        bi.bmiHeader.biHeight = -(std::max)(h, g_th);
+        bi.bmiHeader.biPlanes = 1;
+        bi.bmiHeader.biBitCount = 32;
+        bi.bmiHeader.biCompression = BI_RGB;
+        void* bits = nullptr;
+        const HBITMAP bm = CreateDIBSection(g_tdc, &bi, DIB_RGB_COLORS, &bits, nullptr, 0);
+        if (!bm) return false;
+        SelectObject(g_tdc, bm);
+        if (g_tbm) DeleteObject(g_tbm);
+        g_tbm = bm;
+        g_tbits = static_cast<uint32_t*>(bits);
+        g_tw = bi.bmiHeader.biWidth;
+        g_th = -bi.bmiHeader.biHeight;
+        return true;
+    }
+
+    inline uint16_t From8888(COLORREF c) {
+        const uint32_t r = GetRValue(c), g = GetGValue(c), b = GetBValue(c);
+        return static_cast<uint16_t>(((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3));
+    }
+
+    template <typename Ch, typename Orig, typename Extent, typename Out>
+    BOOL TextHook(HDC dc, int x, int y, const Ch* s, int n, Orig orig, Extent extent, Out textOut) {
+        Buf b{};
+        if (!s || n <= 0 || g_cursor || !BaseOn() || !SurfaceOfDC(dc, b)) return orig(dc, x, y, s, n);
+        ++g_gdiTexts;
+        // where it lands (MM_TEXT: logical = surface pixels)
+        SIZE sz{};
+        TEXTMETRICA tm{};
+        if (!extent(dc, s, n, &sz) || !GetTextMetricsA(dc, &tm)) return orig(dc, x, y, s, n);
+        const UINT align = GetTextAlign(dc);
+        int left = x, top = y;
+        if ((align & TA_CENTER) == TA_CENTER) left = x - sz.cx / 2;
+        else if (align & TA_RIGHT) left = x - sz.cx;
+        if ((align & TA_BASELINE) == TA_BASELINE) top = y - tm.tmAscent;
+        else if (align & TA_BOTTOM) top = y - sz.cy;
+        // room for parts outside the advance box (the tail of "j" runs under the letter before it)
+        const int mx = 3 + tm.tmOverhang + tm.tmAveCharWidth / 2, my = 3 + tm.tmDescent / 2;
+        RECT r{ left - mx, top - my, left + sz.cx + mx, top + sz.cy + my };
+        RECT clip{};
+        const int cr = GetClipBox(dc, &clip);
+        if (cr == NULLREGION) return orig(dc, x, y, s, n);
+        if (cr != ERROR && !IntersectRect(&r, &r, &clip)) return orig(dc, x, y, s, n);
+        if (TraceActive()) {
+            char text[220];
+            int k = std::snprintf(text, sizeof(text), "TEXT surface %dx%d at (%d,%d) box (%ld,%ld,%ld,%ld) align=%u bk=%d '", b.w, b.h, x, y,
+                                  r.left, r.top, r.right, r.bottom, align, GetBkMode(dc));
+            for (int i = 0; i < n && k < 200; ++i) text[k++] = static_cast<char>(s[i] < 128 ? s[i] : '?');
+            if (k < 218) { text[k++] = '\''; text[k] = 0; } else text[219] = 0;
+            TraceMark(text);
+        }
+        static Op op;
+        op.Clear();
+        op.dst = b;
+        op.x = r.left;
+        op.y = r.top;
+        op.w = r.right - r.left;
+        op.h = r.bottom - r.top;
+        const bool patch = FrameSized(b) && ActiveFor(b.bits) && Place(op);
+        if (patch) KeepBefore(op);
+        const BOOL ok = orig(dc, x, y, s, n);
+        if (!patch || !ok) return ok;
+        GdiFlush();
+        // the same text twice as large, white on black: its coverage
+        const int w2 = op.w * 2, h2 = op.h * 2;
+        const HFONT big = Bigger(dc);
+        if (!big || !Scratch(w2, h2)) return ok;
+        for (int yy = 0; yy < h2; ++yy) std::memset(g_tbits + static_cast<size_t>(yy) * g_tw, 0, static_cast<size_t>(w2) * 4);
+        const HGDIOBJ oldFont = SelectObject(g_tdc, big);
+        SetTextColor(g_tdc, RGB(255, 255, 255));
+        SetBkMode(g_tdc, TRANSPARENT);
+        SetTextAlign(g_tdc, align & ~TA_UPDATECP);
+        textOut(g_tdc, 2 * (x - op.x), 2 * (y - op.y), s, n);
+        GdiFlush();
+        SelectObject(g_tdc, oldFont);
+        g_tcol.assign(static_cast<size_t>(w2) * h2, From8888(GetTextColor(dc)));
+        g_tcov.resize(static_cast<size_t>(w2) * h2);
+        // the game's small text is drawn without smoothing and looks bolder than smoothed letters of the same
+        // font: coverage through a gamma of 0.75 gives them back that weight
+        static uint8_t s_gamma[256];
+        static bool s_gammaReady = false;
+        if (!s_gammaReady) {
+            for (int v = 0; v < 256; ++v) s_gamma[v] = static_cast<uint8_t>(std::pow(v / 255.0, 0.75) * 255.0 + 0.5);
+            s_gammaReady = true;
+        }
+        for (int yy = 0; yy < h2; ++yy) {
+            const uint32_t* row = g_tbits + static_cast<size_t>(yy) * g_tw;
+            uint8_t* cov = g_tcov.data() + static_cast<size_t>(yy) * w2;
+            for (int xx = 0; xx < w2; ++xx) cov[xx] = s_gamma[(row[xx] >> 8) & 0xFF];
+        }
+        if (GetBkMode(dc) == OPAQUE) {
+            // the game filled the text's cell with its background colour: that is part of the drawing
+            const uint16_t bk = From8888(GetBkColor(dc)), fg = From8888(GetTextColor(dc));
+            const int bx0 = 2 * (left - op.x), by0 = 2 * (top - op.y);
+            for (int yy = (std::max)(0, by0); yy < (std::min)(h2, by0 + 2 * static_cast<int>(sz.cy)); ++yy) {
+                for (int xx = (std::max)(0, bx0); xx < (std::min)(w2, bx0 + 2 * static_cast<int>(sz.cx)); ++xx) {
+                    const size_t i = static_cast<size_t>(yy) * w2 + xx;
+                    const uint32_t a = g_tcov[i];
+                    const uint32_t m = (To8888(bk) & 0xFFFFFF);
+                    const uint32_t t = (To8888(fg) & 0xFFFFFF);
+                    const uint32_t mixed = Mix(0xFF000000u | m, t, a);
+                    g_tcol[i] = static_cast<uint16_t>((((mixed >> 19) & 0x1F) << 11) | (((mixed >> 10) & 0x3F) << 5) | ((mixed >> 3) & 0x1F));
+                    g_tcov[i] = 255;
+                }
+            }
+        }
+        op.kind = 1;
+        op.glyph = true;
+        op.hdColour = g_tcol.data();
+        op.hdAlpha = g_tcov.data();
+        op.hdW = w2;
+        op.hdH = h2;
+        op.hx = 0;
+        op.hy = 0;
+        End(op);
+        ++g_gdiTextsHd;
+        return ok;
+    }
+
+    BOOL WINAPI Hook_TextOutA(HDC dc, int x, int y, LPCSTR s, int n) {
+        return TextHook(dc, x, y, s, n, o_TextOutA, &GetTextExtentPoint32A, &TextOutA);
+    }
+
+    BOOL WINAPI Hook_TextOutW(HDC dc, int x, int y, LPCWSTR s, int n) {
+        return TextHook(dc, x, y, s, n, o_TextOutW, &GetTextExtentPoint32W, &TextOutW);
+    }
+
+    bool PatchSlot(uintptr_t slot, void* replacement, void** original) {
+        auto** p = reinterpret_cast<void**>(slot);
+        DWORD oldProt = 0;
+        if (!*p || !VirtualProtect(p, sizeof(void*), PAGE_READWRITE, &oldProt)) return false;
+        if (original) *original = *p;
+        *p = replacement;
+        VirtualProtect(p, sizeof(void*), oldProt, &oldProt);
+        return true;
+    }
+}
+
+bool InstallGdiText() {
+    // Game.exe import slots (GOG build): GDI32!TextOutA / TextOutW
+    constexpr uintptr_t kIatTextOutA = 0x00677068, kIatTextOutW = 0x0067707C;
+    const HMODULE gdi = GetModuleHandleA("gdi32.dll");
+    if (!gdi) return false;
+    const void* realA = reinterpret_cast<const void*>(GetProcAddress(gdi, "TextOutA"));
+    const void* realW = reinterpret_cast<const void*>(GetProcAddress(gdi, "TextOutW"));
+    // the slots must hold what the import table says (another hook or a different build: left alone)
+    auto slotOk = [](uintptr_t slot, const void* real) {
+        const void* cur = *reinterpret_cast<void* const*>(slot);
+        return cur && (cur == real || reinterpret_cast<uintptr_t>(cur) > 0x70000000u);
+    };
+    if (!slotOk(kIatTextOutA, realA) || !slotOk(kIatTextOutW, realW)) return false;
+    return PatchSlot(kIatTextOutA, reinterpret_cast<void*>(&Hook_TextOutA), reinterpret_cast<void**>(&o_TextOutA)) &&
+           PatchSlot(kIatTextOutW, reinterpret_cast<void*>(&Hook_TextOutW), reinterpret_cast<void**>(&o_TextOutW));
+}
+
 void SetCursorDrawing(bool on) {
     g_cursor = on;
 }
@@ -570,16 +779,24 @@ void End(Op& op) {
     for (int y = t; y < b; ++y) {
         const int py = y - op.y, cy = y - c.top;
         const auto* drow = reinterpret_cast<const uint16_t*>(op.dst.bits + static_cast<size_t>(y) * op.dst.pitch);
-        const auto* srow = reinterpret_cast<const uint16_t*>(reinterpret_cast<const uint8_t*>(op.src) + static_cast<size_t>(py) * op.srcPitch);
+        // (text drawn by GDI has no source pixels: what it changed is what it drew)
+        const auto* srow = op.src ? reinterpret_cast<const uint16_t*>(reinterpret_cast<const uint8_t*>(op.src) +
+                                                                      static_cast<size_t>(py) * op.srcPitch)
+                                  : nullptr;
         const auto* arow = op.alpha ? reinterpret_cast<const uint16_t*>(reinterpret_cast<const uint8_t*>(op.alpha) +
                                                                          static_cast<size_t>(py) * op.alphaPitch)
                                     : nullptr;
         for (int x = l; x < r; ++x) {
             const int px = x - op.x, cx = x - c.left;
             const uint32_t B = op.before[static_cast<size_t>(py) * op.w + px], A = drow[x];
-            const uint32_t sp = srow[px];
-            bool drawn = op.key == 0xFFFFFFFFu || sp != op.key;
-            if (drawn && arow) drawn = (arow[px] & 0x1Fu) != 0;
+            bool drawn;
+            if (!srow) {
+                drawn = A != B;
+            } else {
+                const uint32_t sp = srow[px];
+                drawn = op.key == 0xFFFFFFFFu || sp != op.key;
+                if (drawn && arow) drawn = (arow[px] & 0x1Fu) != 0;
+            }
             uint32_t& ref = sh->ref[static_cast<size_t>(cy) * sh->cw + cx];
             const bool valid = ref == (0x10000u | B);
             if (op.kind == 3) {             // no HD version: whatever the game drew is not in the shadow

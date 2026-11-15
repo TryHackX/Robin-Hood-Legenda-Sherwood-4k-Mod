@@ -1929,6 +1929,7 @@ void InstallHooks() {
                                      reinterpret_cast<void**>(&o_DrawPointer));
         Logger::Info("HD menus: 1:1 text / pictures / cursor hooked for HD letters and pictures: %d %d %d %d.", t1 ? 1 : 0, k1 ? 1 : 0,
                      p1 ? 1 : 0, cur ? 1 : 0);
+        Logger::Info("HD menus: GDI text (lists of saved games, keys) drawn again twice as large: %d.", Patch::InstallGdiText() ? 1 : 0);
     }
     {
         // push -1 / push 0x666C38 / mov eax, fs:[0]

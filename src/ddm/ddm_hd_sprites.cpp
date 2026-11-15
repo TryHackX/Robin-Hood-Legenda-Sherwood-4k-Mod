@@ -648,28 +648,41 @@ namespace {
         for (const BetweenEntry& e : g_between) usable += e.size != 0;
         Logger::Info("HD sprites: %zu in-between frames available (%zu frame pairs known).", usable, g_between.size());
 
-        // their quality (see g_betweenQ): only for exactly this index
+        // their quality (see g_betweenQ): only for exactly this index. between.q belongs to the store of the
+        // current HD pack, between.v1.q to the first one (soft frames by mixing, 2026-11-14): the mod archive
+        // carries both, the one whose CRC matches the installed index is taken.
         g_betweenQ.clear();
-        HANDLE qf = CreateFileA((dir + "between.q").c_str(), GENERIC_READ, share, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-        if (qf == INVALID_HANDLE_VALUE) {
-            Logger::Info("HD sprites: no quality list for them (hd\\sprites\\_between\\between.q) - all are used.");
-            return;
-        }
         struct QHeader { char magic[4]; uint32_t version, count, crc; } qh{};
         uint32_t crc = Crc32(0, reinterpret_cast<const uint8_t*>(&hdr), sizeof(hdr));
         crc = Crc32(crc, reinterpret_cast<const uint8_t*>(g_between.data()), g_between.size() * sizeof(BetweenEntry));
-        bool qok = ReadFile(qf, &qh, sizeof(qh), &got, nullptr) && got == sizeof(qh) && std::memcmp(qh.magic, "HDBQ", 4) == 0 &&
-                   qh.version == 1 && qh.count == g_between.size() && qh.crc == crc;
-        if (qok) {
-            g_betweenQ.resize(qh.count);
-            qok = ReadFile(qf, g_betweenQ.data(), qh.count, &got, nullptr) && got == qh.count;
-        }
-        CloseHandle(qf);
-        if (!qok) {
+        const char* used = nullptr;
+        bool any = false;
+        for (const char* name : { "between.q", "between.v1.q" }) {
+            HANDLE qf = CreateFileA((dir + name).c_str(), GENERIC_READ, share, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+            if (qf == INVALID_HANDLE_VALUE) continue;
+            any = true;
+            bool qok = ReadFile(qf, &qh, sizeof(qh), &got, nullptr) && got == sizeof(qh) && std::memcmp(qh.magic, "HDBQ", 4) == 0 &&
+                       qh.version == 1 && qh.count == g_between.size() && qh.crc == crc;
+            if (qok) {
+                g_betweenQ.resize(qh.count);
+                qok = ReadFile(qf, g_betweenQ.data(), qh.count, &got, nullptr) && got == qh.count;
+            }
+            CloseHandle(qf);
+            if (qok) {
+                used = name;
+                break;
+            }
             g_betweenQ.clear();
-            Logger::Warn("HD sprites: between.q does not belong to this in-between store - all frames are used.");
+        }
+        if (!any) {
+            Logger::Info("HD sprites: no quality list for them (hd\\sprites\\_between\\between.q) - all are used.");
             return;
         }
+        if (!used) {
+            Logger::Warn("HD sprites: no between.q belongs to this in-between store - all frames are used.");
+            return;
+        }
+        Logger::Info("HD sprites: quality list %s.", used);
         const int limit = SherwoodConfig::Get().hdInBetweenQuality;
         size_t kept = 0;
         for (size_t i = 0; i < g_between.size(); ++i) kept += g_between[i].size != 0 && g_betweenQ[i] <= limit;

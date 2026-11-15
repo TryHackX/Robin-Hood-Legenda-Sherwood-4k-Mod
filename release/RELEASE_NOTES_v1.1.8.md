@@ -10,6 +10,9 @@
   versions of this picture for all four background variants are in this archive (`hd\menu\<variant>\2ef7a848bc09b885.mhd`).
 - **Credits run smoothly**: 70-90 frames a second (before 40-50) - per frame only the changed column of text is
   compared, the HD picture is uploaded to the graphics card once.
+- **New remade backgrounds pack** `SherwoodEngineFix-menu-remake-2.zip` (below): the five menu backgrounds of pack 1
+  plus a new one for the credits - six in all, painted anew by an image AI after the originals, filling the whole
+  widescreen screen. Replaces pack 1.
 - `tools\hd\menu_remake.py import --only 06` imports one screen of remade backgrounds; screen `06_tworcy` = the credits.
 
 ## Installation
@@ -18,7 +21,8 @@
    carries newer files: `winmm.dll`, `SherwoodFix.ini`, `hd\fonts\`, `hd\menu_parts\`, `hd\menu\<variant>\` (aliases and
    the credits' background), `hd\sprites\_icons\` and `hd\sprites\_between\between.q` / `between.v1.q` / `between.t`.
    Updating from 1.1.x: everything except `SherwoodFix.ini` (yours keeps working).
-3. Optional new menu backgrounds: `SherwoodEngineFix-menu-remake-1.zip` from the 1.1.5 release.
+3. Optional new menu backgrounds: `SherwoodEngineFix-menu-remake-2.zip` from this release (unpack into the game folder;
+   F10 -> "MENU W HD" -> "TAK, TLA Z REMAKE GDY SA").
 4. Start the game as usual. Mod settings in the game: **F10**.
 
 Uninstall: delete `winmm.dll`. On a 1080p monitor set `Width=1920` and `Height=1080` in `SherwoodFix.ini`.

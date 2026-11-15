@@ -107,11 +107,13 @@ files (the HD menu backgrounds found in menus opened during a mission) and the H
 `hd\sprites\_between\between.q` / `between.v1.q` (the mod takes the one that belongs to the installed frames) and the
 animation steps' lengths `hd\sprites\_between\between.t` (how long each in-between frame stays).
 
-**Step 4 (optional) — new menu backgrounds.** `SherwoodEngineFix-menu-remake-1.zip` (45 MB, in the
-[1.1.5 release](https://github.com/TryHackX/Robin-Hood-Legenda-Sherwood-4k-Mod/releases/tag/v1.1.5)): five menu
-backgrounds painted anew by an image AI after the original ones, filling the whole widescreen screen. Unpack into the
-game folder (it adds `hd\menu\remake\`). In the game: F10 → "MENU W HD (TLA, NAPISY)" switches between the new
-backgrounds, the upscaled originals and the original menus.
+**Step 4 (optional) — new menu backgrounds.** `SherwoodEngineFix-menu-remake-2.zip` (54 MB, in the
+[1.1.8 release](https://github.com/TryHackX/Robin-Hood-Legenda-Sherwood-4k-Mod/releases/tag/v1.1.8)): six backgrounds
+(main menu, options, sound and graphics options, load / save, the parchment screen and the credits) painted anew by an
+image AI after the original ones, filling the whole widescreen screen; the question whether to quit shows the main
+menu's. Unpack into the game folder (it adds `hd\menu\remake\`; it replaces `…-menu-remake-1.zip` of 1.1.5). In the
+game: F10 → "MENU W HD (TLA, NAPISY)" switches between the new backgrounds, the upscaled originals and the original
+menus.
 
 **Step 5 — play.** Start the game as usual (GOG Galaxy or the shortcut). At the start of a mission the name of the HD
 variant appears at the top of the screen for 3 s. F8 compares with the original graphics, F10 opens the mod's

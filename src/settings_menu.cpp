@@ -117,7 +117,8 @@ namespace {
             case kSmoothSprites: yesNo(cfg.smoothSprites); break;
             case kWater:
                 std::snprintf(out, n, "%s", cfg.hdWater == 1 ? "NIERUCHOMA Z OBRAZU HD" :
-                                            cfg.hdWater == 2 ? "HD Z MIGOTANIEM Z GRY" : "ANIMACJA Z GRY (NISKA ROZDZ.)");
+                                            cfg.hdWater == 2 ? "HD Z FALAMI" :
+                                            cfg.hdWater >= 3 ? "HD Z WIEKSZYMI FALAMI" : "ANIMACJA Z GRY (NISKA ROZDZ.)");
                 break;
             case kUiScale:       std::snprintf(out, n, "%s", UiScale::InterfaceScaled() ? "2X WIEKSZY" : "ORYGINALNY"); break;
             case kMap:           std::snprintf(out, n, "%s", UiScale::MapInCorner() ? "PRAWY GORNY ROG" : "JAK W GRZE (U GORY)"); break;
@@ -167,11 +168,11 @@ namespace {
                 WriteIni("Display", "SmoothSprites", cfg.smoothSprites ? 1 : 0);
                 break;
             case kWater: {
-                // still HD water -> HD water with the game's shimmer -> the game's own frames
-                static const int kOrder[3] = { 1, 2, 0 };
+                // HD water with waves -> stronger waves -> the game's own frames -> still HD water
+                static const int kOrder[4] = { 2, 3, 0, 1 };
                 int at = 0;
-                while (at < 3 && kOrder[at] != cfg.hdWater) ++at;
-                cfg.hdWater = kOrder[((at < 3 ? at : 0) + (dir < 0 ? 2 : 1)) % 3];
+                while (at < 4 && kOrder[at] != cfg.hdWater) ++at;
+                cfg.hdWater = kOrder[((at < 4 ? at : 0) + (dir < 0 ? 3 : 1)) % 4];
                 WriteIni("Display", "HDWater", cfg.hdWater);
                 break;
             }

@@ -247,8 +247,10 @@ Do sprawdzenia przy okazji: czy miganie ikon akcji ma teraz właściwe tempo; po
      zoom gry), brak dymu z kominów (uznany za wodę → nakładka na obraz HD z płynnym przenikaniem klatek), spadki FPS
      (HUD ×2 filtrowany co klatkę → pamięć podręczna; klatka ~10 → ~4,5 ms), wywrotka przy wyjściu z misji (nieaktualny
      RHGame*). Woda: nowa opcja `HDWater=2` (obraz HD + migotanie z gry), domyślnie zostaje nieruchoma (wybór
-     użytkownika). Opis: `docs\HD_MODE.md` §4 i §7. ☐ Woda `HDWater=2` w grze (test w tle ma tylko Lincoln), ☐ remake
-     animacji wody/dymu „dla realizmu” (prośba użytkownika — do ustalenia), ☐ czcionka HD zamiast ×2.
+     użytkownika). Opis: `docs\HD_MODE.md` §4 i §7. ☐ czcionka HD zamiast ×2.
+   - ✔ **v1.1.2 — woda z falami** (2026-11-15, „Tak, rób wodę”): `HDWater=2` (domyślnie) / `3` — woda z obrazu HD
+     poruszana falami (przesuwana tylko gładka część obrazu, faktura zostaje ostra), pętla liczona w wątku w tle.
+     Opis: `docs\HD_MODE.md` §4. ☐ Ocena użytkownika na prawdziwym stawie (test w tle ma tylko Lincoln, bez wody).
    - ✔ **Wydanie na GitHubie** (2026-11-14): v1.0.0 (README po angielsku), paczki grafiki HD jako osobne wydanie
      (7 plików ZIP < 2 GB; magazyn postaci w dwóch częściach — mod czyta `sprites.dat` + `sprites.dat.2`).
 5. ◐ Klatki pośrednie animacji postaci (prośba użytkownika; „jak się nie uda, trudno"): eksperyment zakończony

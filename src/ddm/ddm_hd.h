@@ -73,6 +73,7 @@ namespace DDM::HD {
     // Test harness: leave out drawing routines to see what they draw. Bit 0: keyed 2x sprites,
     // bit 1: plain 2x sprites, bit 2: tinted polygons, bit 3: DirectDraw keyed 2x stretch blits.
     // Bit 4 (16): every picture of a tick shows the in-between frame of a sprite that has one.
+    // Bit 5 (32): ground overlays (chimney smoke) are drawn as animated water (HDWater=2/3).
     void SetDebugFlags(unsigned flags);
     unsigned DebugFlags();
 }

@@ -15,6 +15,7 @@
 #include <intrin.h>
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -111,9 +112,21 @@ namespace {
 
     // Sprites of this level that were compared with the level picture beneath them (see
     // DrawGroundAnimation).
-    struct GroundMean {                 // water with HDWater=2: the mean of the frames seen here
-        std::vector<int32_t>  sum;      // R5, G6, B5 per pixel, summed over seen.size() frames
-        std::vector<uint64_t> seen;     // hashes of the frames in the sum
+    struct WaterRun { int y, x0, x1; size_t off; };     // pixels of the water in one HD row
+    struct WaterAnim {                  // animated HD water (HDWater=2/3), made by the water thread
+        // input, written before the job is queued
+        const void* map = nullptr;      // the HD picture it was made from (a variant switch makes it stale)
+        int  W = 0, H = 0, ox = 0, oy = 0, strength = 2;
+        std::vector<uint16_t> hd;       // the HD pixels of the sprite's rectangle
+        std::vector<uint8_t>  mask;     // where the game's sprite is opaque (HD pixels)
+        // output, valid once state == 2
+        std::vector<WaterRun> runs;
+        size_t pixels = 0;              // water pixels per frame
+        std::vector<uint16_t> frames;   // kWaterFrames x pixels, RGB565
+        std::atomic<int> state{ 0 };    // 0 queued, 1 being made, 2 ready, 3 failed / cancelled / dropped
+        std::atomic<bool> cancel{ false };
+        LONGLONG readyAt = 0;           // QueryPerformanceCounter when first drawn (fade-in)
+        uint64_t lastUse = 0;
     };
     struct GroundFrames {               // the last two frames, 2x magnified, for a cross-fade
         int W = 0, H = 0;                       // size of the magnified frame
@@ -128,8 +141,8 @@ namespace {
         int  mx = 0, my = 0, w = 0, h = 0;  // position in level pixels, frame size
         bool repaint = false;               // looks like the ground it is drawn on
         bool overlay = false;               // ... and covers its whole rectangle: smoke
-        std::shared_ptr<GroundMean> mean;
         std::shared_ptr<GroundFrames> frames;
+        std::shared_ptr<WaterAnim> water;
     };
     std::vector<GroundAnim> g_groundAnims;
 
@@ -1013,6 +1026,359 @@ namespace {
     }
 
     bool MakeGroundDifference(GroundAnim& anim, const Buf& src, int mx, int my, int16_t* diff);
+
+    // ---------------------------------------------------------------- animated HD water
+    // The game's water animation holds no waves - only compression shimmer (2026-11-15,
+    // tools\hd\water_motion_study.py). Here the still water of the HD picture is moved: a few
+    // slow wave trains, periodic in time (a seamless loop), displace the SMOOTH part of the
+    // picture by up to a few pixels - reflections of trees and sky wobble - while its finest
+    // texture stays in place (no detail lost by resampling: 99 % kept, against 52..77 % when the
+    // whole picture is resampled); the light tilts a little with the waves (light from the top
+    // left) and a faint glint where they face it. The vertical wavelength is halved (isometric
+    // view). The water is where the game's sprite is opaque; the effect fades in over kWaterEdge
+    // HD pixels from its edge. Prototype with the same arithmetic: tools\hd\water_anim_proto.py
+    // (presets "waves" = HDWater=2, "waves_strong" = HDWater=3).
+    // The loop (kWaterFrames frames) is made once per water by a thread of its own (about half a
+    // second for a pond; until then and while fading in, the still HD water shows); drawing only
+    // cross-fades two ready frames over the water's pixels.
+    constexpr int    kWaterFrames = 24;
+    constexpr double kWaterLoopSeconds = 4.0;
+    constexpr int    kWaterEdge = 7;
+    constexpr float  kWaterSplitSigma = 1.2f;
+    constexpr double kWaterFadeInSeconds = 0.6;
+    constexpr size_t kWaterBudgetBytes = 40u << 20;
+
+    struct Wave { float lambda, angle, amp, cycles; };
+    struct WaterLook { Wave waves[4]; float shade, glint; };
+    const WaterLook kWaterLooks[2] = {
+        { { { 64, 20, 0.85f, 1 }, { 41, 110, 0.60f, 2 }, { 27, 200, 0.42f, 2 }, { 17, 290, 0.26f, 3 } }, 0.07f, 0.10f },
+        { { { 56, 25, 1.20f, 1 }, { 36, 115, 0.85f, 2 }, { 23, 205, 0.55f, 3 }, { 15, 295, 0.35f, 3 } }, 0.09f, 0.16f },
+    };
+
+    SRWLOCK            g_waterLock = SRWLOCK_INIT;
+    CONDITION_VARIABLE g_waterWake = CONDITION_VARIABLE_INIT;
+    std::deque<std::shared_ptr<WaterAnim>> g_waterQueue;    // under g_waterLock
+    bool g_waterThread = false;                             // main thread
+    std::vector<std::shared_ptr<WaterAnim>> g_waters;       // main thread: everything made, for the budget
+    uint64_t g_waterUse = 0;
+
+    inline float CubicW(float f, int tap) {                 // Catmull-Rom weights, taps -1 .. 2
+        const float f2 = f * f, f3 = f2 * f;
+        switch (tap) {
+            case 0:  return -0.5f * f3 + f2 - 0.5f * f;
+            case 1:  return 1.5f * f3 - 2.5f * f2 + 1.0f;
+            case 2:  return -1.5f * f3 + 2.0f * f2 + 0.5f * f;
+            default: return 0.5f * f3 - 0.5f * f2;
+        }
+    }
+
+    bool BuildWater(WaterAnim& wa) {
+        const int W = wa.W, H = wa.H;
+        const size_t n = static_cast<size_t>(W) * H;
+        if (W <= 0 || H <= 0 || wa.hd.size() != n || wa.mask.size() != n) return false;
+        wa.runs.clear();
+        size_t off = 0;
+        for (int y = 0; y < H; ++y) {
+            int x = 0;
+            while (x < W) {
+                while (x < W && !wa.mask[static_cast<size_t>(y) * W + x]) ++x;
+                if (x >= W) break;
+                const int x0 = x;
+                while (x < W && wa.mask[static_cast<size_t>(y) * W + x]) ++x;
+                wa.runs.push_back({ y, x0, x, off });
+                off += static_cast<size_t>(x - x0);
+            }
+        }
+        wa.pixels = off;
+        if (!off) return false;
+
+        // the picture on the 0..255 scale (as RGB565 expands), its smooth part (Gaussian) and the rest
+        std::vector<float> img(n * 3), tmp(n * 3), low(n * 3);
+        for (size_t i = 0; i < n; ++i) {
+            const uint32_t p = wa.hd[i];
+            const uint32_t r = p >> 11, g = (p >> 5) & 63, b = p & 31;
+            img[i * 3 + 0] = static_cast<float>((r << 3) | (r >> 2));
+            img[i * 3 + 1] = static_cast<float>((g << 2) | (g >> 4));
+            img[i * 3 + 2] = static_cast<float>((b << 3) | (b >> 2));
+        }
+        const int R = static_cast<int>(std::ceil(3.0f * kWaterSplitSigma));
+        std::vector<float> k(static_cast<size_t>(2 * R + 1));
+        float ks = 0.0f;
+        for (int i = -R; i <= R; ++i) {
+            k[static_cast<size_t>(i + R)] = std::exp(-0.5f * (i / kWaterSplitSigma) * (i / kWaterSplitSigma));
+            ks += k[static_cast<size_t>(i + R)];
+        }
+        for (float& v : k) v /= ks;
+        for (int y = 0; y < H; ++y) {
+            for (int x = 0; x < W; ++x) {
+                float a[3] = { 0, 0, 0 };
+                for (int i = -R; i <= R; ++i) {
+                    const int xx = (std::max)(0, (std::min)(W - 1, x + i));
+                    const float* p = &img[(static_cast<size_t>(y) * W + xx) * 3];
+                    for (int c = 0; c < 3; ++c) a[c] += p[c] * k[static_cast<size_t>(i + R)];
+                }
+                for (int c = 0; c < 3; ++c) tmp[(static_cast<size_t>(y) * W + x) * 3 + c] = a[c];
+            }
+        }
+        for (int y = 0; y < H; ++y) {
+            for (int x = 0; x < W; ++x) {
+                float a[3] = { 0, 0, 0 };
+                for (int i = -R; i <= R; ++i) {
+                    const int yy = (std::max)(0, (std::min)(H - 1, y + i));
+                    const float* p = &tmp[(static_cast<size_t>(yy) * W + x) * 3];
+                    for (int c = 0; c < 3; ++c) a[c] += p[c] * k[static_cast<size_t>(i + R)];
+                }
+                for (int c = 0; c < 3; ++c) low[(static_cast<size_t>(y) * W + x) * 3 + c] = a[c];
+            }
+        }
+        tmp.clear();
+        tmp.shrink_to_fit();
+
+        // how far from the edge of the water (chessboard distance, up to kWaterEdge) -> weight
+        std::vector<uint8_t> cur(wa.mask), next(n), dist(n, 0);
+        for (int d = 1; d <= kWaterEdge; ++d) {
+            bool any = false;
+            for (size_t i = 0; i < n; ++i) if (cur[i]) { dist[i] = static_cast<uint8_t>(d); any = true; }
+            if (!any) break;
+            for (int y = 0; y < H; ++y) {
+                for (int x = 0; x < W; ++x) {
+                    bool all = true;
+                    for (int dy = -1; dy <= 1 && all; ++dy) {
+                        for (int dx = -1; dx <= 1 && all; ++dx) {
+                            const int xx = x + dx, yy = y + dy;
+                            all = xx >= 0 && yy >= 0 && xx < W && yy < H && cur[static_cast<size_t>(yy) * W + xx];
+                        }
+                    }
+                    next[static_cast<size_t>(y) * W + x] = all ? 1 : 0;
+                }
+            }
+            cur.swap(next);
+        }
+        const WaterLook& look = kWaterLooks[wa.strength >= 3 ? 1 : 0];
+        float ux[4], uy[4], kx[4], ky[4], amp[4], cyc[4], ph0[4], tot = 0.0f;
+        const float pi2 = 6.2831853f, lightX = -0.6f, lightY = -0.8f;
+        for (int i = 0; i < 4; ++i) {
+            const Wave& wv = look.waves[i];
+            ux[i] = std::cos(wv.angle * 0.017453293f);
+            uy[i] = std::sin(wv.angle * 0.017453293f);
+            kx[i] = ux[i] / wv.lambda;
+            ky[i] = 2.0f * uy[i] / wv.lambda;
+            amp[i] = wv.amp;
+            cyc[i] = wv.cycles;
+            ph0[i] = wv.lambda * 0.37f;
+            tot += wv.amp;
+        }
+
+        wa.frames.assign(static_cast<size_t>(kWaterFrames) * off, 0);
+        for (int f = 0; f < kWaterFrames; ++f) {
+            if (wa.cancel.load(std::memory_order_relaxed)) return false;
+            uint16_t* out = &wa.frames[static_cast<size_t>(f) * off];
+            const float time = static_cast<float>(f) / kWaterFrames;
+            for (const WaterRun& r : wa.runs) {
+                for (int x = r.x0; x < r.x1; ++x) {
+                    const size_t i = static_cast<size_t>(r.y) * W + x;
+                    const float t = static_cast<float>(dist[i]) / kWaterEdge;
+                    const float w = t * t * (3.0f - 2.0f * t);
+                    float dx = 0.0f, dy = 0.0f, slope = 0.0f;
+                    if (w > 0.0f) {
+                        const float gx = static_cast<float>(wa.ox + x), gy = static_cast<float>(wa.oy + r.y);
+                        for (int q = 0; q < 4; ++q) {
+                            const float c = std::cos(pi2 * (kx[q] * gx + ky[q] * gy - cyc[q] * time) + ph0[q]);
+                            dx += amp[q] * c * ux[q];
+                            dy += amp[q] * c * uy[q] * 0.5f;
+                            slope += amp[q] * c * (ux[q] * lightX + uy[q] * lightY);
+                        }
+                    }
+                    const float s = slope / tot;
+                    // the smooth part at the displaced place (Catmull-Rom), the fine texture in place
+                    const float sx = (std::max)(0.0f, (std::min)(W - 1.001f, x + w * dx));
+                    const float sy = (std::max)(0.0f, (std::min)(H - 1.001f, r.y + w * dy));
+                    const int x0 = static_cast<int>(sx), y0 = static_cast<int>(sy);
+                    const float fx = sx - x0, fy = sy - y0;
+                    float acc[3] = { 0, 0, 0 };
+                    for (int j = 0; j < 4; ++j) {
+                        const int yy = (std::max)(0, (std::min)(H - 1, y0 + j - 1));
+                        const float wy = CubicW(fy, j);
+                        for (int ii = 0; ii < 4; ++ii) {
+                            const int xx = (std::max)(0, (std::min)(W - 1, x0 + ii - 1));
+                            const float wgt = wy * CubicW(fx, ii);
+                            const float* p = &low[(static_cast<size_t>(yy) * W + xx) * 3];
+                            acc[0] += p[0] * wgt; acc[1] += p[1] * wgt; acc[2] += p[2] * wgt;
+                        }
+                    }
+                    const float light = 1.0f + w * look.shade * s;
+                    float g = 0.0f;
+                    if (look.glint > 0.0f && s > 0.55f) {
+                        const float e = (s - 0.55f) / 0.45f;
+                        g = e * e * look.glint * w;
+                    }
+                    uint32_t ch[3];
+                    for (int c = 0; c < 3; ++c) {
+                        float v = (acc[c] + (img[i * 3 + c] - low[i * 3 + c])) * light;
+                        v += g * (255.0f - v);
+                        v = (std::max)(0.0f, (std::min)(255.0f, v));
+                        ch[c] = static_cast<uint32_t>(v * (c == 1 ? 63.0f : 31.0f) / 255.0f + 0.5f);
+                    }
+                    out[r.off + static_cast<size_t>(x - r.x0)] = static_cast<uint16_t>((ch[0] << 11) | (ch[1] << 5) | ch[2]);
+                }
+            }
+        }
+        return true;
+    }
+
+    DWORD WINAPI WaterThread(LPVOID) {
+        SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+        for (;;) {
+            std::shared_ptr<WaterAnim> job;
+            AcquireSRWLockExclusive(&g_waterLock);
+            while (g_waterQueue.empty()) SleepConditionVariableSRW(&g_waterWake, &g_waterLock, INFINITE, 0);
+            job = g_waterQueue.front();
+            g_waterQueue.pop_front();
+            ReleaseSRWLockExclusive(&g_waterLock);
+            if (job->cancel.load()) { job->state.store(3, std::memory_order_release); continue; }
+            job->state.store(1, std::memory_order_relaxed);
+            bool ok = false;
+            const ULONGLONG t0 = GetTickCount64();
+            try {
+                ok = BuildWater(*job);
+            } catch (...) {                 // out of memory: still water
+                ok = false;
+            }
+            if (ok) {
+                Logger::Info("HD water: %d-frame loop for %dx%d at %d,%d (%u water pixels, %u KB) made in %u ms.", kWaterFrames,
+                             job->W, job->H, job->ox / 2, job->oy / 2, static_cast<unsigned>(job->pixels),
+                             static_cast<unsigned>(job->frames.size() * 2 / 1024), static_cast<unsigned>(GetTickCount64() - t0));
+            }
+            if (!ok) {
+                job->frames.clear();
+                job->frames.shrink_to_fit();
+            }
+            job->hd.clear();                // the input is not needed any more
+            job->hd.shrink_to_fit();
+            job->mask.clear();
+            job->mask.shrink_to_fit();
+            job->state.store(ok ? 2 : (job->cancel.load() ? 3 : 4), std::memory_order_release);
+        }
+    }
+
+    // main thread: a new water animation for a sprite drawn at level position (mx, my)
+    std::shared_ptr<WaterAnim> QueueWater(const HdMap& hd, const Buf& src, int mx, int my, int strength) {
+        auto wa = std::make_shared<WaterAnim>();
+        wa->map = &hd;
+        wa->W = 2 * src.w;
+        wa->H = 2 * src.h;
+        wa->ox = 2 * mx;
+        wa->oy = 2 * my;
+        wa->strength = strength;
+        const size_t n = static_cast<size_t>(wa->W) * wa->H;
+        try {
+            wa->hd.assign(n, 0);
+            wa->mask.assign(n, 0);
+        } catch (...) {
+            wa->state.store(4);
+            return wa;
+        }
+        for (int y = 0; y < wa->H; ++y) {
+            const int hy = wa->oy + y;
+            const auto* sp = reinterpret_cast<const uint16_t*>(src.bits + static_cast<size_t>(y >> 1) * src.pitch);
+            for (int x = 0; x < wa->W; ++x) {
+                const int hx = wa->ox + x;
+                if (hx < 0 || hy < 0 || hx >= hd.w || hy >= hd.h) continue;
+                const size_t i = static_cast<size_t>(y) * wa->W + x;
+                wa->hd[i] = hd.px[static_cast<size_t>(hy) * hd.w + hx];
+                wa->mask[i] = sp[x >> 1] != 0x07C0 ? 1 : 0;
+            }
+        }
+        if (!g_waterThread) {
+            if (HANDLE th = CreateThread(nullptr, 0, WaterThread, nullptr, 0, nullptr)) {
+                CloseHandle(th);
+                g_waterThread = true;
+            } else {
+                wa->state.store(4);
+                return wa;
+            }
+        }
+        AcquireSRWLockExclusive(&g_waterLock);
+        g_waterQueue.push_back(wa);
+        ReleaseSRWLockExclusive(&g_waterLock);
+        WakeConditionVariable(&g_waterWake);
+        g_waters.push_back(wa);
+        return wa;
+    }
+
+    // main thread: keep the ready loops within the budget (the least recently drawn go first)
+    void TrimWater() {
+        size_t bytes = 0;
+        g_waters.erase(std::remove_if(g_waters.begin(), g_waters.end(), [](const std::shared_ptr<WaterAnim>& w) {
+            return w.use_count() == 1 && w->state.load() >= 2;  // nobody draws it any more
+        }), g_waters.end());
+        for (const auto& w : g_waters) if (w->state.load() == 2) bytes += w->frames.capacity() * 2;
+        if (bytes <= kWaterBudgetBytes) return;
+        std::vector<std::shared_ptr<WaterAnim>> ready;
+        for (const auto& w : g_waters) if (w->state.load() == 2) ready.push_back(w);
+        std::sort(ready.begin(), ready.end(), [](const auto& a, const auto& b) { return a->lastUse < b->lastUse; });
+        for (const auto& w : ready) {
+            if (bytes <= kWaterBudgetBytes * 3 / 4) break;
+            bytes -= w->frames.capacity() * 2;
+            w->frames.clear();
+            w->frames.shrink_to_fit();
+            w->state.store(3);              // made again when it is drawn again
+        }
+    }
+
+    // main thread: the loop at this moment over the water's pixels (rect `whole` = the sprite)
+    void DrawWater(const Buf& dst, const RECT& whole, const RECT& clip, WaterAnim& wa, LONGLONG now, LONGLONG freq) {
+        const double sec = static_cast<double>(now) / static_cast<double>(freq);
+        const double pos = std::fmod(sec, kWaterLoopSeconds) / kWaterLoopSeconds * kWaterFrames;
+        const int f0 = static_cast<int>(pos) % kWaterFrames, f1 = (f0 + 1) % kWaterFrames;
+        const int t = static_cast<int>((pos - std::floor(pos)) * 256.0);
+        if (!wa.readyAt) wa.readyAt = now;
+        const double since = static_cast<double>(now - wa.readyAt) / static_cast<double>(freq);
+        const int ramp = since >= kWaterFadeInSeconds ? 256 : static_cast<int>(since / kWaterFadeInSeconds * 256.0);
+        const uint16_t* fa = &wa.frames[static_cast<size_t>(f0) * wa.pixels];
+        const uint16_t* fb = &wa.frames[static_cast<size_t>(f1) * wa.pixels];
+        const __m128i tv = _mm_set1_epi16(static_cast<short>(t)), rv = _mm_set1_epi16(static_cast<short>(ramp));
+        const __m128i m6 = _mm_set1_epi16(63), m5 = _mm_set1_epi16(31);
+        // a + (b - a) * w / 256 per channel (w 0..256; the difference times w fits 16 bits)
+        auto lerp565 = [&](__m128i a, __m128i b, __m128i w) {
+            const __m128i ar = _mm_srli_epi16(a, 11), ag = _mm_and_si128(_mm_srli_epi16(a, 5), m6), ab = _mm_and_si128(a, m5);
+            const __m128i br = _mm_srli_epi16(b, 11), bg = _mm_and_si128(_mm_srli_epi16(b, 5), m6), bb = _mm_and_si128(b, m5);
+            const __m128i r = _mm_add_epi16(ar, _mm_srai_epi16(_mm_mullo_epi16(_mm_sub_epi16(br, ar), w), 8));
+            const __m128i g = _mm_add_epi16(ag, _mm_srai_epi16(_mm_mullo_epi16(_mm_sub_epi16(bg, ag), w), 8));
+            const __m128i bl = _mm_add_epi16(ab, _mm_srai_epi16(_mm_mullo_epi16(_mm_sub_epi16(bb, ab), w), 8));
+            return _mm_or_si128(_mm_or_si128(_mm_slli_epi16(r, 11), _mm_slli_epi16(g, 5)), bl);
+        };
+        auto lerp1 = [](uint32_t a, uint32_t b, int w) {
+            const int r = static_cast<int>(a >> 11) + (((static_cast<int>(b >> 11) - static_cast<int>(a >> 11)) * w) >> 8);
+            const int g = static_cast<int>((a >> 5) & 63) + (((static_cast<int>((b >> 5) & 63) - static_cast<int>((a >> 5) & 63)) * w) >> 8);
+            const int bl = static_cast<int>(a & 31) + (((static_cast<int>(b & 31) - static_cast<int>(a & 31)) * w) >> 8);
+            return static_cast<uint16_t>((r << 11) | (g << 5) | bl);
+        };
+        for (const WaterRun& r : wa.runs) {
+            const int y = whole.top + r.y;
+            if (y < clip.top || y >= clip.bottom) continue;
+            const int x0 = (std::max)(static_cast<int>(whole.left) + r.x0, static_cast<int>(clip.left));
+            const int x1 = (std::min)(static_cast<int>(whole.left) + r.x1, static_cast<int>(clip.right));
+            if (x1 <= x0) continue;
+            auto* out = reinterpret_cast<uint16_t*>(dst.bits + static_cast<size_t>(y) * dst.pitch);
+            const size_t base = r.off + static_cast<size_t>(x0 - (whole.left + r.x0));
+            const uint16_t* pa = fa + base - x0;
+            const uint16_t* pb = fb + base - x0;
+            int x = x0;
+            for (; x + 8 <= x1; x += 8) {
+                __m128i v = lerp565(_mm_loadu_si128(reinterpret_cast<const __m128i*>(pa + x)),
+                                    _mm_loadu_si128(reinterpret_cast<const __m128i*>(pb + x)), tv);
+                if (ramp < 256) v = lerp565(_mm_loadu_si128(reinterpret_cast<const __m128i*>(out + x)), v, rv);
+                _mm_storeu_si128(reinterpret_cast<__m128i*>(out + x), v);
+            }
+            for (; x < x1; ++x) {
+                uint16_t v = lerp1(pa[x], pb[x], t);
+                if (ramp < 256) v = lerp1(out[x], v, ramp);
+                out[x] = v;
+            }
+        }
+        wa.lastUse = ++g_waterUse;
+    }
 }
 
 // Ground animations: large sprites that repaint the ground they lie on, frame after frame - the
@@ -1021,11 +1387,11 @@ namespace {
 // Recognised by content, not by name: a large sprite whose pixels are close to the level
 // picture beneath it (flags, fires, mill wheels differ from what is under them: drawn as always).
 //  - Overlays (the sprite covers its whole rectangle - chimney smoke): the difference to the level
-//    picture beneath, smoothed and with the compression noise faded out, is added to the HD
+//    picture beneath, smoothed and with the compression noise faded out, is blended over the HD
 //    picture: smoke over the HD rock, no patch.
 //  - Water (irregular): HDWater=1 (the player's choice of 2026-11-14) still water from the HD
-//    picture; HDWater=2 the HD picture with the game's shimmer: each frame's difference to the
-//    mean of the frames seen at this place (no ripples in the data - a shimmer of +-3 of 255).
+//    picture; HDWater=2 / 3 (the player's wish of 2026-11-15: "rób wodę") the HD water moved by
+//    waves (see "animated HD water" above); HDWater=0 the game's frames as they are.
 // Returns true when the sprite was handled here (drawn or left out).
 bool DrawGroundAnimation(const Buf& dst, const RECT& d, const RECT& clip, const Buf& src, const RECT& s) {
     const auto& cfg = SherwoodConfig::Get();
@@ -1082,12 +1448,33 @@ bool DrawGroundAnimation(const Buf& dst, const RECT& d, const RECT& clip, const 
                      src.w, src.h, mx, my, coverage, meanDiff,
                      !g.repaint ? "drawn" :
                      g.overlay ? "overlay (smoke): its difference to the ground over the HD picture" :
-                     cfg.hdWater == 2 ? "water: the HD picture with the game's shimmer" :
+                     cfg.hdWater >= 2 ? "water: the HD water moved by waves" :
                                         "water surface, left out (still water from the HD picture)");
     }
     if (!anim->repaint) return false;
-    if (!anim->overlay && cfg.hdWater != 2) return true;    // still water from the HD picture
-    if (anim->overlay && !levelAlive) return false;         // nothing to compare with: as the game draws it
+    // test harness (dbg 32): overlays are taken for water - Lincoln, the level of the test runs,
+    // has no water animation, but chimney smoke at a known place
+    const bool asWater = !anim->overlay || (DebugFlags() & 32u) != 0;
+    if (asWater) {
+        if (cfg.hdWater < 2) return true;                   // still water from the HD picture
+        const int strength = cfg.hdWater >= 3 ? 3 : 2;
+        WaterAnim* wa = anim->water.get();
+        const int st = wa ? wa->state.load(std::memory_order_acquire) : -1;
+        if (!wa || wa->map != hd || wa->strength != strength || st == 3) {
+            if (wa) wa->cancel.store(true);
+            anim->water = QueueWater(*hd, src, mx, my, strength);
+            TrimWater();
+            return true;                                    // still water until the loop is made
+        }
+        if (st != 2) return true;
+        LARGE_INTEGER now{}, freq{};
+        QueryPerformanceCounter(&now);
+        QueryPerformanceFrequency(&freq);
+        const RECT whole{ d.left - 2 * s.left, d.top - 2 * s.top, d.left - 2 * s.left + 2 * src.w, d.top - 2 * s.top + 2 * src.h };
+        DrawWater(dst, whole, clip, *wa, now.QuadPart, freq.QuadPart);
+        return true;
+    }
+    if (!levelAlive) return false;                          // nothing to compare with: as the game draws it
 
     // The difference picture is made when the animation shows another frame; in between, the
     // last two are cross-faded over the time a frame stays (the game steps its smoke a few times
@@ -1190,44 +1577,9 @@ bool MakeGroundDifference(GroundAnim& anim, const Buf& src, int mx, int my, int1
                 for (int c = 0; c < 3; ++c) o[c + 1] = static_cast<int16_t>(sum[c] / n * alpha / 256);
             }
         }
-    } else {
-        // water with the game's shimmer: this frame minus the mean of the frames seen here
-        if (!anim.mean) anim.mean = std::make_shared<GroundMean>();
-        GroundMean& gm = *anim.mean;
-        if (gm.sum.size() != static_cast<size_t>(w) * h * 3) {
-            gm.sum.assign(static_cast<size_t>(w) * h * 3, 0);
-            gm.seen.clear();
-        }
-        const uint64_t frame = anim.frames ? anim.frames->curHash : HashFrame(src);
-        if (gm.seen.size() < 32 && std::find(gm.seen.begin(), gm.seen.end(), frame) == gm.seen.end()) {
-            gm.seen.push_back(frame);
-            for (int y = 0; y < h; ++y) {
-                const auto* sp = reinterpret_cast<const uint16_t*>(src.bits + static_cast<size_t>(y) * src.pitch);
-                int32_t* sm = &gm.sum[static_cast<size_t>(y) * w * 3];
-                for (int x = 0; x < w; ++x) {
-                    const int a = sp[x];
-                    sm[x * 3 + 0] += a >> 11;
-                    sm[x * 3 + 1] += (a >> 5) & 63;
-                    sm[x * 3 + 2] += a & 31;
-                }
-            }
-        }
-        const int n = static_cast<int>(gm.seen.size());
-        if (n < 2) return false;    // one frame seen so far: still water until the mean means something
-        for (int y = 0; y < h; ++y) {
-            const auto* sp = reinterpret_cast<const uint16_t*>(src.bits + static_cast<size_t>(y) * src.pitch);
-            const int32_t* sm = &gm.sum[static_cast<size_t>(y) * w * 3];
-            int16_t* o = diff + static_cast<size_t>(y) * w * 4;
-            for (int x = 0; x < w; ++x) {
-                const int a = sp[x];
-                if (a == 0x07C0) continue;
-                o[x * 4 + 1] = static_cast<int16_t>(((a >> 11) * n - sm[x * 3 + 0]) * 16 / n);
-                o[x * 4 + 2] = static_cast<int16_t>((((a >> 5) & 63) * n - sm[x * 3 + 1]) * 16 / n);
-                o[x * 4 + 3] = static_cast<int16_t>(((a & 31) * n - sm[x * 3 + 2]) * 16 / n);
-            }
-        }
+        return true;
     }
-    return true;
+    return false;
 }
 } // namespace
 

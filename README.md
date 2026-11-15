@@ -33,10 +33,12 @@ original DirectDraw wrapper, plus optional HD graphics prepared with AI models f
   or 2.0 (HD pictures) and the graphics card magnifies the rest — only the world, the interface keeps its size; clicks
   land where you see them, the view reaches every edge of the level. Zooms started by the game itself (scripted
   scenes) are followed.
-- **Chimney smoke and water on HD backgrounds**: the game's smoke and water animations are tiny, heavily compressed
-  pictures that repaint the ground under them. The smoke is drawn as its difference to the ground, blended over the
-  HD picture and cross-faded between animation frames (no blurry patch, no jumps); water stays the still water of the
-  HD picture by default, or — `HDWater=2` / F10 — gets the game's shimmer on top of it.
+- **Water with waves and chimney smoke on HD backgrounds**: the game's water and smoke animations are tiny, heavily
+  compressed pictures that repaint the ground under them. The water of the HD picture is moved by slow waves instead —
+  reflections wobble and the light shifts with the waves, while the fine texture stays sharp (only the smooth part of
+  the picture moves); the loop is prepared in the background when water comes into view. The smoke is drawn as its
+  difference to the ground, blended over the HD picture and cross-faded between animation frames (no blurry patch, no
+  jumps). F10 / `HDWater`: waves, stronger waves, still HD water, or the game's own frames.
 
 **Interface**
 - Mission interface 2× larger (each window grows from its own screen corner, clicks land where you see them).
@@ -57,7 +59,7 @@ original DirectDraw wrapper, plus optional HD graphics prepared with AI models f
 ## Installation — the complete HD version, step by step
 
 You need two releases from the **Releases** page (right side of the repository page):
-[**SherwoodEngineFix 1.1.1**](https://github.com/TryHackX/Robin-Hood-Legenda-Sherwood-4k-Mod/releases/tag/v1.1.1)
+[**SherwoodEngineFix 1.1.2**](https://github.com/TryHackX/Robin-Hood-Legenda-Sherwood-4k-Mod/releases/tag/v1.1.2)
 (the mod itself, 0.2 MB) and
 [**HD graphics pack 1**](https://github.com/TryHackX/Robin-Hood-Legenda-Sherwood-4k-Mod/releases/tag/hd-pack-1)
 (the HD pictures, 7 archives). Download the files listed under **Assets** — not "Source code (zip)" / "Source code
@@ -68,7 +70,7 @@ needed to play.
 `C:\Program Files (x86)\GOG Galaxy\Games\Robin Hood - The Legend of Sherwood`
 (in GOG Galaxy: the game → ⚙ → Manage installation → Show folder).
 
-**Step 2 — the mod.** From `SherwoodEngineFix-v1.1.1.zip` copy `winmm.dll` and `SherwoodFix.ini` into the game
+**Step 2 — the mod.** From `SherwoodEngineFix-v1.1.2.zip` copy `winmm.dll` and `SherwoodFix.ini` into the game
 folder (next to `Game.exe`).
 
 **Step 3 — the HD pictures.** Download these archives from *HD graphics pack 1*:

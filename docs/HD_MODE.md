@@ -69,15 +69,30 @@ od mapy pod spodem średnio o <25/255 — „zamalowuje ziemię”. Pomiar: woda
   zostaje ostra, a dym jest miękką smugą. (Samo dodanie różnicy do HD było za słabe: dym ginął na szczegółach skały.)
   Wcześniej dym albo był uznany za wodę i pomijany (zgłoszenie 2026-11-15: „po Alt+Tab widać dymy, a u nas nie”),
   albo rysowany wprost — rozmyta łata wokół komina.
-- **Woda**: `HDWater=1` (domyślnie, wybór użytkownika z 2026-11-14) — pomijana, nieruchoma woda z obrazu HD;
-  `HDWater=2` — obraz HD + migotanie z gry: klatka − średnia klatek widzianych w tym miejscu (w danych nie ma fal, tylko
-  szum ±3/255 zmieniający się z klatką: `tools\hd\water_motion_study.py`). `HDWater=0` — klatki gry jak są.
+- **Woda** (2026-11-15, prośba użytkownika „rób wodę”, „remake dla realizmu”): w klatkach gry nie ma fal, tylko szum
+  ±3/255 zmieniający się z klatką (`tools\hd\water_motion_study.py`) — z nich nic nie da się wziąć. `HDWater=2`
+  (domyślnie) / `3` (mocniej): woda z obrazu HD poruszana falami. Cztery pociągi fal (sinusoidy, długość 17–64 px HD,
+  kierunki co ~90°, pionowa długość fali o połowę krótsza — rzut izometryczny), okresowe w pętli 4 s (24 klatki,
+  przenikane), przesuwają **gładką część** obrazu (Gauss σ 1,2 px HD) o 1–3 px, a najdrobniejsza faktura zostaje
+  w miejscu — ostrość 99 % (przy przesuwaniu całego obrazu: dwuliniowo 37–52 %, Catmull-Rom 52–77 %, Lanczos 69–83 %
+  energii laplasjanu przy przesunięciu 0,5/0,25 px). Do tego jasność ±7 % (±9 %) z nachyleniem fal do światła z lewej
+  góry i słaby odblask. Woda = piksele, gdzie sprite gry jest nieprzezroczysty; efekt narasta przez 7 px od brzegu
+  (trzciny w stawie lekko się kołyszą — odróżnienie ich kolorem dawało poszarpane krawędzie). Pętlę liczy osobny wątek
+  (niski priorytet; ~0,12 s na 22 tys. pikseli, staw Nottingham ~0,6 s i 5,4 MB), do tego czasu i przez 0,6 s
+  przenikania widać nieruchomą wodę HD; rysowanie = przenikanie dwóch klatek SSE2 tylko po pikselach wody (tych samych,
+  które zamalowałby sprite gry — postacie rysowane później zasłaniają ją normalnie). Pamięć: najwyżej 40 MB pętli,
+  najdawniej rysowane są zwalniane i liczone od nowa przy powrocie; zmiana wariantu HD liczy pętlę od nowa.
+  Prototyp z tą samą arytmetyką: `tools\hd\water_anim_proto.py` (presety `waves`, `waves_strong`; podglądy i GIF
+  w `hd\compare\water_anim\`, porównanie: `porownanie_woda.gif`). Test w tle (Lincoln nie ma animacji wody):
+  `dbg 32` = dym traktowany jak woda — poza prostokątem obraz = tło HD co do piksela (0,00), na brzegu 0,4/255, wewnątrz
+  średnio 7,2/255 jak w prototypie. `HDWater=1` — nieruchoma woda z obrazu HD (wybór z 2026-11-14), `0` — klatki gry.
 - Płynność: różnica liczona przy zmianie klatki animacji (hasz pikseli), powiększana 2× raz; między klatkami obrazu
   przenikanie poprzedniej i bieżącej przez czas trwania klatki (średnia z pomiarów) — dym nie skacze co klatkę
   animacji (gra zmienia ją kilka razy na sekundę, obraz ma 144). Opóźnienie o jedną klatkę animacji jest niewidoczne.
 - Koszt: złożenie SSE2 w zakresach wierszy, gdzie coś jest (dwa kominy: rozciąganie 2,1 ms na tik zamiast 5,6 ms
   w zwykłym kodzie). Studium z podglądami: `tools\hd\ground_anim_study.py` → `hd\compare\ground_anim\`.
-- Nie sprawdzone w grze: woda z `HDWater=2` (w teście w tle dostępna jest tylko pierwsza misja, Lincoln, bez stawu).
+- Nie sprawdzone w grze na prawdziwym stawie: w teście w tle dostępna jest tylko pierwsza misja (Lincoln) — wygląd
+  oceniony na prototypie z danymi stawu z Nottingham, mechanika w grze przez `dbg 32`.
 
 ## 5. Sprite'y HD (wdrożone 2026-11-14, `src\ddm\ddm_hd_sprites.cpp`, `HDSprites=1`)
 - **Skąd wiadomo, co jest na powierzchni** [Z]: hak na dekoder banku `0x504CD0` zapisuje „wskaźnik pikseli powierzchni →

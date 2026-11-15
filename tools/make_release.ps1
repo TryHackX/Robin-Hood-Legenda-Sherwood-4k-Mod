@@ -22,6 +22,13 @@ if (Test-Path $q) {
     New-Item -ItemType Directory -Force $qdir | Out-Null
     Copy-Item $q $qdir
 }
+# HD fonts (tools\hd\upscale_fonts.py): small, belong to the mod
+$fonts = @(Get-ChildItem (Join-Path $root 'hd\fonts\*.hdfont') -ErrorAction SilentlyContinue)
+if ($fonts.Count -gt 0) {
+    $fdir = Join-Path $pkg 'hd\fonts'
+    New-Item -ItemType Directory -Force $fdir | Out-Null
+    $fonts | Copy-Item -Destination $fdir
+}
 if (Test-Path $zip) { Remove-Item -Force $zip }
 # entries named with forward slashes, as the ZIP format wants (Compress-Archive and ZipFile of Windows
 # PowerShell 5.1 write "hd\sprites\...", which some unpackers take for one file name)

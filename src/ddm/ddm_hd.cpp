@@ -1,4 +1,5 @@
 #include "ddm_hd.h"
+#include "ddm_hd_font.h"
 #include "ddm_hd_sprites.h"
 #include "../config.h"
 #include "../diag.h"
@@ -681,6 +682,8 @@ namespace {
                                   int srcPitch, int dstPitch, int alphaPitch) {
         const uint32_t cols = dstW >> 1, rows = dstH >> 1;
         if (!cols || !rows || !src || !dst || !alpha) return;
+        // the glyph of an HD font, when the strip has one (ddm_hd_font.h)
+        if (Font::AlphaGlyph2x(src, alpha, dst, static_cast<int>(dstW), static_cast<int>(dstH), dstPitch)) return;
         const auto* mask = reinterpret_cast<const uint16_t*>(kAddrSpanMask);
         const uint32_t mB = mask[0], mG = mask[1], mR = mask[2];
         for (uint32_t y = 0; y < rows * 2; ++y) {

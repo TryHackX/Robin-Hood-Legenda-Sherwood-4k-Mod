@@ -255,6 +255,9 @@ Do sprawdzenia przy okazji: czy miganie ikon akcji ma teraz właściwe tempo; po
      plik `between.q`; „Robin raz HD, raz nie”, duchy, ruchy walki „w innym miejscu”), reguła sąsiadów w shaderze (plamy
      w dole paska i w menu), panel F10 z jednolitym tłem przy powiększeniu, menu Esc ~55 ms zamiast ~200 ms. Przedmioty
      na ziemi są w HD (raport `miss`: wszystko poza rogiem paska 29×95). Opis: `docs\HD_MODE.md` §5c i §7.
+   - ✔ **v1.1.4 — czcionka HD w interfejsie misji** („Tak, czcionka HD”): paski fontów gry rozpoznawane po treści,
+     litery z wersji ×2 zrobionych modelem SGI (`tools\hd\upscale_fonts.py`), nowe fonty zbierane same do
+     `hd\work\fonts`. Opis: `docs\HD_MODE.md` §5d. ☐ Tekst w menu i oknach dialogowych (warstwa tekstu w prezenterze).
    - ✔ **Wydanie na GitHubie** (2026-11-14): v1.0.0 (README po angielsku), paczki grafiki HD jako osobne wydanie
      (7 plików ZIP < 2 GB; magazyn postaci w dwóch częściach — mod czyta `sprites.dat` + `sprites.dat.2`).
 5. ◐ Klatki pośrednie animacji postaci (prośba użytkownika; „jak się nie uda, trudno"): eksperyment zakończony

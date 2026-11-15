@@ -302,6 +302,32 @@ Użytkownik po obejrzeniu arkuszy zapytał, czy „będzie gorzej przez ghosty i
   Zły CRC (inny magazyn) → wszystkie, z ostrzeżeniem w logu. Sprawdzone w tle: w walce (szybkie ruchy) klatek pośrednich
   nie ma w ogóle, u spokojnych postaci są.
 
+## 5d. Czcionka HD (2026-11-15, „Tak, czcionka HD”; `src\ddm\ddm_hd_font.cpp`)
+- Fonty gry to bitmapy `DATA\Interface\Fonts\*.bfn` / `Dialog.fnt` („SBFONT”, krój Lydian i inne; pliki TTF wymienione
+  w `Game.exe` nie istnieją, `*.tfn` = Arial przez GDI dla list w menu). Plik: nagłówek (nazwa, wysokość, liczba znaków
+  180, pierwszy znak 32), tabela 18 bajtów na znak (kod, x w pasku, szerokość, odstępy), potem bitmapy. `MANAGER.CFG`
+  przypisuje fonty do zastosowań (Tooltips/Default/MenuText = `tooltips.bfn`, Dialogue = `Dialog.fnt` …). W grze każdy
+  font to pasek komórek o stałej szerokości (ToolTips: 180 × 16 px = 2880×20); fonty „Lydian” mają drugi pasek
+  pokrycia (kanał niebieski, waga 2·b z 64 — procedura `0x00622FD4`), pozostałe są z kluczem (zieleń `0x07E0`).
+  Eksplorator formatu: `tools\hd\bfn_explore.py`.
+- W misji (interfejs ×2) litery rysują: tryb `0x28401` → `0x00622FD4` (z pokryciem: dymki, komunikaty) i rozciąganie
+  DirectDraw ×2 z kluczem (napis z pieniędzmi, imiona). Mod rozpoznaje pasek po treści (FNV-1a 64 pikseli koloru
+  i pokrycia; niskie 12 bitów = wysokość), raz na powierzchnię (próbka 64 pikseli wykrywa podmianę), i rysuje literę
+  z `hd\fonts\<klucz>.hdfont` (`"HDFT"`, u32 1, szer, wys = 2× paska, RGB565, bajt pokrycia na piksel) z mieszaniem
+  po pokryciu (5 bitów; wcześniejsza wersja z 8 bitami „przelewała” czerwień w niebieski — niebieski obrys).
+- Paski bez wersji HD mod sam zapisuje do `hd\work\fonts\font_<klucz>.raw` (tylko gdy istnieje `hd\work`), jak ikony;
+  polecenie testowe `fonts dump|stop`. Konwersja/podgląd: `tools\hd\font_strips.py show`; powiększanie:
+  `tools\hd\upscale_fonts.py --compare ultrasharp sgi dat2` (arkusz `hd\compare\czcionki_modele.png`) i
+  `--model sgi` → `hd\fonts\`. Kolor (przezroczyste miejsca wypełnione od liter) i pokrycie (jako szary obraz) idą przez
+  model osobno, modele 4× zmniejszane polem do 2×. Wybrany **SGI**: ostry i najwierniejszy grubością (UltraSharp
+  pogrubia, DAT2 zostawia drobne ślady). Pliki fontów HD (2 × 0,7 MB) idą w paczce moda.
+- Sprawdzone w tle: dymek „Pokaż / ukryj pole widzenia nieprzyjaciela” przy zoomie 3× i napis z pieniędzmi — ostre,
+  ciemny obrys jak w oryginale (`tools\out\tooltip_hdfont_cmp.png`, `money_hdfont_x2.png`); test ciągły bez błędów.
+- **Nie obejmuje menu i okien dialogowych** (menu główne, odprawa, menu Esc, opcje): tam gra rysuje litery w skali 1×
+  raz przy otwarciu okna, a prezenter powiększa całość ×1,875. Pomysł na dalej: warstwa tekstu w prezenterze — przy
+  każdej literze zapamiętać tło przed i po narysowaniu, a w prezenterze, dopóki klatka ma tam „po”, złożyć powiększone
+  „przed” (albo obraz HD menu) z literą HD.
+
 ## 6. Tryb testowy w tle (żeby nie zabierać użytkownikowi ekranu)
 - `tools\htest.ps1 [-Ini plik] [-MenuOnly]` — start ukrytej gry (`SHERWOODFIX_TEST=1`), pominięcie filmów, „Graj!".
 - `tools\hctl.ps1 -Cmd "a; b" [-Shot nazwa | -ShotOut nazwa] [-Crop x,y,w,h] [-MaxWidth n] [-Wait ms]`.

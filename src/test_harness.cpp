@@ -7,6 +7,7 @@
 #include "window_manager.h"
 #include "ddm/ddm.h"
 #include "ddm/ddm_hd.h"
+#include "ddm/ddm_hd_font.h"
 #include "ddm/ddm_hd_menu.h"
 #include "ddm/ddm_hd_sprites.h"
 
@@ -315,6 +316,18 @@ namespace {
             }
             char text[320];
             ViewZoom::Describe(text, sizeof(text));
+            Ack(seq, "ok %s", text);
+        } else if (!std::strcmp(cmd, "fonts")) {
+            // HD font: fonts          (state)
+            //          fonts dump     (every font strip seen from now on -> tools\out\harness\fonts\font_*.raw)
+            //          fonts stop
+            char what[16]{};
+            if (std::sscanf(args, "%15s", what) == 1) {
+                if (!std::strcmp(what, "dump")) DDM::HD::Font::SetDump((g_dir + "fonts").c_str());
+                else if (!std::strcmp(what, "stop")) DDM::HD::Font::SetDump(nullptr);
+            }
+            char text[160];
+            DDM::HD::Font::Describe(text, sizeof(text));
             Ack(seq, "ok %s", text);
         } else if (!std::strcmp(cmd, "menuhd")) {
             // HD menu pictures: counters and the key of the menu picture seen last

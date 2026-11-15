@@ -1,6 +1,7 @@
 #include "ddm.h"
 #include "ddm_blit.h"
 #include "ddm_hd.h"
+#include "ddm_hd_font.h"
 #include "ddm_hd_menu.h"
 #include "ddm_hd_sprites.h"
 #include "ddm_present.h"
@@ -765,6 +766,9 @@ HRESULT Surface::DoBlt(const RECT* dstRect, Surface* src, const RECT* srcRect, D
                 const Buf tb{ reinterpret_cast<uint8_t*>(tmp.data()), sw * 2, sw, sh };
                 const RECT ts{ 0, 0, sw, sh };
                 SmoothSprite2x16(buf(), d, tb, ts, clip, keyColor, kNoColor, 256, nullptr, false, false);
+            } else if (keyed && dw == sw * 2 && dh == sh * 2 && !mirrorX && !mirrorY && inside &&
+                       HD::Font::KeyedGlyph2x(buf(), d, clip, src->buf(), s, static_cast<uint16_t>(keyColor))) {
+                // a letter of a colour-keyed font with an HD version (ddm_hd_font.h)
             } else if (dw == sw * 2 && dh == sh * 2 && !mirrorX && !mirrorY && inside) {
                 // tiles of the HUD lie side by side: no fading at their edges (seams)
                 SetSmoothEdgeClamp(true);

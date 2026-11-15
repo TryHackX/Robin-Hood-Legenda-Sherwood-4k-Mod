@@ -628,24 +628,49 @@ namespace {
         if (g_dialogLoopDepth == 0) DDM::HD::Patch::Reset();
     }
 
-    // Test harness only: 0x005ECBD0 DrawLine(id, a, b, c) thiscall, ret 0x10 - who draws which
-    // line (the selection frame is four of them), written to the draw trace.
+    // 0x005ECBD0 DrawLine(id, a, b, c) thiscall, ret 0x10 - who draws which line (the selection frame
+    // is four of them): written to the draw trace (test harness) and, once per kind, to the log.
+    // The log part (2026-11-16): the orange line of a sword swing (press and move the mouse in a fight)
+    // was drawn away from the pointer at the smooth zoom's magnifications - the background test cannot
+    // make the game draw a swing (its input reaches only the buffered DirectInput data), so the first
+    // lines of every kind the player's game draws say who draws them and where, next to the pointer.
     using PFN_DrawLine = uint32_t(__fastcall*)(void* mgr, void* edx, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t a4);
     PFN_DrawLine o_DrawLine = nullptr;
 
     uint32_t __fastcall Hook_DrawLine(void* mgr, void* edx, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t a4) {
+        auto vec = [](uint32_t p, float out[2]) {
+            out[0] = out[1] = -1.0f;
+            if (p > 0x10000 && Readable(reinterpret_cast<const void*>(p), 8)) std::memcpy(out, reinterpret_cast<const void*>(p), 8);
+        };
         if (DDM::TraceActive()) {
             char text[200];
-            auto vec = [](uint32_t p, float out[2]) {
-                out[0] = out[1] = -1.0f;
-                if (p > 0x10000 && Readable(reinterpret_cast<const void*>(p), 8)) std::memcpy(out, reinterpret_cast<const void*>(p), 8);
-            };
             float v2[2], v3[2];
             vec(a2, v2);
             vec(a3, v3);
             std::snprintf(text, sizeof(text), "LINE by %08X id=%u a=%08X(%.1f,%.1f) b=%08X(%.1f,%.1f) c=%08X",
                           static_cast<uint32_t>(reinterpret_cast<uintptr_t>(_ReturnAddress())), a1, a2, v2[0], v2[1], a3, v3[0], v3[1], a4);
             DDM::TraceMark(text);
+        }
+        static std::vector<uint64_t> seen;          // main thread
+        if (seen.size() < 24) {
+            void* frames[4] = {};
+            const USHORT n = RtlCaptureStackBackTrace(1, 4, frames, nullptr);
+            uint64_t key = static_cast<uint64_t>(a4 & 0xFFFF) << 48;
+            for (USHORT i = 0; i < n && i < 3; ++i) key ^= static_cast<uint64_t>(reinterpret_cast<uintptr_t>(frames[i])) << (i * 16);
+            if (std::find(seen.begin(), seen.end(), key) == seen.end()) {
+                seen.push_back(key);
+                float v2[2], v3[2];
+                vec(a2, v2);
+                vec(a3, v3);
+                float cx = *reinterpret_cast<const float*>(0x006C1300), cy = *reinterpret_cast<const float*>(0x006C1304);
+                float fx = cx, fy = cy;
+                const bool mapped = ViewZoom::ScreenToFrame(fx, fy);
+                Logger::Info("Lines: colour %04X by %08X<%08X<%08X<%08X from (%.0f,%.0f) to (%.0f,%.0f); pointer (%.0f,%.0f), in the frame "
+                             "(%.0f,%.0f)%s.", a4 & 0xFFFF, static_cast<uint32_t>(reinterpret_cast<uintptr_t>(_ReturnAddress())),
+                             static_cast<uint32_t>(reinterpret_cast<uintptr_t>(frames[1])), static_cast<uint32_t>(reinterpret_cast<uintptr_t>(frames[2])),
+                             static_cast<uint32_t>(reinterpret_cast<uintptr_t>(frames[3])), v2[0], v2[1], v3[0], v3[1], cx, cy, fx, fy,
+                             mapped ? " (smooth zoom magnifies)" : "");
+            }
         }
         return o_DrawLine(mgr, edx, a1, a2, a3, a4);
     }
@@ -1343,7 +1368,7 @@ void Install() {
                     Hook(0x00511B90, kClock, sizeof(kClock), reinterpret_cast<void*>(&Hook_Clock), reinterpret_cast<void**>(&o_Clock)) &&
                     Hook(0x005F1CA0, kCursor, sizeof(kCursor), reinterpret_cast<void*>(&Hook_Cursor), reinterpret_cast<void**>(&o_Cursor));
     finishMenuZoom();
-    if (TestHarness::Enabled()) {
+    {
         static const uint8_t kLine[] = { 0x6A, 0xFF, 0x68, 0x78, 0x29, 0x67, 0x00, 0x64, 0xA1, 0x00, 0x00, 0x00, 0x00, 0x50 };
         Hook(0x005ECBD0, kLine, sizeof(kLine), reinterpret_cast<void*>(&Hook_DrawLine), reinterpret_cast<void**>(&o_DrawLine));
     }

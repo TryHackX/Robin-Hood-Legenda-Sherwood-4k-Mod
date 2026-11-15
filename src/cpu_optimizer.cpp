@@ -58,7 +58,47 @@ namespace {
         return o_TotalPhys();
     }
 
+    // ---- the clock the options menu shows (2026-11-15, user report: "entering Options stutters for a moment")
+    // 0x0060F250 (plain ret, returns MHz; called by the CPU info object's constructor 0x0060F2B0 - at game start
+    // 0x0045C5D0 and EVERY time the options menu opens, 0x00538FB7) waits for a timeGetTime edge and then spins
+    // 1000 ms between two rdtsc reads: the game stood still for a whole second (no picture, measured with a call
+    // trace: 1069 ms without a frame; tools\stack_sample.ps1 caught the main thread in that loop). Measured here
+    // once, over 25 ms of the performance counter (more exact than the game's 1 ms timeGetTime over 1 s), and kept.
+    using PFN_CpuMhz = uint32_t(__cdecl*)();
+    PFN_CpuMhz o_CpuMhz = nullptr;
+    uint32_t g_cpuMhz = 0;           // main thread only (the game's own calls)
+
+    uint32_t MeasureMhz() {
+        LARGE_INTEGER f{}, q0{}, q1{};
+        if (!QueryPerformanceFrequency(&f) || f.QuadPart <= 0) return 0;
+        QueryPerformanceCounter(&q0);
+        const unsigned long long t0 = __rdtsc();
+        do {
+            QueryPerformanceCounter(&q1);
+        } while (q1.QuadPart - q0.QuadPart < f.QuadPart / 40);
+        const unsigned long long t1 = __rdtsc();
+        const double seconds = static_cast<double>(q1.QuadPart - q0.QuadPart) / static_cast<double>(f.QuadPart);
+        const double mhz = static_cast<double>(t1 - t0) / seconds / 1e6;
+        return (mhz >= 1.0 && mhz < 65535.0) ? static_cast<uint32_t>(mhz) : 0;
+    }
+
+    uint32_t __cdecl Hook_CpuMhz() {
+        if (!g_cpuMhz) {
+            g_cpuMhz = MeasureMhz();
+            if (!g_cpuMhz) return o_CpuMhz();
+            Logger::Info("SystemInfo: processor clock %u MHz (measured in 25 ms instead of the game's 1 s wait).", g_cpuMhz);
+        }
+        return g_cpuMhz;
+    }
+
     void PatchSystemInfo() {
+        // 0x0060F250: push ebx / push esi / push edi / mov edi,[timeGetTime] / call edi / mov ebx,eax
+        static const uint8_t kCpuMhz[] = { 0x53, 0x56, 0x57, 0x8B, 0x3D, 0xC8, 0x72, 0x67, 0x00, 0xFF, 0xD7, 0x8B, 0xD8 };
+        const bool clock = std::memcmp(reinterpret_cast<const void*>(0x0060F250), kCpuMhz, sizeof(kCpuMhz)) == 0 &&
+                           MH_CreateHook(reinterpret_cast<LPVOID>(0x0060F250), reinterpret_cast<LPVOID>(&Hook_CpuMhz),
+                                         reinterpret_cast<LPVOID*>(&o_CpuMhz)) == MH_OK &&
+                           MH_EnableHook(reinterpret_cast<LPVOID>(0x0060F250)) == MH_OK;
+        if (!clock) Logger::Warn("SystemInfo: the game's 1 s clock measurement (0x0060F250) not replaced - options open slowly.");
         // 0x0060F8F0: sub esp,20h / lea eax,[esp] / push eax / call [GlobalMemoryStatus]
         static const uint8_t kTotalPhys[] = { 0x83, 0xEC, 0x20, 0x8D, 0x44, 0x24, 0x00, 0x50, 0xFF, 0x15, 0x28, 0x72, 0x67, 0x00 };
         const bool mem = std::memcmp(reinterpret_cast<const void*>(0x0060F8F0), kTotalPhys, sizeof(kTotalPhys)) == 0 &&

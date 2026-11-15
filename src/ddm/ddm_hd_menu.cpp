@@ -334,7 +334,12 @@ namespace {
             if (SherwoodConfig::Get().hdMenuRemake) pic = LoadFrom("remake", key);
             if (!pic) pic = LoadFrom(g_variant, key);
         }
-        if (g_pics.size() > 64) g_pics.clear();     // a handful of menu screens; never grows without bound
+        if (g_pics.size() > 64) {                   // a handful of menu screens; never grows without bound
+            // first the pictures without an HD version (the credits made one per frame - the main menu's
+            // remade picture, 16 MB, was read again after them)
+            for (auto e = g_pics.begin(); e != g_pics.end();) e = e->second ? std::next(e) : g_pics.erase(e);
+            if (g_pics.size() > 64) g_pics.clear();
+        }
         g_pics[key] = pic;
         return pic;
     }
@@ -387,7 +392,17 @@ namespace {
     // hd\work\menu_frames\<key>.mnf: "MNUF", u32 1, u16 cropW, cropH, frameW, frameH, then the
     // shown part, RGB565 row by row
     void WriteForTool(uint64_t key, const Buf& src, const RECT& crop) {
-        if (g_writeFailed || g_written.count(key) || g_written.size() > 500) return;
+        if (g_writeFailed || g_written.count(key) || g_written.size() > 64) return;
+        // A picture that is different in every copy is an animation, not a menu picture: the credits
+        // scroll their text over the forest - every frame was written as a picture of its own (2 MB each,
+        // ~40 a second, 1 GB in hd\work\menu_frames and the credits at 38 frames a second; 2026-11-15).
+        // The third new picture within a second stops the files until the copies calm down again.
+        static DWORD lastNew = 0;
+        static int burst = 0;
+        const DWORD now = GetTickCount();
+        burst = (now - lastNew < 1000) ? burst + 1 : 0;
+        lastNew = now;
+        if (burst >= 2) return;
         g_written.insert(key);
         const std::string dir = GameDir() + "hd\\work\\menu_frames";
         CreateDirectoryA((GameDir() + "hd\\work").c_str(), nullptr);

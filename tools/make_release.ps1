@@ -16,9 +16,10 @@ Copy-Item $dll $pkg
 Copy-Item (Join-Path $root 'release\SherwoodFix.ini') $pkg
 Copy-Item (Join-Path $root 'README.md') $pkg
 # quality of the in-between frames of the HD pack (tools\hd\between_quality.py): small, belongs to the mod -
-# between.q for the current store, between.v1.q for the first pack's store (the DLL takes the one that matches)
+# between.q for the current store, between.v1.q for the first pack's store (the DLL takes the one that matches);
+# between.t = the animation steps' lengths for the current store (tools\hd\between_motion.py)
 $qdir = Join-Path $pkg 'hd\sprites\_between'
-foreach ($name in 'between.q', 'between.v1.q') {
+foreach ($name in 'between.q', 'between.v1.q', 'between.t') {
     $q = Join-Path $root "hd\sprites\_between\$name"
     if (-not (Test-Path $q)) { continue }
     New-Item -ItemType Directory -Force $qdir | Out-Null

@@ -67,7 +67,7 @@ original DirectDraw wrapper, plus optional HD graphics prepared with AI models f
 ## Installation — the complete HD version, step by step
 
 You need two releases from the **Releases** page (right side of the repository page):
-[**SherwoodEngineFix 1.1.6**](https://github.com/TryHackX/Robin-Hood-Legenda-Sherwood-4k-Mod/releases/tag/v1.1.6)
+[**SherwoodEngineFix 1.1.7**](https://github.com/TryHackX/Robin-Hood-Legenda-Sherwood-4k-Mod/releases/tag/v1.1.7)
 (the mod itself, a few MB) and
 [**HD graphics pack 1**](https://github.com/TryHackX/Robin-Hood-Legenda-Sherwood-4k-Mod/releases/tag/hd-pack-1)
 (the HD pictures, 7 archives). Download the files listed under **Assets** — not "Source code (zip)" / "Source code
@@ -98,12 +98,13 @@ holds `hd\maps\…`, `hd\sprites\…` and `hd\menu\…`. Check: `hd\sprites\_com
 `sprites.dat` **and** `sprites.dat.2` (from the two character archives). If Windows asks to replace files, answer yes.
 The downloaded `.zip` files can be deleted afterwards.
 
-**Step 3 — the mod (after the HD pictures).** Unpack `SherwoodEngineFix-v1.1.6.zip` into the game folder (next to
+**Step 3 — the mod (after the HD pictures).** Unpack `SherwoodEngineFix-v1.1.7.zip` into the game folder (next to
 `Game.exe`) — **after** the HD archives: it carries the newest of the small HD files, which replace older ones from the
 pack: `winmm.dll`, `SherwoodFix.ini`, the HD fonts `hd\fonts\*.hdfont`, the HD pictures of menus and dialogs
 `hd\menu_parts\*.hdp`, the run-time icons `hd\sprites\_icons\` (newer than the pack's), small `hd\menu\<variant>\*.alias`
-files (the HD menu backgrounds found in menus opened during a mission) and the quality lists of the in-between frames
-`hd\sprites\_between\between.q` / `between.v1.q` (the mod takes the one that belongs to the installed frames).
+files (the HD menu backgrounds found in menus opened during a mission), the quality lists of the in-between frames
+`hd\sprites\_between\between.q` / `between.v1.q` (the mod takes the one that belongs to the installed frames) and the
+animation steps' lengths `hd\sprites\_between\between.t` (how long each in-between frame stays).
 
 **Step 4 (optional) — new menu backgrounds.** `SherwoodEngineFix-menu-remake-1.zip` (45 MB, in the
 [1.1.5 release](https://github.com/TryHackX/Robin-Hood-Legenda-Sherwood-4k-Mod/releases/tag/v1.1.5)): five menu

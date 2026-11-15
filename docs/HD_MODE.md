@@ -316,6 +316,22 @@ Użytkownik po obejrzeniu arkuszy zapytał, czy „będzie gorzej przez ghosty i
   `SherwoodHD-3-klatki-posrednie.zip` (1,62 GiB) zastąpiła starą w wydaniu `hd-pack-1`.
 - Generator wstrzymuje się tylko przy grze z WIDOCZNYM oknem (ukryta instancja testowa też ma tytuł okna — pierwsza
   wersja tego sprawdzenia zatrzymała generowanie na czas testu).
+- **Spoczynek i długie kroki** (2026-11-15/16, v1.1.7; zgłoszenie: Robin w spoczynku „jakby ubranie się ciągle
+  zmieniało”, „kucanie niskoklatkowe”, wyjście spod płaszcza i część zamachów nie płynne). Pomiary
+  (`tools\hd\between_view.py --stats`: zmiana klatek 1×, „boil” = różnice HD tam, gdzie 1× stoi, łaciatość klatki
+  pośredniej, przepływ optyczny): w animacji spoczynku klatki 1× różnią się w ¼ pikseli postaci, ale tylko cieniowaniem
+  — przepływ p90 0,1–0,2 px; ostra klatka pośrednia to wtedy łatanina obu klatek (30 % sąsiednich pikseli z różnych
+  klatek), błysk przy każdej zmianie. Ślad rysowania (`trace`) pokazał też, że sprite jest dekodowany w KAŻDYM tiku, a
+  krok animacji trwa `flags + 1` tików (rekord .rhs; flags 2 → klatka 3 tiki = 120 ms) — kroków 2-tikowych jest
+  najwięcej (175 tys.; 1-tikowych 96 tys.), a klatka pośrednia była tylko w pierwszych ~45 % pierwszego tiku (~20 ms z
+  80–120 ms). Teraz: `tools\hd\between_motion.py` (DIS na klatkach 1× ×4, 6 procesów, 10 min) → `hd\work\between_motion.npz`;
+  `between_quality.py` pomija pary z p90 < 1,25 px (35 597, q = 255; zostaje 285 049) i pisze `between.t`
+  (`"HDBS"`, u32 1, liczba, CRC jak `between.q`, potem bajt na parę = tiki klatki b przy a→b, bajt = tiki a przy b→a;
+  0 = nieznane, 65 % znanych). DLL (`FindBetween`): klatka pośrednia przez pierwszą połowę kroku — okno
+  `tiki/2 − 0,05` (1 tik: 0,45 jak dawniej, 2: 0,95, 3: 1,45, max 4 tiki = 1,95); długość z `between.t`, inaczej z tego,
+  ile trwała poprzednia klatka (śledzenie per obiekt: `since`, `held`). Sprawdzone w tle: kroki 2-tikowe → klatka
+  pośrednia w 6 z 11 obrazów (było 3), animacje spoczynku bez klatek pośrednich. Próg sprawdzony na arkuszu
+  `hd\compare\posrednie_prog_ruchu.png` (pary 0,99–1,18 prawie identyczne, 1,41–1,58 widoczny ruch rąk/broni).
 
 ## 5d. Czcionka HD (2026-11-15, „Tak, czcionka HD”; `src\ddm\ddm_hd_font.cpp`)
 - Fonty gry to bitmapy `DATA\Interface\Fonts\*.bfn` / `Dialog.fnt` („SBFONT”, krój Lydian i inne; pliki TTF wymienione
@@ -560,6 +576,18 @@ w górę), resztę powiększa prezenter — **tylko świat**:
   krokami (pomocnicze funkcje gry, x87 jak w oryginale) i mapuje powierzchnię: **3 ms**, sprawdzone w trybie testowym
   z procedurą gry — 0 różnych pikseli na 3 686 400. Analiza tła tylko w pokazywanej części (reszta co 4. piksel do
   nauki barw): 10–15 ms zamiast ~30. Menu Esc: **~70–90 ms zamiast ~390 ms** (resztę zajmuje gra: fonty okna z plików).
+- **Filtr powiększenia** (2026-11-16, v1.1.7; zgłoszenie: „na oddaleniu robi się blur… na murze, śwince, płaszczu
+  Robina”): poniżej zoomu 2 silnik rysuje świat w 1,0 (bez grafiki HD), a lupa powiększała go dwuliniowo. Dla
+  powiększenia 1 < m < 2 (także zoom 2–4 na klatce HD) shader bierze Catmull-Rom z 16 tekseli (`WorldMagnified`,
+  przycięte przeregulowanie); m ≥ 2 jak dotąd. Porównanie `hd\compare\lupa15_bilinear_vs_catrom.png`. ☐ Prawdziwe HD
+  poniżej zoomu 2: tło mapy w HD w prezenterze (mapa 1× i HD jako tekstury, test „piksel klatki = piksel mapy 1×” jak
+  przy warstwach menu) — sprite'y zostałyby 1×.
+- **Linia zamachu** (zgłoszenie 2026-11-15: przy max zoomie pomarańczowa linia rysuje się gdzie indziej niż kursor,
+  po zoomie „rysowanie zamachów chyba nie działa”): gest (wciśnięcie i ruch myszą w walce, `Manual.pdf` s. 27) nie
+  daje się wywołać w teście w tle — test wstrzykuje tylko dane buforowane DirectInput. Od v1.1.7 hak `DrawLine`
+  (`0x005ECBD0`) działa zawsze i zapisuje do logu pierwszą linię każdego rodzaju (kolor, kto rysuje, końce, kursor i
+  jego miejsce w klatce): `Lines: colour … by …`. Kandydaci z kodu: `0x004DAE10` (silnik, lista obiektów `E+0x499C`,
+  kolor `0xFA00`/`0xFFFF`, rysowanie łamanej `0x00460F60`), `0x004A8300` i `0x004AC850` (metody wirtualne, `0xFA00`).
 
 ### Menu i okna gry na cały ekran (`MenuZoom=1`, Direct3D 11, wysokość wewnętrzna ≥ 960)
 Menu i okna (odprawa, menu Esc, wczytywanie/zapis, opcje) rysuje jedna pętla okien dialogowych gry
@@ -591,6 +619,19 @@ Zbieranie: `tools\collect_menus.ps1` (przechodzi ekrany menu ukrytej gry). Polec
   2026-11-15, opublikowany za zgodą użytkownika („Tak, dodaj”) jako osobny plik wydania v1.1.5:
   `SherwoodEngineFix-menu-remake-1.zip` (45 MB, `tools\make_remake_pack.ps1`). Zmiana w F10 działa od razu (warstwa
   odbudowana z zapamiętanego obrazu menu).
+- **Ekran twórców** (2026-11-15): las z winietą, na nim napisy przewijane od dołu (pasek 400×10500 mieszany 50 % do
+  powierzchni składania, potem kopia całości na ekran). Każda klatka miała inny klucz → mod zapisywał KAŻDĄ do
+  `hd\work\menu_frames` (2 MB, ~40/s, 1 GB) i ekran szedł 38 kl./s. Teraz: trzeci nowy obraz w ciągu sekundy wstrzymuje
+  zapis (animacja, nie tło), limit 64 plików na sesję; puste wpisy pamięci obrazów usuwane najpierw (inaczej obraz menu
+  głównego czytany od nowa po napisach). Tło twórców do remake'u: `menu_remake.py` ekran `06_tworcy` (klucz pierwszej
+  klatki bez napisów `2ef7a848bc09b885`; HD w `hd\work\menu_hd_czeka\` — w grze pasowałoby tylko do tej jednej klatki,
+  potrzebne rozpoznanie tła po kopii stałej powierzchni). ☐ Tło pod pytaniem „wyjść z gry?” to obraz menu głównego 1×
+  zabarwiony przez grę — do zrobienia: zabarwiony obraz HD/remake pod oknem.
+- **Wejście w Opcje** (2026-11-15, „przez chwilę się przycina”): ślad rysowania — 1069 ms bez klatki; próbki stosu
+  (`tools\stack_sample.ps1`: polecenie testowe + migawki wątków co 50 ms) — pętla `timeGetTime` w `0x0060F250`: konstruktor
+  obiektu informacji o procesorze (`0x0060F2B0`, wołany przy starcie gry i przy KAŻDYM otwarciu opcji) mierzy taktowanie
+  czekając 1000 ms między dwoma `rdtsc`. Hak (`cpu_optimizer.cpp`): pomiar raz, 25 ms licznika wydajności (3600 MHz jak
+  gra). Teraz ~85 ms (z tego ~23 ms analiza tła dialogu w modzie, reszta gra: paski fontów okna).
 
 ### Panel ustawień moda (F10, `SettingsKey=121`)
 Rysowany w prezenterze do tekstury klatki (składany w zwykłej pamięci z obrazu źródłowego — czytanie zmapowanej

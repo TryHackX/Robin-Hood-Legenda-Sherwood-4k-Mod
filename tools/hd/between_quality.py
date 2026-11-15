@@ -15,6 +15,9 @@ Sharp store (make_inbetweens.py --sharp, 2026-11-15; flag 1 in the last word of 
 is a mix of the two any more, the soft look is gone - the value is scaled so that the generator's own limit (32)
 lands on the DLL's default 17: with HDInBetweenQuality=17 every accepted frame is shown. Players with the old
 store keep its file (between.v1.q, the DLL takes the one whose CRC matches).
+2026-11-15 (v1.1.7): with hd/work/between_motion.npz (tools/hd/between_motion.py) also pairs without motion are left
+out (q = 255, MIN_MOTION_P90), and between.t is written: "HDBS", u32 1, u32 count, u32 CRC as above, then count
+bytes = ticks the frame b stays when the animation goes a -> b, count bytes = ticks of a going b -> a (0 = unknown).
 """
 import csv
 import glob
@@ -31,6 +34,10 @@ ROOT = os.path.normpath(os.path.join(HERE, '..', '..'))
 DIR = os.path.join(ROOT, 'hd', 'sprites', '_between')
 ENTRY = np.dtype([("a", "<u4"), ("b", "<u4"), ("off", "<u8"), ("size", "<u4"), ("w", "<u2"), ("h", "<u2"),
                   ("dxa", "<i2"), ("dya", "<i2"), ("dxb", "<i2"), ("dyb", "<i2")])
+# 2026-11-15: pairs whose 1x frames move less than this (optical flow, 90th percentile over the figure, 1x pixels)
+# show no motion - left out (q = 255). Robin's idle: 0.1-0.2 (a patchwork, "his clothes kept changing"), a slow
+# head turn 0.8-1.1, the smallest steps of a walk 1.6-2.1. Needs hd/work/between_motion.npz (between_motion.py).
+MIN_MOTION_P90 = 1.25
 
 
 def main():
@@ -60,6 +67,25 @@ def main():
             continue
         q[i] = min(254, int(math.ceil(c * scale - 1e-9)))
     h = zlib.crc32(raw) & 0xFFFFFFFF            # the index this file belongs to
+    # motion and step lengths (between_motion.py), measured for exactly this index
+    motion = None
+    mpath = os.path.join(ROOT, 'hd', 'work', 'between_motion.npz')
+    if os.path.exists(mpath):
+        m = np.load(mpath)
+        if int(m['crc']) == h and len(m['p90']) == count:
+            motion = m
+        else:
+            print('between_motion.npz belongs to another index - run tools/hd/between_motion.py again')
+    if motion is not None:
+        # no motion to show: the pair's in-between is only a patchwork of the two frames (see between_motion.py)
+        still = used & (motion['p90'] >= 0) & (motion['p90'] < MIN_MOTION_P90)
+        print('no motion (flow p90 < %.2f px): %d pairs left out' % (MIN_MOTION_P90, still.sum()))
+        q[still] = 255
+        with open(os.path.join(DIR, 'between.t'), 'wb') as f:
+            f.write(struct.pack('<4sIII', b'HDBS', 1, count, h))
+            f.write(motion['hold_ab'].astype(np.uint8).tobytes())
+            f.write(motion['hold_ba'].astype(np.uint8).tobytes())
+        print('->', os.path.join(DIR, 'between.t'), 16 + 2 * count, 'bytes (step lengths in ticks)')
     with open(os.path.join(DIR, 'between.q'), 'wb') as f:
         f.write(struct.pack('<4sIII', b'HDBQ', 1, count, h))
         f.write(q.tobytes())

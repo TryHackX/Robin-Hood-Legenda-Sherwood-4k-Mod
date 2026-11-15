@@ -66,16 +66,18 @@ namespace {
         bool     masked = false;     // the game cut occluded parts out of the surface after decoding
         int8_t   checked = 0;        // 0 not yet, 1 the surface matches the HD frame, -1 it does not
         uint64_t content = 0;        // run-time frame: key of its content (0 = a frame of the bank file)
-        uint32_t prev = 0;           // the frame the same sprite showed in the previous game tick (= frame: none / unknown)
+        uint32_t prev = 0;           // the frame the same sprite showed before it changed to this one (= frame: none / unknown)
+        uint8_t  age = 0;            // game ticks since that change (0 = it changed in this tick)
+        uint8_t  heldPrev = 0;       // how many ticks `prev` stayed (0 = unknown)
         void*    sprite = nullptr;   // the sprite object that decoded it (nullptr: decoded by other code)
     };
 
     // ---- in-between frames (HDInBetween): hd\sprites\_between\between.idx / between.dat
-    // (tools\hd\make_inbetweens.py). A sprite that went from frame A to frame B in this game tick
-    // is drawn, in the pictures of the first part of the tick, with a generated frame half-way
-    // between the two - the animation runs at twice the game's 25 steps per second.
-    // Which sprite a decode belongs to: the sprite object's own method (0x005BBA00) calls the
-    // bank's decoder; the frame each sprite object showed in the previous tick is remembered.
+    // (tools\hd\make_inbetweens.py). A sprite that went from frame A to frame B is drawn, in the
+    // pictures of the first half of B's step (1 tick: the first part of the tick; 2 ticks: the
+    // first tick ...), with a generated frame half-way between the two - the animation runs at
+    // twice its rate. Which sprite a decode belongs to: the sprite object's own method (0x005BBA00)
+    // calls the bank's decoder; per sprite object the frame before the last change is remembered.
     constexpr uintptr_t kAddrSpriteDecode = 0x005BBA00;  // sprite->DecodeCurrentFrame(arg*), ret 4
     // Pictures drawn before this point of the tick show the in-between frame. A picture stays on
     // screen until the next one is drawn, so the switch happens on average half a picture period
@@ -86,9 +88,16 @@ namespace {
     PFN_SpriteDecode o_SpriteDecode = nullptr;
     void* g_spriteNow = nullptr;     // the sprite object that is decoding its frame right now
 
+    // Most animation steps last 2-3 ticks (the .rhs step record: flags + 1 ticks; 2 ticks is the most common
+    // length, 1 tick only every fourth step) - shown only in the first part of the first tick, the in-between
+    // covered 20 ms of an 80-120 ms step and crouching or fight moves stayed choppy (user report 2026-11-15).
+    // Now it stays for the first half of the step: the step's length comes from hd\sprites\_between\between.t
+    // (tools\hd\between_motion.py, per pair and direction), else from how long the frame before stayed.
     struct SpriteAnim {
-        uint32_t cur = 0, prev = 0;
-        uint32_t tick = 0;
+        uint32_t cur = 0, prev = 0;  // the frame now / before the last change (= cur: unknown)
+        uint32_t tick = 0;           // the tick of the last decode
+        uint32_t since = 0;          // the tick in which `cur` began
+        uint32_t held = 0;           // ticks `prev` stayed (0 = unknown)
     };
     std::unordered_map<void*, SpriteAnim> g_anim;
     uint32_t g_tick = 1;             // counts the game ticks' own frames
@@ -172,6 +181,9 @@ namespace {
     // the game the soft ones alternated with the sharp HD frames ("now HD, now not", ghosts in
     // fast moves - user report 2026-11-15). Only frames up to HDInBetweenQuality are shown.
     std::vector<uint8_t> g_betweenQ;
+    // Per entry how many ticks the frame stays that the animation changes to: [i] going a -> b (the ticks of b),
+    // [count + i] going b -> a (the ticks of a); 0 = unknown. hd\sprites\_between\between.t (between_quality.py).
+    std::vector<uint8_t> g_betweenHold;
     DataFile g_betweenDat;
     bool   g_betweenTried = false;
 
@@ -655,6 +667,26 @@ namespace {
         struct QHeader { char magic[4]; uint32_t version, count, crc; } qh{};
         uint32_t crc = Crc32(0, reinterpret_cast<const uint8_t*>(&hdr), sizeof(hdr));
         crc = Crc32(crc, reinterpret_cast<const uint8_t*>(g_between.data()), g_between.size() * sizeof(BetweenEntry));
+
+        // the steps' lengths (see g_betweenHold), for exactly this index as well
+        g_betweenHold.clear();
+        HANDLE tf = CreateFileA((dir + "between.t").c_str(), GENERIC_READ, share, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (tf != INVALID_HANDLE_VALUE) {
+            QHeader th{};
+            bool tok = ReadFile(tf, &th, sizeof(th), &got, nullptr) && got == sizeof(th) && std::memcmp(th.magic, "HDBS", 4) == 0 &&
+                       th.version == 1 && th.count == g_between.size() && th.crc == crc;
+            if (tok) {
+                g_betweenHold.resize(static_cast<size_t>(th.count) * 2);
+                const DWORD bytes = static_cast<DWORD>(g_betweenHold.size());
+                tok = ReadFile(tf, g_betweenHold.data(), bytes, &got, nullptr) && got == bytes;
+            }
+            CloseHandle(tf);
+            if (!tok) g_betweenHold.clear();
+            size_t known = 0;
+            for (uint8_t t : g_betweenHold) known += t != 0;
+            if (tok) Logger::Info("HD sprites: step lengths of the animations (between.t) known for %zu of %zu changes.", known, g_betweenHold.size());
+            else Logger::Warn("HD sprites: between.t does not belong to this in-between store - step lengths measured while playing.");
+        }
         const char* used = nullptr;
         bool any = false;
         for (const char* name : { "between.q", "between.v1.q" }) {
@@ -691,19 +723,35 @@ namespace {
     }
 
     // The frame half-way between `prev` and `cur` (either order), and where its top-left corner
-    // lies relative to that of `cur`. nullptr = none.
-    const Ready* GetBetween(uint32_t prev, uint32_t cur, uint32_t tone, int* dx, int* dy) {
+    // lies relative to that of `cur`. nullptr = none, or not any more: `elapsed` = game ticks since the
+    // sprite changed to `cur` (with the phase of the tick); the in-between belongs to the first half of the
+    // step `cur` stays - its length from between.t, else `heldPrev` (how long `prev` stayed), else 1 tick.
+    // The entry of the pair whose in-between frame is due now (no data read; -1 = none).
+    ptrdiff_t FindBetween(uint32_t prev, uint32_t cur, float elapsed, int heldPrev) {
         OpenBetween();
-        if (g_between.empty()) return nullptr;
+        if (g_between.empty()) return -1;
         const uint32_t a = (std::min)(prev, cur), b = (std::max)(prev, cur);
         const auto it = std::lower_bound(g_between.begin(), g_between.end(), std::make_pair(a, b),
                                          [](const BetweenEntry& e, const std::pair<uint32_t, uint32_t>& k) {
                                              return e.a != k.first ? e.a < k.first : e.b < k.second;
                                          });
-        if (it == g_between.end() || it->a != a || it->b != b || it->size == 0) return nullptr;
-        if (!g_betweenQ.empty() && g_betweenQ[static_cast<size_t>(it - g_between.begin())] > SherwoodConfig::Get().hdInBetweenQuality) {
-            return nullptr;         // too soft: the animation as the game shows it
+        if (it == g_between.end() || it->a != a || it->b != b || it->size == 0) return -1;
+        const size_t index = static_cast<size_t>(it - g_between.begin());
+        if (!g_betweenQ.empty() && g_betweenQ[index] > SherwoodConfig::Get().hdInBetweenQuality) {
+            return -1;              // too soft, or no motion to show: the animation as the game shows it
         }
+        int ticks = 0;
+        if (!g_betweenHold.empty()) ticks = g_betweenHold[cur == b ? index : g_between.size() + index];
+        if (ticks <= 0) ticks = heldPrev;
+        // At most 4 ticks: a pose the game holds longer still changes within 80 ms, not in slow motion.
+        ticks = (std::max)(1, (std::min)(ticks, 4));
+        // 1 tick: up to 0.45 (measured at 144 Hz: centres the switch, see kBetweenPhase), 2: 0.95, 3: 1.45, 4: 1.95
+        if (elapsed >= 0.5f * static_cast<float>(ticks) - (0.5f - kBetweenPhase)) return -1;
+        return static_cast<ptrdiff_t>(index);
+    }
+
+    const Ready* GetBetween(size_t index, uint32_t cur, uint32_t tone, int* dx, int* dy) {
+        const auto it = g_between.begin() + static_cast<ptrdiff_t>(index);
         *dx = cur == it->a ? it->dxA : it->dxB;
         *dy = cur == it->a ? it->dyA : it->dyB;
         const uint64_t key = (1ull << 62) | (static_cast<uint64_t>(tone & 3) << 40) | static_cast<uint64_t>(it - g_between.begin());
@@ -727,18 +775,31 @@ namespace {
         return &g_ready.emplace(key, std::move(r)).first->second;
     }
 
-    // Which frame did this sprite object show in the previous game tick?
-    uint32_t TrackSprite(void* sprite, uint32_t frame) {
+    // Which frame did this sprite object show before it changed to `frame`, how many ticks ago was that,
+    // and how long did that frame stay? The game decodes the frame of every visible sprite in every tick.
+    void TrackSprite(void* sprite, uint32_t frame, Decoded& rec) {
         if (g_anim.size() > 20000) g_anim.clear();
         SpriteAnim& a = g_anim[sprite];
         if (a.tick != g_tick) {
-            a.prev = (a.tick + 1 == g_tick) ? a.cur : frame;
-            a.cur = frame;
+            if (a.tick + 1 != g_tick) {             // not followed through the last tick: from here on
+                a.prev = a.cur = frame;
+                a.since = g_tick;
+                a.held = 0;
+            } else if (frame != a.cur) {            // the animation stepped
+                a.held = g_tick - a.since;
+                a.prev = a.cur;
+                a.cur = frame;
+                a.since = g_tick;
+            }
             a.tick = g_tick;
         } else if (a.cur != frame) {
-            a.cur = a.prev = frame; // two frames inside one tick: not an animation step that can be followed
+            a.cur = a.prev = frame;                 // two frames inside one tick: not an animation step that can be followed
+            a.since = g_tick;
+            a.held = 0;
         }
-        return a.prev;
+        rec.prev = a.prev;
+        rec.age = static_cast<uint8_t>((std::min)(g_tick - a.since, 255u));
+        rec.heldPrev = static_cast<uint8_t>((std::min)(a.held, 255u));
     }
 
     uint32_t __fastcall Hook_SpriteDecode(void* sprite, void* edx, void* arg) {
@@ -868,7 +929,8 @@ namespace {
             rec.lossless = f.palette == 0xFFFF;
             rec.flag = rec.lossless ? f.flag : 0;
             if (frame >= kBankFileFrames) rec.content = ContentKey(frame, f);
-            rec.prev = (g_spriteNow && frame < kBankFileFrames) ? TrackSprite(g_spriteNow, frame) : frame;
+            rec.prev = frame;
+            if (g_spriteNow && frame < kBankFileFrames) TrackSprite(g_spriteNow, frame, rec);
             rec.sprite = g_spriteNow;
             g_bank = bank;
             if (g_decoded.size() > 20000) g_decoded.clear();
@@ -1255,19 +1317,21 @@ bool TryShadowBlit(const uint16_t* src, uint16_t* dst, uint32_t cols, uint32_t r
         TraceMark(text);
     }
 
-    // In-between frame: the sprite showed another frame in the previous tick, this picture lies in
-    // the first part of the tick, and the store has a frame half-way between the two. What the
-    // game cut out of the decoded frame (hidden behind something) is cut out of it as well.
-    if (keyed && rec->prev != rec->frame && g_betweenOn.load(std::memory_order_relaxed) &&
+    // In-between frame: the sprite showed another frame before this one, this picture lies in the
+    // first half of the step (FindBetween), and the store has a frame half-way between the two. What
+    // the game cut out of the decoded frame (hidden behind something) is cut out of it as well.
+    if (keyed && rec->prev != rec->frame && rec->age < 4 && g_betweenOn.load(std::memory_order_relaxed) &&
         rec->fw <= sb.w && rec->fh <= sb.h && hd->w == rec->fw * 2 && hd->h == rec->fh * 2) {
-        float phase = Timing::RenderPhase();
-        if (DebugFlags() & 16u) phase = 0.0f; // test harness: every picture of the tick shows the in-between frame
-        if (phase >= 0.0f && phase < kBetweenPhase) {
+        const float phase = Timing::RenderPhase();
+        // test harness: every picture of the step's first tick shows the in-between frame
+        const float elapsed = (DebugFlags() & 16u) ? 0.0f : static_cast<float>(rec->age) + phase;
+        const ptrdiff_t entry = phase >= 0.0f ? FindBetween(rec->prev, rec->frame, elapsed, rec->heldPrev) : -1;
+        if (entry >= 0) {
             int ox = 0, oy = 0;
             static std::vector<uint8_t> hidden;
             const bool cutNow = rec->masked && HiddenMap(sb, *rec, *hd, hidden);
             const int fw = rec->fw, fh = rec->fh;
-            if (const Ready* mid = GetBetween(rec->prev, rec->frame, rec->tone, &ox, &oy)) {
+            if (const Ready* mid = GetBetween(static_cast<size_t>(entry), rec->frame, rec->tone, &ox, &oy)) {
                 DrawBetween(*mid, db, dx - 2 * sx + ox, dy - 2 * sy + oy, factor, cutNow ? hidden.data() : nullptr, fw, fh, ox, oy);
                 if (TraceActive()) {
                     char text[120];

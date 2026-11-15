@@ -271,6 +271,16 @@ Do sprawdzenia przy okazji: czy miganie ikon akcji ma teraz właściwe tempo; po
      noc i mgła sprawdzone w tle poleceniem `ambiance` (`docs\HD_MODE.md` §5f; nocą 17 nowych klatek tworzonych w locie
      dorobionych w HD); klatki pośrednie od nowa w trybie ostrym — 320 646 pokazywanych zamiast 100 722, nowa paczka 3.
      ☐ Misje z drużyną i staw w Nottingham — po postępie kampanii gracza (test w tle ma tylko pierwszą misję).
+   - ✔ **v1.1.7 — opcje bez zwiechy, spokojny spoczynek, płynniejsze długie kroki, ostrzejsza lupa** (2026-11-16;
+     zgłoszenie z 4 zdjęciami + „wejście w opcje się przycina”): gra przy każdym otwarciu opcji mierzyła taktowanie
+     procesora czekając 1 s (`0x0060F250`) — pomiar 25 ms raz (opcje ~85 ms zamiast ~1,1 s, start gry o 1 s krótszy);
+     klatki pośrednie: pary bez ruchu pominięte (spoczynek Robina — „zmieniające się ubranie”), klatka pośrednia przez
+     połowę kroku z `between.t` zamiast 20 ms (kucanie, wyjście spod płaszcza, zamachy); lupa 1–2× i 2–4× filtrem
+     Catmull-Rom; ekran twórców nie zapisuje już każdej klatki (1 GB w `hd\work\menu_frames`); dziennik linii pod
+     diagnozę linii zamachu; eksport tła twórców do remake'u (`06_tworcy`). Dźwięk: złe urządzenie wyjścia u gracza
+     (nie mod). Opis: `docs\HD_MODE.md` §5c, §7.
+     ☐ Linia zamachu przy zoomie ≠ 2 (czeka na log z gry gracza: `Lines:`). ☐ Tło pod pytaniem o wyjście z gry i tło
+     twórców z remake'u/HD w grze. ☐ HD poniżej zoomu 2 (tło mapy w prezenterze).
    - ✔ **Wydanie na GitHubie** (2026-11-14): v1.0.0 (README po angielsku), paczki grafiki HD jako osobne wydanie
      (7 plików ZIP < 2 GB; magazyn postaci w dwóch częściach — mod czyta `sprites.dat` + `sprites.dat.2`).
 5. ◐ Klatki pośrednie animacji postaci (prośba użytkownika; „jak się nie uda, trudno"): eksperyment zakończony

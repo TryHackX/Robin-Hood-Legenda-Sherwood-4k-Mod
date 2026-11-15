@@ -70,6 +70,14 @@ SCREENS = [
     ('05_pergamin', '94cc757eae713dbe', None, 'ekran z pergaminem (twórcy / filmy)',
      "A misty forest with tall trees and ivy. In the centre a large old parchment scroll hanging between two wooden "
      "rollers - text is printed on it, so leave the parchment plain and evenly lit with no writing on it."),
+    # 2026-11-15 (user: "new pictures for the credits ... too"): the credits screen - its text scrolls over it
+    ('06_tworcy', '2ef7a848bc09b885', 'credits', 'twórcy gry (napisy przewijają się środkiem ekranu)',
+     "A dark, mystical ancient forest: huge old gnarled tree trunks, a burst of golden sunlight breaking through "
+     "the canopy left of centre, teal-green mist and mossy rocks on the right, ferns and roots on the ground; deep "
+     "shadows and a soft dark vignette towards all edges. The credits are printed in light letters in a column "
+     "about a third of the screen wide that scrolls slowly from the bottom to the top through the middle of the "
+     "screen, and the studio logo appears near the bottom: keep the middle column dark and calm without bright "
+     "spots, and let the lowest quarter of the picture fade to almost black."),
 ]
 
 

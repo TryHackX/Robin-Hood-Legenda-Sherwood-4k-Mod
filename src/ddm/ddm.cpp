@@ -751,6 +751,12 @@ HRESULT Surface::DoBlt(const RECT* dstRect, Surface* src, const RECT* srcRect, D
             if (g.primary && (this == g.primary || this == g.primary->back) && src != g.primary && src != g.primary->back &&
                 src->w == w && src->h == h && Diag::IsMainThread()) {
                 HD::Menu::OnScreenCopy(src->buf(), src->serial, src->gen, src->genWrite, c, dx, dy);
+            } else if (g.primary && this != g.primary && this != g.primary->back && src != g.primary && src != g.primary->back &&
+                       src->w == w && src->h == h && dx == 0 && dy == 0 && c.left == 0 && c.top == 0 && c.right == w &&
+                       c.bottom == h && Diag::IsMainThread()) {
+                // a whole copy between two surfaces of the screen's size (the credits' fixed forest into the
+                // surface their scrolling text is mixed into)
+                HD::Menu::OnSurfaceCopy(buf(), src->buf(), src->serial, src->gen, src->genWrite);
             }
         }
         return DD_OK;

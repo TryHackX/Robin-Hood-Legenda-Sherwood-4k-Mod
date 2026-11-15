@@ -279,8 +279,13 @@ Do sprawdzenia przy okazji: czy miganie ikon akcji ma teraz właściwe tempo; po
      Catmull-Rom; ekran twórców nie zapisuje już każdej klatki (1 GB w `hd\work\menu_frames`); dziennik linii pod
      diagnozę linii zamachu; eksport tła twórców do remake'u (`06_tworcy`). Dźwięk: złe urządzenie wyjścia u gracza
      (nie mod). Opis: `docs\HD_MODE.md` §5c, §7.
-     ☐ Linia zamachu przy zoomie ≠ 2 (czeka na log z gry gracza: `Lines:`). ☐ Tło pod pytaniem o wyjście z gry i tło
-     twórców z remake'u/HD w grze. ☐ HD poniżej zoomu 2 (tło mapy w prezenterze).
+     ☐ Linia zamachu przy zoomie ≠ 2 (czeka na log z gry gracza: `Lines:`). ☐ HD poniżej zoomu 2 (tło mapy w
+     prezenterze).
+   - ✔ **v1.1.8 — tło pod pytaniem o wyjście i twórcy w HD/remake** (2026-11-16, „Tak, rób”, „twórcy dodane, czekam aż
+     dasz mi tło na wyjściu”): ekran bez własnego obrazu, który jest w większości ostatnim menu z czymś narysowanym na
+     wierzchu, zostaje z obrazem HD/remake tego menu (pytanie o wyjście — tło menu głównego z remake'u; nowy obraz
+     niepotrzebny); twórcy rozpoznawani po stałej powierzchni lasu (remake lasu od użytkownika); twórcy 70–90 kl./s.
+     Opis: `docs\HD_MODE.md` §7 (tła menu).
    - ✔ **Wydanie na GitHubie** (2026-11-14): v1.0.0 (README po angielsku), paczki grafiki HD jako osobne wydanie
      (7 plików ZIP < 2 GB; magazyn postaci w dwóch częściach — mod czyta `sprites.dat` + `sprites.dat.2`).
 5. ◐ Klatki pośrednie animacji postaci (prośba użytkownika; „jak się nie uda, trudno"): eksperyment zakończony

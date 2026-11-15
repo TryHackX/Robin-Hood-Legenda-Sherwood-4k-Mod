@@ -181,9 +181,11 @@ def import_(args):
     desc = None
     done = set()
     for p in files:
+        if args.only and p.name[:2] not in args.only:
+            continue
         hit = by_prefix.get(p.name[:2])
         if not hit:
-            print(f'{p.name}: the name must start with the number of a screen (01..05) - skipped')
+            print(f'{p.name}: the name must start with the number of a screen (01..{len(SCREENS):02d}) - skipped')
             continue
         name, key = hit
         if key in done:
@@ -225,6 +227,7 @@ def main():
     ap.add_argument('what', choices=['export', 'import'])
     ap.add_argument('--variant', default='aomr', help='export: which HD pictures to give as the reference')
     ap.add_argument('--model', default='sgi', help='import: the model that enlarges small pictures')
+    ap.add_argument('--only', nargs='*', default=[], help='import: only these screens (numbers, e.g. 06)')
     ap.add_argument('--tile', type=int, default=192)
     ap.add_argument('--overlap', type=int, default=16)
     args = ap.parse_args()

@@ -26,6 +26,7 @@ namespace {
         uint64_t key = 0;
         uint64_t inner = 0;       // InnerKeyOf, when needed (0: not computed)
         bool valid = false;
+        int8_t onBase = 0;        // (A): 0 not checked, 1 still mostly the last recognised screen, -1 not
     };
     Source g_src;
 
@@ -47,6 +48,12 @@ namespace {
     bool g_anyDirty = false;
     bool g_anyLayer = false;
     unsigned g_generation = 1;
+    // The HD canvas holds this picture over its whole box (filled once per picture; copies of the same
+    // picture only change which pixels show it - the original-pixel canvas). Changes of the HD canvas
+    // are uploaded on their own (16 MB at 2x - not for every frame of the credits).
+    const Picture* g_canvasPic = nullptr;
+    RECT g_hdDirty{};
+    bool g_anyHdDirty = false;
 
     // collector
     std::unordered_set<uint64_t> g_written;
@@ -279,6 +286,8 @@ namespace {
         g_dirty = RECT{ 0, 0, g_cw, g_ch };
         g_anyDirty = true;
         g_anyLayer = false;
+        g_canvasPic = nullptr;
+        g_anyHdDirty = false;
         ++g_generation;
     }
 
@@ -286,6 +295,39 @@ namespace {
     // what the canvases were made from: the source pixels of the shown part, and its key
     std::vector<uint16_t> g_srcCrop;
     uint64_t g_curKey = 0, g_curInner = 0;
+
+    // Pictures under something the game drew over them (2026-11-16, user: the question whether to quit
+    // showed the old 1x main menu, the credits' forest had no HD / remade version). The pixels a
+    // picture was recognised in ("base"): a copy whose own key is unknown shows the picture wherever
+    // it still has those pixels.
+    using Pixels = std::shared_ptr<const std::vector<uint16_t>>;
+    // (A) the last screen recognised in a copy to the screen - a dialog over a menu screen: the game
+    //     copies the screen, draws the parchment into it and copies that to the screen
+    std::shared_ptr<Picture> g_basePic;
+    Pixels g_baseCrop;
+    Pixels g_curBase;                    // the base the canvases were filled with (null: none)
+    // (B) surfaces that got a whole copy of a surface with a picture - the credits: the fixed forest is
+    //     copied into the surface the scrolling text is mixed into, every frame
+    struct CopyBase {
+        const uint8_t* dst = nullptr;
+        std::shared_ptr<Picture> pic;
+        Pixels crop;
+        unsigned use = 0;
+        DWORD time = 0;                  // GetTickCount of the copy: used only by the copy to the screen right after it
+    };
+    CopyBase g_copyBase[2];
+    unsigned g_copyUse = 0;
+
+    // the crop pixels of a surface of the screen's size
+    Pixels CropPixels(const Buf& src, const RECT& crop) {
+        auto v = std::make_shared<std::vector<uint16_t>>(static_cast<size_t>(crop.right - crop.left) * (crop.bottom - crop.top));
+        const int w = crop.right - crop.left;
+        for (int y = crop.top; y < crop.bottom; ++y) {
+            std::memcpy(v->data() + static_cast<size_t>(y - crop.top) * w,
+                        src.bits + static_cast<size_t>(y) * src.pitch + static_cast<size_t>(crop.left) * 2, static_cast<size_t>(w) * 2);
+        }
+        return v;
+    }
 
     // true: the variant changed (the canvases were emptied)
     bool CheckVariant() {
@@ -296,6 +338,9 @@ namespace {
             g_variantKey = want;
             g_variant = v ? v : "";
             g_pics.clear();
+            g_canvasPic = nullptr;              // the pictures are read again (other shared objects)
+            g_basePic.reset();
+            for (CopyBase& c : g_copyBase) c = CopyBase{};
             if (!g_orig.empty()) {
                 std::fill(g_orig.begin(), g_orig.end(), 0u);
                 g_dirty = RECT{ 0, 0, g_cw, g_ch };
@@ -442,30 +487,60 @@ namespace {
         }
     }
 
-    // canvases over crop pixels [l, r) x [t, b) from the source pixels kept in g_srcCrop
-    void FillCanvases(const std::shared_ptr<Picture>& pic, int l, int t, int r, int b) {
+    void AddHdDirty(int l, int t, int r, int b) {
+        if (!g_anyHdDirty) {
+            g_hdDirty = RECT{ l, t, r, b };
+            g_anyHdDirty = true;
+        } else {
+            g_hdDirty.left = (std::min)(g_hdDirty.left, static_cast<LONG>(l));
+            g_hdDirty.top = (std::min)(g_hdDirty.top, static_cast<LONG>(t));
+            g_hdDirty.right = (std::max)(g_hdDirty.right, static_cast<LONG>(r));
+            g_hdDirty.bottom = (std::max)(g_hdDirty.bottom, static_cast<LONG>(b));
+        }
+    }
+
+    // canvases over crop pixels [l, r) x [t, b) from the source pixels kept in g_srcCrop. `base` (crop
+    // pixels of the whole shown part, may be null): the picture shows only where the source still has
+    // the pixel the picture was recognised in - not where the game drew something over it.
+    void FillCanvases(const std::shared_ptr<Picture>& pic, int l, int t, int r, int b, const uint16_t* base = nullptr) {
         const bool usable = pic && pic->cropW == g_cw && pic->cropH == g_ch;
         if (usable) ++g_hdCopies;
+        if (usable && g_canvasPic != pic.get()) {
+            // a picture the HD canvas does not hold yet: its whole box, once
+            for (int py = 0; py < pic->h; ++py) {
+                const uint32_t* hp = pic->px.data() + static_cast<size_t>(py * 2) * (pic->w * 2);
+                uint32_t* hrow = g_hd.data() + static_cast<size_t>((pic->t + py) * 2) * (g_cw * 2) + static_cast<size_t>(pic->l * 2);
+                std::memcpy(hrow, hp, static_cast<size_t>(pic->w) * 2 * 4);
+                std::memcpy(hrow + g_cw * 2, hp + pic->w * 2, static_cast<size_t>(pic->w) * 2 * 4);
+            }
+            g_canvasPic = pic.get();
+            AddHdDirty(pic->l, pic->t, pic->l + pic->w, pic->t + pic->h);
+        }
+        // the original-pixel canvas: only the box of what changed goes to the presenter
+        int cl = g_cw, ct = g_ch, cr = -1, cb = -1;
         for (int cy = t; cy < b; ++cy) {
             const uint16_t* sp = g_srcCrop.data() + static_cast<size_t>(cy) * g_cw;
+            const uint16_t* bp = base ? base + static_cast<size_t>(cy) * g_cw : nullptr;
             uint32_t* orow = g_orig.data() + static_cast<size_t>(cy) * g_cw;
+            const int py = usable ? cy - pic->t : -1;
+            const bool rowIn = usable && py >= 0 && py < pic->h;
             for (int cx = l; cx < r; ++cx) {
-                const int px = cx - (usable ? pic->l : 0), py = cy - (usable ? pic->t : 0);
-                if (usable && px >= 0 && py >= 0 && px < pic->w && py < pic->h) {
-                    orow[cx] = 0x10000u | sp[cx];
-                    const uint32_t* hp = pic->px.data() + static_cast<size_t>(py * 2) * (pic->w * 2) + static_cast<size_t>(px * 2);
-                    uint32_t* hrow = g_hd.data() + static_cast<size_t>(cy * 2) * (g_cw * 2) + static_cast<size_t>(cx * 2);
-                    hrow[0] = hp[0];
-                    hrow[1] = hp[1];
-                    hrow[g_cw * 2] = hp[pic->w * 2];
-                    hrow[g_cw * 2 + 1] = hp[pic->w * 2 + 1];
-                    g_anyLayer = true;
-                } else {
-                    orow[cx] = 0;
+                uint32_t v = 0;
+                if (rowIn) {
+                    const int px = cx - pic->l;
+                    if (px >= 0 && px < pic->w && (!bp || bp[cx] == sp[cx])) v = 0x10000u | sp[cx];
+                }
+                if (orow[cx] != v) {
+                    orow[cx] = v;
+                    cl = (std::min)(cl, cx);
+                    cr = (std::max)(cr, cx + 1);
+                    ct = (std::min)(ct, cy);
+                    cb = (std::max)(cb, cy + 1);
                 }
             }
         }
-        AddDirty(l, t, r, b);
+        if (usable) g_anyLayer = true;
+        if (cr > cl) AddDirty(cl, ct, cr, cb);
     }
 }
 
@@ -508,25 +583,78 @@ void OnScreenCopy(const Buf& src, unsigned serial, unsigned gen, unsigned genWri
     ++g_copies;
     const bool variantChanged = CheckVariant();
 
+    const size_t cropPx = static_cast<size_t>(crop.right - crop.left) * (crop.bottom - crop.top);
+    // (B) first: the source got a whole copy of a surface with a picture just now (the credits' forest,
+    // every frame) - the picture where the source still has those pixels; no keys over the whole
+    // frame for every frame of the scrolling text
+    std::shared_ptr<Picture> pic;
+    Pixels base;
+    bool fromCopy = false;
+    if (!mission) {
+        const DWORD now = GetTickCount();
+        for (const CopyBase& c : g_copyBase) {
+            if (c.dst == src.bits && c.pic && c.crop && c.crop->size() == cropPx && now - c.time <= 50) {
+                pic = c.pic;
+                base = c.crop;
+                fromCopy = true;
+                break;
+            }
+        }
+    }
+
     // which picture: computed once per state of the source surface
-    if (!g_src.valid || g_src.serial != serial || g_src.gen != gen || g_src.genWrite != genWrite) {
+    if (!pic && (!g_src.valid || g_src.serial != serial || g_src.gen != gen || g_src.genWrite != genWrite)) {
         g_src.serial = serial;
         g_src.gen = gen;
         g_src.genWrite = genWrite;
         g_src.key = KeyOf(src, crop);
         g_src.inner = 0;
+        g_src.onBase = 0;
         g_src.valid = true;
         ++g_keys;
     }
-    std::shared_ptr<Picture> pic = Load(g_src.key);
     if (!pic) {
-        if (mission) {
-            // the level around the picture: by the picture alone (no work file - every visit differs)
+        pic = Load(g_src.key);
+        if (!pic) {
+            // the menu picture alone (in a mission: the level around it; no work file - every visit differs)
             if (!g_src.inner) g_src.inner = InnerKeyOf(src, crop);
             if (g_src.inner) pic = Load(g_src.inner);
-        } else {
-            WriteForTool(g_src.key, src, crop);
         }
+        if (pic) {
+            if (!mission && (pic != g_basePic || g_src.onBase == 0)) {
+                // recognised: the pixels it was recognised in, for what may be drawn over it later (A)
+                g_basePic = pic;
+                g_baseCrop = CropPixels(src, crop);
+                g_src.onBase = 1;
+            }
+        } else if (!mission && g_basePic && g_baseCrop && g_baseCrop->size() == cropPx) {
+            // (A) the last recognised screen with something drawn over it (a dialog): when most of the
+            // picture's pixels are still there. Black proves nothing (most menus have black around their
+            // picture): only the other pixels count.
+            if (g_src.onBase == 0) {
+                const Picture& bp = *g_basePic;
+                const int cw = crop.right - crop.left;
+                size_t in = 0, same = 0;
+                for (int y = bp.t; y < bp.t + bp.h; y += 2) {
+                    const auto* row = reinterpret_cast<const uint16_t*>(src.bits + static_cast<size_t>(crop.top + y) * src.pitch) + crop.left;
+                    const uint16_t* was = g_baseCrop->data() + static_cast<size_t>(y) * cw;
+                    for (int x = bp.l; x < bp.l + bp.w; x += 2) {
+                        if (was[x] == 0) continue;
+                        ++in;
+                        same += row[x] == was[x] ? 1u : 0u;
+                    }
+                }
+                g_src.onBase = (in > 0 && same * 2 >= in) ? 1 : -1;
+                Logger::Info("HD menu: a screen without a picture of its own - %.0f %% still the last menu picture%s.",
+                             in ? 100.0 * static_cast<double>(same) / static_cast<double>(in) : 0.0,
+                             g_src.onBase > 0 ? " (shown in HD around what was drawn over it)" : "");
+            }
+            if (g_src.onBase > 0) {
+                pic = g_basePic;
+                base = g_baseCrop;
+            }
+        }
+        if (!pic) WriteForTool(g_src.key, src, crop);
     }
 
     // the canvases follow the copy (crop pixels)
@@ -539,17 +667,78 @@ void OnScreenCopy(const Buf& src, unsigned serial, unsigned gen, unsigned genWri
     const int r = (std::min)(static_cast<int>(crop.right), dx + static_cast<int>(s.right - s.left));
     const int b = (std::min)(static_cast<int>(crop.bottom), dy + static_cast<int>(s.bottom - s.top));
     if (r <= l || b <= t) return;
-    g_curKey = g_src.key;
-    g_curInner = g_src.inner;
+    g_curKey = fromCopy ? 0 : g_src.key;        // (B): no key of this source was computed
+    g_curInner = fromCopy ? 0 : g_src.inner;
     if (g_srcCrop.size() != static_cast<size_t>(g_cw) * g_ch) g_srcCrop.assign(static_cast<size_t>(g_cw) * g_ch, 0);
+    // The same picture with the same base as the last copy: only the pixels that changed since then
+    // (the credits: the column of text) - the rest of the canvases is right already.
+    static const Picture* lastPic = nullptr;
+    static const void* lastBase = nullptr;
+    const bool same = !variantChanged && pic.get() == lastPic && base.get() == lastBase && pic;
+    lastPic = pic.get();
+    lastBase = base.get();
+    int bl = r, bt = b, br = -1, bb = -1;
     for (int y = t; y < b; ++y) {
         const int sy = static_cast<int>(s.top) + (y - dy);
         const auto* sp = reinterpret_cast<const uint16_t*>(src.bits + static_cast<size_t>(sy) * src.pitch) + (static_cast<int>(s.left) - dx);
-        std::memcpy(g_srcCrop.data() + static_cast<size_t>(y - crop.top) * g_cw + (l - crop.left), sp + l,
-                    static_cast<size_t>(r - l) * 2);
+        uint16_t* row = g_srcCrop.data() + static_cast<size_t>(y - crop.top) * g_cw + (l - crop.left);
+        const uint16_t* in = sp + l;
+        const int n = r - l;
+        if (same) {
+            int a = 0;
+            while (a < n && row[a] == in[a]) ++a;
+            if (a < n) {
+                int z = n - 1;
+                while (z > a && row[z] == in[z]) --z;
+                bl = (std::min)(bl, l + a);
+                br = (std::max)(br, l + z + 1);
+                bt = (std::min)(bt, y);
+                bb = (std::max)(bb, y + 1);
+            }
+        }
+        std::memcpy(row, in, static_cast<size_t>(n) * 2);
     }
-    if (variantChanged) FillCanvases(pic, 0, 0, g_cw, g_ch);       // the emptied canvases again, all of them
-    else FillCanvases(pic, l - crop.left, t - crop.top, r - crop.left, b - crop.top);
+    g_curBase = base;
+    const uint16_t* bp = base ? base->data() : nullptr;
+    if (variantChanged) FillCanvases(pic, 0, 0, g_cw, g_ch, bp);    // the emptied canvases again, all of them
+    else if (!same) FillCanvases(pic, l - crop.left, t - crop.top, r - crop.left, b - crop.top, bp);
+    else if (br > bl) FillCanvases(pic, bl - crop.left, bt - crop.top, br - crop.left, bb - crop.top, bp);
+}
+
+void OnSurfaceCopy(const Buf& dst, const Buf& src, unsigned serial, unsigned gen, unsigned genWrite) {
+    if (!SherwoodConfig::Get().hdMenu || !UiScale::MenuZoomOn()) return;
+    if (*reinterpret_cast<void* const*>(0x006C0FA8) != nullptr) return;     // menus outside missions only
+    RECT crop{};
+    if (!UiScale::MenuCropRect(src.w, src.h, crop)) return;
+    CheckVariant();
+    // the source's picture, once per state of the source (the credits copy the same forest every frame)
+    static Source s;
+    static std::shared_ptr<Picture> pic;
+    static Pixels pixels;
+    if (!s.valid || s.serial != serial || s.gen != gen || s.genWrite != genWrite) {
+        s.serial = serial;
+        s.gen = gen;
+        s.genWrite = genWrite;
+        s.valid = true;
+        pic = Load(KeyOf(src, crop));
+        if (!pic) {
+            const uint64_t inner = InnerKeyOf(src, crop);
+            if (inner) pic = Load(inner);
+        }
+        pixels = pic ? CropPixels(src, crop) : nullptr;
+    }
+    CopyBase* slot = nullptr;
+    for (CopyBase& c : g_copyBase) if (c.dst == dst.bits) slot = &c;
+    if (!pic) {
+        if (slot) *slot = CopyBase{};           // overwritten with something else
+        return;
+    }
+    if (!slot) slot = g_copyBase[0].use <= g_copyBase[1].use ? &g_copyBase[0] : &g_copyBase[1];
+    slot->dst = dst.bits;
+    slot->pic = pic;
+    slot->crop = pixels;
+    slot->use = ++g_copyUse;
+    slot->time = GetTickCount();
 }
 
 bool GetLayer(const RECT& crop, Layer& out) {
@@ -557,7 +746,7 @@ bool GetLayer(const RECT& crop, Layer& out) {
     if (CheckVariant() && !g_srcCrop.empty() && g_srcCrop.size() == g_orig.size()) {
         std::shared_ptr<Picture> pic = Load(g_curKey);
         if (!pic && g_curInner) pic = Load(g_curInner);
-        FillCanvases(pic, 0, 0, g_cw, g_ch);
+        FillCanvases(pic, 0, 0, g_cw, g_ch, g_curBase && pic ? g_curBase->data() : nullptr);
     }
     if (!SherwoodConfig::Get().hdMenu || g_orig.empty() || !g_anyLayer) return false;
     if (crop.left != g_crop.left || crop.top != g_crop.top || crop.right != g_crop.right || crop.bottom != g_crop.bottom) return false;
@@ -566,8 +755,10 @@ bool GetLayer(const RECT& crop, Layer& out) {
     out.w = g_cw;
     out.h = g_ch;
     out.dirty = g_anyDirty ? g_dirty : RECT{ 0, 0, 0, 0 };
+    out.hdDirty = g_anyHdDirty ? g_hdDirty : RECT{ 0, 0, 0, 0 };
     out.generation = g_generation;
     g_anyDirty = false;
+    g_anyHdDirty = false;
     return true;
 }
 

@@ -53,6 +53,11 @@ foreach ($d in @(Get-ChildItem (Join-Path $root 'hd\menu') -Directory -ErrorActi
     $adir = Join-Path $pkg ("hd\menu\" + $d.Name)
     New-Item -ItemType Directory -Force $adir | Out-Null
     $al | Copy-Item -Destination $adir
+    # menu backgrounds made after HD pack 1 (1.1.8: the credits' forest, ~4 MB packed per variant)
+    foreach ($key in @('2ef7a848bc09b885')) {
+        $m = Join-Path $d.FullName "$key.mhd"
+        if (Test-Path $m) { Copy-Item $m $adir }
+    }
 }
 if (Test-Path $zip) { Remove-Item -Force $zip }
 # entries named with forward slashes, as the ZIP format wants (Compress-Archive and ZipFile of Windows

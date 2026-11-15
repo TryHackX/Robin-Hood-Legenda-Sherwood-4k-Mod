@@ -432,14 +432,21 @@ namespace {
             g_ctx->UpdateSubresource(g_layerOrig, 0, nullptr, layer.orig, static_cast<UINT>(w * 4), 0);
             g_ctx->UpdateSubresource(g_layerHd, 0, nullptr, layer.hd, static_cast<UINT>(w * 2 * 4), 0);
             g_layerGen = layer.generation;
-        } else if (layer.dirty.right > layer.dirty.left && layer.dirty.bottom > layer.dirty.top) {
-            const RECT& d = layer.dirty;
-            const D3D11_BOX box1{ static_cast<UINT>(d.left), static_cast<UINT>(d.top), 0, static_cast<UINT>(d.right), static_cast<UINT>(d.bottom), 1 };
-            g_ctx->UpdateSubresource(g_layerOrig, 0, &box1, layer.orig + static_cast<size_t>(d.top) * w + d.left, static_cast<UINT>(w * 4), 0);
-            const D3D11_BOX box2{ static_cast<UINT>(d.left * 2), static_cast<UINT>(d.top * 2), 0,
-                                  static_cast<UINT>(d.right * 2), static_cast<UINT>(d.bottom * 2), 1 };
-            g_ctx->UpdateSubresource(g_layerHd, 0, &box2, layer.hd + static_cast<size_t>(d.top * 2) * (w * 2) + d.left * 2,
-                                     static_cast<UINT>(w * 2 * 4), 0);
+        } else {
+            // the two canvases change apart: a copy of the same picture only moves where it shows (the
+            // credits every frame), the HD picture itself is uploaded when another one comes
+            if (layer.dirty.right > layer.dirty.left && layer.dirty.bottom > layer.dirty.top) {
+                const RECT& d = layer.dirty;
+                const D3D11_BOX box1{ static_cast<UINT>(d.left), static_cast<UINT>(d.top), 0, static_cast<UINT>(d.right), static_cast<UINT>(d.bottom), 1 };
+                g_ctx->UpdateSubresource(g_layerOrig, 0, &box1, layer.orig + static_cast<size_t>(d.top) * w + d.left, static_cast<UINT>(w * 4), 0);
+            }
+            if (layer.hdDirty.right > layer.hdDirty.left && layer.hdDirty.bottom > layer.hdDirty.top) {
+                const RECT& d = layer.hdDirty;
+                const D3D11_BOX box2{ static_cast<UINT>(d.left * 2), static_cast<UINT>(d.top * 2), 0,
+                                      static_cast<UINT>(d.right * 2), static_cast<UINT>(d.bottom * 2), 1 };
+                g_ctx->UpdateSubresource(g_layerHd, 0, &box2, layer.hd + static_cast<size_t>(d.top * 2) * (w * 2) + d.left * 2,
+                                         static_cast<UINT>(w * 2 * 4), 0);
+            }
         }
         return true;
     }

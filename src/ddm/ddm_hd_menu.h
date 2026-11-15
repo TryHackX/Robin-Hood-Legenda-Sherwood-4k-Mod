@@ -16,12 +16,16 @@ namespace DDM::HD::Menu {
     // DoBlt, main thread: a 1:1 copy into the screen from a surface of the screen's size.
     // `s` = source rectangle (inside src), (dx, dy) = where it lands on the screen.
     void OnScreenCopy(const Buf& src, unsigned serial, unsigned gen, unsigned genWrite, const RECT& s, int dx, int dy);
+    // DoBlt, main thread: a whole 1:1 copy between two surfaces of the screen's size, neither of them
+    // the screen (the credits copy their fixed forest into the surface the scrolling text goes into).
+    void OnSurfaceCopy(const Buf& dst, const Buf& src, unsigned serial, unsigned gen, unsigned genWrite);
 
     struct Layer {
         const uint32_t* orig = nullptr;   // w x h: 0 = no HD picture, else 0x10000 | original RGB565
         const uint32_t* hd = nullptr;     // 2w x 2h, BGRA
         int w = 0, h = 0;                 // the shown part of the frame (crop)
-        RECT dirty{};                     // changed since the last call (crop pixels); empty = nothing
+        RECT dirty{};                     // `orig` changed since the last call (crop pixels); empty = nothing
+        RECT hdDirty{};                   // `hd` changed since the last call (crop pixels); empty = nothing
         unsigned generation = 0;          // changes when everything has to be uploaded again
     };
     // Presenter, main thread: the layer for the part `crop` of the frame; false = none.

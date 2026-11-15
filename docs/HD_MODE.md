@@ -624,9 +624,23 @@ Zbieranie: `tools\collect_menus.ps1` (przechodzi ekrany menu ukrytej gry). Polec
   `hd\work\menu_frames` (2 MB, ~40/s, 1 GB) i ekran szedł 38 kl./s. Teraz: trzeci nowy obraz w ciągu sekundy wstrzymuje
   zapis (animacja, nie tło), limit 64 plików na sesję; puste wpisy pamięci obrazów usuwane najpierw (inaczej obraz menu
   głównego czytany od nowa po napisach). Tło twórców do remake'u: `menu_remake.py` ekran `06_tworcy` (klucz pierwszej
-  klatki bez napisów `2ef7a848bc09b885`; HD w `hd\work\menu_hd_czeka\` — w grze pasowałoby tylko do tej jednej klatki,
-  potrzebne rozpoznanie tła po kopii stałej powierzchni). ☐ Tło pod pytaniem „wyjść z gry?” to obraz menu głównego 1×
-  zabarwiony przez grę — do zrobienia: zabarwiony obraz HD/remake pod oknem.
+  klatki bez napisów `2ef7a848bc09b885`).
+- **Obraz pod tym, co gra na nim narysowała** (2026-11-16, v1.1.8; „czekam aż dasz mi tło na wyjściu”). Pytanie
+  „wyjść z gry?”: ślad rysowania — gra NIE barwi tła (żółtawy wygląd to stary obraz 1×): kopiuje powierzchnię składania
+  menu na bok, kopiuje do niej ekran (z kursorem i wciśniętym przyciskiem), dorysowuje pergamin 400×200 i oddaje całość
+  na ekran — nowy klucz, bez obrazu → 1×. Teraz dwie drogi w `OnScreenCopy` (poza misją):
+  (A) ostatni rozpoznany ekran („baza”: jego piksele 1×, `g_baseCrop`) — kopia bez własnego obrazu, w której ≥ 50 %
+  NIECZARNYCH pikseli bazy jest dalej na miejscu (czarne nic nie dowodzą — prawie każde menu ma czarne pasy), pokazuje
+  obraz bazy tam, gdzie piksel = baza (pytanie o wyjście: 77–90 %);
+  (B) `OnSurfaceCopy` (DoBlt: cała kopia między dwiema powierzchniami wielkości ekranu, żadna nie jest ekranem) —
+  twórcy kopiują co klatkę stały las do powierzchni, w którą gra miesza pasek napisów 400×10500; las rozpoznany po
+  kluczu (raz na stan źródła), zapamiętany dla celu na 50 ms → kopia celu na ekran bierze obraz od razu, bez kluczy
+  całej klatki. `FillCanvases(…, base)`: oryginał tylko tam, gdzie źródło = baza; płótno HD wypełniane raz na obraz
+  (`g_canvasPic`), osobny prostokąt zmian HD (`Layer::hdDirty`) — co klatkę idzie do karty tylko kolumna napisów
+  (płótno oryginałów, prostokąt zmienionych pikseli). Twórcy: 70–90 kl./s (było 40–50). Klucz wnętrza szukany teraz
+  także poza misją. Sprawdzone w tle: pytanie o wyjście na tle remake'u menu głównego, twórcy na remake'u lasu od
+  użytkownika (2752×1536 z Gemini, `hd\remake\gotowe\06_tworcy.jpg` → `menu_remake.py import --only 06`), opcje,
+  wczytywanie, menu Esc i opcje z misji bez zmian. Wersje HD lasu (4 warianty) idą w archiwum moda.
 - **Wejście w Opcje** (2026-11-15, „przez chwilę się przycina”): ślad rysowania — 1069 ms bez klatki; próbki stosu
   (`tools\stack_sample.ps1`: polecenie testowe + migawki wątków co 50 ms) — pętla `timeGetTime` w `0x0060F250`: konstruktor
   obiektu informacji o procesorze (`0x0060F2B0`, wołany przy starcie gry i przy KAŻDYM otwarciu opcji) mierzy taktowanie

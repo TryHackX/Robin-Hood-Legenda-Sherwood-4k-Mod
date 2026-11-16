@@ -1,6 +1,8 @@
 #include <windows.h>
 #include <string>
 #include <algorithm>
+#include <cstring>
+#include <iterator>
 #include <MinHook.h>
 
 #include "proxy_winmm.h"
@@ -159,6 +161,69 @@ namespace {
     using PFN_EntryPoint = void(__cdecl*)();
     PFN_EntryPoint g_origEntryPoint = nullptr;
 
+    // ---- which Game.exe (2026-11-16: a player followed the instructions and "nothing worked") ----------
+    // The patches are made for the code of the GOG edition's Game.exe (file of 2 899 968 bytes, PE time stamp
+    // 3E257C94, image at 0x00400000): fixed addresses, checked prologues. Another edition, or a file changed by
+    // another tool, would get some of them and not others. So first: are the routines the mod changes the
+    // ones it knows? If not, the mod stays off (the game runs as without it) and says so once at the start.
+    struct Signature { uintptr_t addr; uint8_t bytes[10]; };
+    const Signature kSignatures[] = {
+        { 0x0060F250, { 0x53, 0x56, 0x57, 0x8B, 0x3D, 0xC8, 0x72, 0x67, 0x00, 0xFF } },   // CPU clock measurement
+        { 0x005ECBD0, { 0x6A, 0xFF, 0x68, 0x78, 0x29, 0x67, 0x00, 0x64, 0xA1, 0x00 } },   // DrawLine
+        { 0x0053B330, { 0x6A, 0xFF, 0x68, 0x38, 0x6C, 0x66, 0x00, 0x64, 0xA1, 0x00 } },   // dialog backdrop colouring
+        { 0x004D0400, { 0x64, 0xA1, 0x00, 0x00, 0x00, 0x00, 0x6A, 0xFF, 0x68, 0x20 } },   // RHEngine::DrawSelection
+        { 0x005BBA00, { 0x6A, 0xFF, 0x68, 0x7B, 0xF5, 0x66, 0x00, 0x64, 0xA1, 0x00 } },   // sprite: decode frame
+        { 0x004C1AB0, { 0x53, 0x56, 0x8B, 0x74, 0x24, 0x0C, 0x57, 0x6A, 0x04, 0x68 } },   // level header
+        { 0x004DEE70, { 0xD9, 0x05, 0x9C, 0x74, 0x67, 0x00, 0xD8, 0xB1, 0x5C, 0x47 } },   // ScreenToWorld
+        { 0x0060F8F0, { 0x83, 0xEC, 0x20, 0x8D, 0x44, 0x24, 0x00, 0x50, 0xFF, 0x15 } },   // memory size
+        { 0x005F1CA0, { 0x64, 0xA1, 0x00, 0x00, 0x00, 0x00, 0x6A, 0xFF, 0x68, 0x20 } },   // cursor drawing
+        { 0x0053C390, { 0x83, 0xEC, 0x10, 0x53, 0x55, 0x56, 0x8B, 0xF1, 0x57, 0x8B } },   // dialog loop
+        { 0x00622EB4, { 0x55, 0x89, 0xE5, 0x60, 0x8B, 0x55, 0x18, 0x8B, 0x4D, 0x14 } },   // text drawing
+    };
+    bool g_modOff = false;           // this Game.exe is not the one the mod is made for
+
+    bool GameExeSupported(char* why, size_t whySize) {
+        const auto* base = reinterpret_cast<const uint8_t*>(GetModuleHandleA(nullptr));
+        const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
+        const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(base + dos->e_lfanew);
+        const uint32_t stamp = nt->FileHeader.TimeDateStamp, image = nt->OptionalHeader.SizeOfImage;
+        char path[MAX_PATH]{};
+        GetModuleFileNameA(nullptr, path, MAX_PATH);
+        WIN32_FILE_ATTRIBUTE_DATA fa{};
+        const unsigned long long fileSize = GetFileAttributesExA(path, GetFileExInfoStandard, &fa)
+            ? (static_cast<unsigned long long>(fa.nFileSizeHigh) << 32) | fa.nFileSizeLow : 0ull;
+        if (reinterpret_cast<uintptr_t>(base) != 0x00400000 || image < 0x002C7000) {
+            std::snprintf(why, whySize, "file %llu bytes, time stamp %08X, image %08X at %p - another program",
+                          fileSize, stamp, image, static_cast<const void*>(base));
+            return false;
+        }
+        int bad = 0;
+        uintptr_t firstBad = 0;
+        for (const Signature& s : kSignatures) {
+            if (std::memcmp(reinterpret_cast<const void*>(s.addr), s.bytes, sizeof(s.bytes)) != 0) {
+                if (!bad) firstBad = s.addr;
+                ++bad;
+            }
+        }
+        std::snprintf(why, whySize, "file %llu bytes, time stamp %08X, %d of %zu known routines differ%s%08X",
+                      fileSize, stamp, bad, std::size(kSignatures), bad ? ", first at 0x" : "", static_cast<unsigned>(firstBad));
+        if (!bad) std::snprintf(why, whySize, "file %llu bytes, time stamp %08X", fileSize, stamp);
+        return bad == 0;
+    }
+
+    // Entry point of a Game.exe the mod is not made for: tell the player once, then the game as it is.
+    void __cdecl Hook_EntryPointUnsupported() {
+        MessageBoxW(nullptr,
+            L"SherwoodEngineFix: ten plik Game.exe nie jest wersją GOG gry albo został zmieniony.\n"
+            L"Mod działa tylko z wersją GOG - zostaje wyłączony, gra uruchomi się bez niego.\n"
+            L"Szczegóły: SherwoodFix.log w folderze gry. Usunięcie moda: skasuj winmm.dll.\n\n"
+            L"This Game.exe is not the GOG edition of the game, or it was modified.\n"
+            L"The mod only works with the GOG edition - it stays off and the game starts without it.\n"
+            L"Details: SherwoodFix.log in the game folder. To remove the mod, delete winmm.dll.",
+            L"SherwoodEngineFix", MB_OK | MB_ICONWARNING | MB_TOPMOST | MB_SETFOREGROUND);
+        g_origEntryPoint();
+    }
+
     // Runs on the main thread after every statically linked DLL has been initialised.
     void __cdecl Hook_EntryPoint() {
         if (!Watchdog::EndLeftoverInstances()) {
@@ -201,6 +266,25 @@ namespace {
 
         Logger::Init(exeDir + "SherwoodFix.log", cfg.enableLogging);
         Logger::Info("Attached to Game.exe (Base: 0x%08X)", reinterpret_cast<uintptr_t>(GetModuleHandleA(nullptr)));
+        {
+            char why[200]{};
+            if (!GameExeSupported(why, sizeof(why))) {
+                g_modOff = true;
+                Logger::Error("Game.exe is not the GOG edition this mod is made for (%s). The mod stays OFF - the game "
+                              "runs as without it (GOG: 2899968 bytes, time stamp 3E257C94).", why);
+                if (MH_Initialize() == MH_OK) {
+                    auto* base = reinterpret_cast<uint8_t*>(GetModuleHandleA(nullptr));
+                    auto* nt = reinterpret_cast<PIMAGE_NT_HEADERS>(base + reinterpret_cast<PIMAGE_DOS_HEADER>(base)->e_lfanew);
+                    void* entry = base + nt->OptionalHeader.AddressOfEntryPoint;
+                    if (MH_CreateHook(entry, reinterpret_cast<LPVOID>(&Hook_EntryPointUnsupported),
+                                      reinterpret_cast<LPVOID*>(&g_origEntryPoint)) == MH_OK) {
+                        MH_EnableHook(entry);
+                    }
+                }
+                return;
+            }
+            Logger::Info("Game.exe: the GOG edition (%s).", why);
+        }
         Logger::Info("Config loaded: Target Resolution=%dx%d, Borderless=%d, MaxFPS=%d",
                      cfg.width, cfg.height, cfg.windowedBorderless ? 1 : 0, cfg.maxFPS);
         if (iniOverride[0]) {
@@ -273,6 +357,12 @@ namespace {
     }
 
     void ShutdownSherwoodEngineFix(bool processTerminating) {
+        if (g_isGameProcess && g_modOff) {          // nothing of the mod was started
+            Logger::Info("SherwoodEngineFix: process exit (mod was off).");
+            Logger::Shutdown();
+            if (!processTerminating) ShutdownWinMMProxy();
+            return;
+        }
         if (g_isGameProcess && processTerminating) {
             // Every other thread has already been killed wherever it stood, possibly inside a
             // lock. Removing hooks (MinHook walks and suspends threads) or tearing modules down

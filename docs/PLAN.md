@@ -286,6 +286,14 @@ Do sprawdzenia przy okazji: czy miganie ikon akcji ma teraz właściwe tempo; po
      wierzchu, zostaje z obrazem HD/remake tego menu (pytanie o wyjście — tło menu głównego z remake'u; nowy obraz
      niepotrzebny); twórcy rozpoznawani po stałej powierzchni lasu (remake lasu od użytkownika); twórcy 70–90 kl./s.
      Opis: `docs\HD_MODE.md` §7 (tła menu).
+   - ✔ **v1.1.9 — porządki i pewna instalacja** (2026-11-16; youtuber zgłosił, że „zrobił wszystko wg instrukcji i nie
+     działa”): CRT wbudowany (`/MT`; wcześniej `winmm.dll` wymagał MSVCP140/VCRUNTIME140 x86 — bez pakietu VC++ gra
+     w ogóle nie startowała), sprawdzenie wydania na starcie (11 wzorców procedur GOG `Game.exe` 2 899 968 B, znacznik
+     3E257C94; inne → komunikat PL/EN, mod wyłączony, log), brakujący `SherwoodFix.ini` zapisywany z INI wydania
+     osadzonego w DLL (`src\winmm.rc`; wcześniej 1920×1080 = tryb HD wyłączony), domyślne wartości w `config.h` jak w
+     INI wydania. README: pułapka „Wyodrębnij wszystkie” (dopisuje nazwę archiwum do ścieżki), rozdzielczość (stara rada
+     „1920×1080 na monitorze 1080p” wyłączała HD — obraz i tak jest skalowany), przycisk 1920*1080 w opcjach gry, sekcja
+     „If it does not work”. GitHub: zostają tylko najnowsze — v1.1.9 (mod), `hd-pack-1`, `menu-remake-2` (6 teł).
    - ✔ **Wydanie na GitHubie** (2026-11-14): v1.0.0 (README po angielsku), paczki grafiki HD jako osobne wydanie
      (7 plików ZIP < 2 GB; magazyn postaci w dwóch częściach — mod czyta `sprites.dat` + `sprites.dat.2`).
 5. ◐ Klatki pośrednie animacji postaci (prośba użytkownika; „jak się nie uda, trudno"): eksperyment zakończony

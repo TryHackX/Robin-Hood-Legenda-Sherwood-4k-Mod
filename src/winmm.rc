@@ -1,0 +1,4 @@
+// Resources of winmm.dll (SherwoodEngineFix).
+// 101: the settings file of the release, written as SherwoodFix.ini when the game folder has none (config.cpp) -
+//      the same defaults as the archive's file (HD mode 2560x1440 ...), not a short list of its own.
+101 RCDATA "../release/SherwoodFix.ini"

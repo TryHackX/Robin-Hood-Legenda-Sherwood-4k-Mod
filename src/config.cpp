@@ -8,6 +8,27 @@ namespace {
         DWORD attr = GetFileAttributesA(path.c_str());
         if (attr != INVALID_FILE_ATTRIBUTES) return;
 
+        // The release's own SherwoodFix.ini, built into the DLL (winmm.rc, resource 101): a player who unpacked
+        // only winmm.dll gets the same settings as from the archive - before 2026-11-16 a short file of its own
+        // with Width=1920 was written here, which left the HD mode off.
+        HMODULE self = nullptr;
+        if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                               reinterpret_cast<LPCSTR>(&WriteDefaultIniIfMissing), &self)) {
+            if (HRSRC res = FindResourceA(self, MAKEINTRESOURCEA(101), MAKEINTRESOURCEA(10) /* RT_RCDATA */)) {
+                const DWORD size = SizeofResource(self, res);
+                HGLOBAL h = LoadResource(self, res);
+                const void* data = h ? LockResource(h) : nullptr;
+                if (data && size > 0) {
+                    FILE* rf = nullptr;
+                    if (fopen_s(&rf, path.c_str(), "wb") == 0 && rf) {
+                        std::fwrite(data, 1, size, rf);
+                        std::fclose(rf);
+                        return;
+                    }
+                }
+            }
+        }
+
         FILE* f = nullptr;
         fopen_s(&f, path.c_str(), "w");
         if (!f) return;
@@ -18,9 +39,9 @@ namespace {
             "; Robin Hood: The Legend of Sherwood (2002) Windows 11 Patch\n"
             "; ============================================================\n\n"
             "[Display]\n"
-            "; Custom resolution replacing the in-game 1024x768 mode\n"
-            "Width=1920\n"
-            "Height=1080\n"
+            "; Internal resolution (HD mode needs a width of 2048 or more; the picture is scaled to the monitor)\n"
+            "Width=2560\n"
+            "Height=1440\n"
             "Replace1024x768=1\n"
             "WindowedBorderless=1\n"
             "VSync=0\n"

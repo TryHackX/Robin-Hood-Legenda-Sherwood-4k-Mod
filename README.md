@@ -60,23 +60,35 @@ original DirectDraw wrapper, plus optional HD graphics prepared with AI models f
 
 ## Requirements
 
-- Robin Hood: The Legend of Sherwood from **GOG** (the mod recognises the code of that `Game.exe`; other editions are
-  not supported — the patches are then not applied, and the log says so).
-- Windows 10 or 11, a graphics card with Direct3D 11.
+- Robin Hood: The Legend of Sherwood from **GOG** (installed with GOG Galaxy or with the installer from gog.com). The
+  mod is made for the code of exactly that `Game.exe` (2 899 968 bytes). **Other editions (Steam, CD / DVD releases)
+  and changed `Game.exe` files (cracks, other patches) are not supported**: the mod then shows a message at start,
+  stays off and the game runs as without it.
+- Windows 10 or 11, a graphics card with Direct3D 11. Nothing else to install (since 1.1.9 the mod needs no Visual C++
+  redistributable).
 
 ## Installation — the complete HD version, step by step
 
-You need two releases from the **Releases** page (right side of the repository page):
-[**SherwoodEngineFix 1.1.8**](https://github.com/TryHackX/Robin-Hood-Legenda-Sherwood-4k-Mod/releases/tag/v1.1.8)
-(the mod itself, a few MB) and
-[**HD graphics pack 1**](https://github.com/TryHackX/Robin-Hood-Legenda-Sherwood-4k-Mod/releases/tag/hd-pack-1)
-(the HD pictures, 7 archives). Download the files listed under **Assets** — not "Source code (zip)" / "Source code
-(tar.gz)": GitHub adds those two to every release by itself, they hold only the source code (~0.4 MB) and are not
-needed to play.
+You need three things from the **Releases** page (right side of the repository page). Download the files listed
+under **Assets** — not "Source code (zip)" / "Source code (tar.gz)": GitHub adds those two to every release by
+itself, they hold only the source code and are not needed to play.
+- [**the mod — newest version**](https://github.com/TryHackX/Robin-Hood-Legenda-Sherwood-4k-Mod/releases/latest):
+  `SherwoodEngineFix-v….zip` (about 21 MB),
+- [**HD graphics pack 1**](https://github.com/TryHackX/Robin-Hood-Legenda-Sherwood-4k-Mod/releases/tag/hd-pack-1):
+  the HD pictures (7 archives, 3 of them required),
+- optional: [**remade menu backgrounds 2**](https://github.com/TryHackX/Robin-Hood-Legenda-Sherwood-4k-Mod/releases/tag/menu-remake-2)
+  (`SherwoodEngineFix-menu-remake-2.zip`, 54 MB).
 
 **Step 1 — find the game folder.** The folder with `Game.exe`, by default
 `C:\Program Files (x86)\GOG Galaxy\Games\Robin Hood - The Legend of Sherwood`
 (in GOG Galaxy: the game → ⚙ → Manage installation → Show folder).
+
+**How to unpack into the game folder (all steps below).** Right-click the archive → *Extract All…* → *Browse…* →
+choose the game folder → *Extract*. **Careful: Windows adds the archive's name to the path** (for example
+`…\Robin Hood - The Legend of Sherwood\SherwoodHD-1-postacie-a`) — delete that last part, so that the path ends
+with the game folder itself. The archives already contain the folder `hd` and the files of the mod; they must land
+**right next to `Game.exe`**, not in a folder of their own. 7-Zip ("Extract here") or WinRAR work too. If Windows asks
+whether to replace files, answer yes.
 
 **Step 2 — the HD pictures.** Download these archives from *HD graphics pack 1*:
 
@@ -92,39 +104,54 @@ needed to play.
 
 Required only: 2.9 GB to download, 5.1 GB on disk. Everything: 6.4 GB to download, 11.6 GB on disk.
 
-Unpack **each** archive **into the game folder** — in Windows: right-click the archive → *Extract All…* → choose the
-game folder → *Extract* (7-Zip / WinRAR work too). The archives contain the `hd` folder, so afterwards the game folder
-holds `hd\maps\…`, `hd\sprites\…` and `hd\menu\…`. Check: `hd\sprites\_common\` must contain `sprites.idx`,
-`sprites.dat` **and** `sprites.dat.2` (from the two character archives). If Windows asks to replace files, answer yes.
-The downloaded `.zip` files can be deleted afterwards.
+Unpack **each** archive into the game folder (see above). Afterwards the game folder holds `hd\maps\…`,
+`hd\sprites\…` and `hd\menu\…`. Check: `hd\sprites\_common\` must contain `sprites.idx`, `sprites.dat` **and**
+`sprites.dat.2` (from the two character archives). The downloaded `.zip` files can be deleted afterwards.
 
-**Step 3 — the mod (after the HD pictures).** Unpack `SherwoodEngineFix-v1.1.8.zip` into the game folder (next to
-`Game.exe`) — **after** the HD archives: it carries the newest of the small HD files, which replace older ones from the
-pack: `winmm.dll`, `SherwoodFix.ini`, the HD fonts `hd\fonts\*.hdfont`, the HD pictures of menus and dialogs
-`hd\menu_parts\*.hdp`, the run-time icons `hd\sprites\_icons\` (newer than the pack's), small `hd\menu\<variant>\*.alias`
-files (the HD menu backgrounds found in menus opened during a mission) and the HD background of the credits
-`hd\menu\<variant>\2ef7a848bc09b885.mhd` (newer than the pack), the quality lists of the in-between frames
-`hd\sprites\_between\between.q` / `between.v1.q` (the mod takes the one that belongs to the installed frames) and the
-animation steps' lengths `hd\sprites\_between\between.t` (how long each in-between frame stays).
+**Step 3 — the mod (after the HD pictures).** Unpack `SherwoodEngineFix-v….zip` (the newest release) into the game
+folder — **after** the HD archives: it carries newer versions of some small HD files of the pack. Afterwards
+`winmm.dll` and `SherwoodFix.ini` lie **right next to `Game.exe`**. (The archive holds: `winmm.dll`, `SherwoodFix.ini`,
+`README.md`, the HD fonts `hd\fonts\`, HD pictures of menus and dialogs `hd\menu_parts\`, run-time icons
+`hd\sprites\_icons\`, small files and the credits' background in `hd\menu\<variant>\`, and the lists of the in-between
+frames `hd\sprites\_between\between.q`, `between.v1.q`, `between.t`.) Updating from an older version: unpack the new
+archive over it; keep your `SherwoodFix.ini` if you changed settings (answer "skip" for that one file).
 
-**Step 4 (optional) — new menu backgrounds.** `SherwoodEngineFix-menu-remake-2.zip` (54 MB, in the
-[1.1.8 release](https://github.com/TryHackX/Robin-Hood-Legenda-Sherwood-4k-Mod/releases/tag/v1.1.8)): six backgrounds
-(main menu, options, sound and graphics options, load / save, the parchment screen and the credits) painted anew by an
-image AI after the original ones, filling the whole widescreen screen; the question whether to quit shows the main
-menu's. Unpack into the game folder (it adds `hd\menu\remake\`; it replaces `…-menu-remake-1.zip` of 1.1.5). In the
-game: F10 → "MENU W HD (TLA, NAPISY)" switches between the new backgrounds, the upscaled originals and the original
-menus.
+**Step 4 (optional) — new menu backgrounds.** `SherwoodEngineFix-menu-remake-2.zip` from
+[remade menu backgrounds 2](https://github.com/TryHackX/Robin-Hood-Legenda-Sherwood-4k-Mod/releases/tag/menu-remake-2):
+six backgrounds (main menu, options, sound and graphics options, load / save, the parchment screen and the credits)
+painted anew by an image AI after the original ones, filling the whole widescreen screen; the question whether to
+quit shows the main menu's. Unpack into the game folder (it adds `hd\menu\remake\`). In the game: F10 →
+"MENU W HD (TLA, NAPISY)" switches between the new backgrounds, the upscaled originals and the original menus.
 
 **Step 5 — play.** Start the game as usual (GOG Galaxy or the shortcut). At the start of a mission the name of the HD
-variant appears at the top of the screen for 3 s. F8 compares with the original graphics, F10 opens the mod's
-settings.
+variant appears at the top of the screen for 3 s (for example `GRAFIKA HD: DAT2`) — that is the sign that everything
+is in place. F8 compares with the original graphics, F10 opens the mod's settings.
 
-**Monitor resolution.** By default the game renders at 2560×1440 (HD mode). On a 1080p monitor set `Width=1920`,
-`Height=1080` in `SherwoodFix.ini` (or `0` and `0` = the monitor's resolution); on a 4K monitor 2560×1440 is
-recommended (sharp HD pictures, scaled up). Every option is described in the INI file itself (comments in Polish);
-the most important ones can be changed in the F10 panel.
+**Monitor resolution — leave it as it is.** The game renders at 2560×1440 (HD mode) and the picture is scaled to your
+screen, whatever its resolution (1080p, 1440p, 4K, other aspect ratios with black bars). Do **not** set a smaller
+`Width` in `SherwoodFix.ini` and do not choose 1920×1080 in the game's own Options → Graphics: below a width of 2048
+the HD mode (HD graphics, 2× interface, smooth zoom) switches off.
+Every option is described in the INI file itself (comments in Polish); the most important ones can be changed in the
+F10 panel.
 
 **Uninstall:** delete `winmm.dll` and the `hd` folder (and optionally `SherwoodFix.ini`, `SherwoodFix.log`).
+
+## If it does not work
+
+1. **Start the game once, then look into the game folder: is there a file `SherwoodFix.log`?**
+   - **No** — the mod is not loaded. `winmm.dll` is not right next to `Game.exe` (most often it was unpacked into a
+     folder of its own, see "How to unpack" above), or an antivirus program removed it (the mod is an unsigned DLL
+     that changes the game's code in memory; restore it from the quarantine and allow it).
+   - **Yes** — open it: the first lines say what the mod found.
+2. **A message "this Game.exe is not the GOG edition"** (log: `Game.exe is not the GOG edition`) — the game is not the
+   GOG edition, or `Game.exe` was changed by another program. The mod works only with the original GOG `Game.exe`
+   (2 899 968 bytes); reinstall the game from GOG.
+3. **The game starts, but looks like the original** (small picture, no HD): check that `Width=2560` and `Height=1440`
+   are in `SherwoodFix.ini` (or at least a width of 2048; the game's Options → Graphics → 2560*1440 sets it back), and
+   that the `hd` folder lies next to `Game.exe` (not
+   `hd\hd\…` or `SherwoodHD-…\hd\…`): `hd\maps\dat2\` must hold `.hdmap` files and `hd\sprites\_common\` the files
+   named in step 2. F8 must not be switched to "ORYGINAL".
+4. **When asking for help, attach `SherwoodFix.log`** from the game folder (it is written anew at every start).
 
 ## Mod keys
 
@@ -157,8 +184,8 @@ the `ultrasharp` variant and the icons are for non-commercial use), RIFE by hzwe
 ## Known limitations
 
 - The engine itself has only three zoom levels (0.5 / 1 / 2); the smooth zoom magnifies its 1.0 or 2.0 picture. Below
-  2.0 the original pixels are shown (HD pictures need 2.0), above 2.0 the HD picture is magnified further.
-- Night levels and fog have not been checked with HD graphics yet.
+  2.0 the original pixels are shown (HD pictures need 2.0; since 1.1.7 they are enlarged with a sharper filter), above
+  2.0 the HD picture is magnified further.
 
 ## Building from source
 

@@ -3,18 +3,18 @@
 
 struct SherwoodConfig {
     // [Display]
-    int width = 1920;
-    int height = 1080;
+    int width = 2560;     // the release defaults (release\SherwoodFix.ini): HD mode
+    int height = 1440;
     bool replace1024x768 = true;
     bool windowedBorderless = true;
-    bool vsync = false;
+    bool vsync = true;
     int maxFPS = 120;
     int shaderFilter = 1; // 0 = nearest, 1 = sharp bilinear, 2 = bilinear
     bool fixAspectRatio = true;
     int renderer = 1;     // 1 = own in-memory DirectDraw + Direct3D 11, 0 = GOG wrapper (ddraw.dll)
     int presenter = 0;    // 0 = Direct3D 11 (GDI if it fails), 1 = force GDI
     bool allowTearing = false; // with VSync=0: present immediately even if that tears
-    bool fullHeightView = false; // draw the world in the bottom 80 rows too (HUD corners on top of it)
+    bool fullHeightView = true;  // draw the world in the bottom 80 rows too (HUD corners on top of it)
     bool hdBackgrounds = true;   // at zoom 2.0 take the background from hd\maps\<variant>\*.hdmap when present
     std::string hdVariant;       // folder under hd\maps shown at start ("" = first one, "off" = original pixels)
     int hdKeyToggle = 0x77;      // virtual key: original <-> HD background (F8); 0 = none
@@ -26,9 +26,9 @@ struct SherwoodConfig {
                                  // from the HD picture, 0 = the game's low-res ground animations as they are
                                  // (chimney smoke: 1..3 = over the HD picture)
     bool hdSprites = true;       // 2.0 zoom: draw upscaled sprite frames from hd\sprites\<variant>\ where they exist
-    bool hdInBetween = false;    // experimental: generated in-between frames of sprite animations (hd\sprites\_between)
+    bool hdInBetween = true;     // generated in-between frames of sprite animations (hd\sprites\_between)
     int  hdInBetweenQuality = 17; // ... only those whose two moved source frames differ by at most this (of 255; 32 = all)
-    int uiScale = 0;             // internal width >= 2048: 2 = the game's windows (HUD, map, dialogs) drawn x2 from their screen corners
+    int uiScale = 2;             // internal width >= 2048: 2 = the game's windows (HUD, map, dialogs) drawn x2 from their screen corners
     int mapPosition = 1;         // with uiScale: where the opened map lies - 0 where the game puts it (top, middle), 1 top-right corner
     bool mapDragCamera = true;   // dragging on the opened map's picture moves the camera (the window is moved by its edges)
     bool smoothZoom = true;      // HD view: any zoom from "the level fills the screen" to zoomMax (view_zoom.h)
@@ -52,7 +52,7 @@ struct SherwoodConfig {
     bool forceSystemMemorySurfaces = true;
 
     // [Input]
-    bool rawMouseInput = false;
+    bool rawMouseInput = true;
     bool lockCursorToWindow = true;
     int edgeScrollSpeed = 0; // map scroll speed in percent; 0 = scale with the internal width (width / 1024)
     int mouseReportRateHz = 125; // max mouse movement reports/s handed to the game (0 = unlimited/original)

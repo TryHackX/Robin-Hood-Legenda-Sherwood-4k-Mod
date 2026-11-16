@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(SherwoodEngineFix VERSION 1.1.8 LANGUAGES C CXX)
+project(SherwoodEngineFix VERSION 1.1.9 LANGUAGES C CXX)
 
 # Enforce 32-bit (x86) architecture
 if(NOT CMAKE_SIZEOF_VOID_P EQUAL 4)
@@ -9,6 +9,11 @@ endif()
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+
+# The C/C++ runtime linked in (/MT), MinHook included: winmm.dll needs no Visual C++ redistributable on the
+# player's PC (2026-11-16: with /MD it imported MSVCP140.dll and VCRUNTIME140.dll - without the 32-bit
+# redistributable Windows refuses the DLL and the game does not start at all).
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
 include(FetchContent)
 
@@ -50,6 +55,7 @@ add_library(winmm SHARED
     ddm/ddm_hd_sprites.cpp
     ddm/ddm_hd_menu.cpp
     ddm/ddm_present.cpp
+    winmm.rc
 )
 
 target_include_directories(winmm PRIVATE

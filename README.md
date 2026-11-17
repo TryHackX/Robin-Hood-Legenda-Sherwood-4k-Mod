@@ -129,10 +129,10 @@ Unpack **each** archive into the game folder (see above). Afterwards the game fo
 **Step 3 — the mod (after the HD pictures).** Unpack `SherwoodEngineFix-v….zip` (the newest release) into the game
 folder — **after** the HD archives: it carries newer versions of some small HD files of the pack. Afterwards
 `winmm.dll` and `SherwoodFix.ini` lie **right next to `Game.exe`**. (The archive holds: `winmm.dll`, `SherwoodFix.ini`,
-`README.md`, the HD fonts `hd\fonts\`, HD pictures of menus and dialogs `hd\menu_parts\`, run-time icons
-`hd\sprites\_icons\`, small files and the credits' background in `hd\menu\<variant>\`, and the lists of the in-between
-frames `hd\sprites\_between\between.q`, `between.v1.q`, `between.t`.) Updating from an older version: unpack the new
-archive over it; keep your `SherwoodFix.ini` if you changed settings (answer "skip" for that one file).
+`README.md`, the HD fonts `hd\fonts\`, HD pictures of the interface, menus and dialogs `hd\menu_parts\` (about 940),
+run-time icons `hd\sprites\_icons\`, small files and the credits' background in `hd\menu\<variant>\`, and the lists of
+the in-between frames `hd\sprites\_between\between.q`, `between.v1.q`, `between.t`.) Updating from an older version:
+unpack the new archive over it; keep your `SherwoodFix.ini` if you changed settings (answer "skip" for that one file).
 
 **Step 4 (optional) — new menu backgrounds.** `SherwoodEngineFix-menu-remake-2.zip` from
 [remade menu backgrounds 2](https://github.com/TryHackX/Robin-Hood-Legenda-Sherwood-4k-Mod/releases/tag/menu-remake-2):

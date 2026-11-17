@@ -93,6 +93,10 @@ namespace {
     bool  g_viewPending = false;            // OnWorldDrawn made a view for the frame being drawn
     int   g_worldW = 0, g_worldH = 0;      // the world texture (DDM::Present::UploadWorld)
     std::vector<uint16_t> g_readBack;      // LastWorld: the world read back from it
+    // the world of a dialog's backdrop render (OnBackdropWorldDrawn), the render's number (0 = none)
+    std::vector<uint16_t> g_backdropWorld;
+    int      g_backdropWorldW = 0, g_backdropWorldH = 0;
+    unsigned g_backdropWorldRender = 0;
     unsigned g_switches = 0;
     float g_lastEngineZoom = 0.0f;         // the engine's zoom as this module left it
     bool  g_gameZooming = false;           // the game runs a zoom animation of its own
@@ -379,6 +383,18 @@ void OnGameTick(uint8_t* e) {
     }
 }
 
+void PrepareLevel() {
+    uint8_t* e = Engine();
+    if (!g_installed || !g_enabled || !e) return;
+    if (*reinterpret_cast<void* const*>(e + kMapSurface) == g_level) return;   // the level runs: nothing to do
+    // A new level's first frame and its first briefing are drawn before the end of its first tick,
+    // where OnGameTick runs: the engine was still at its own zoom (1.0 on most levels) - on a level
+    // smaller than the screen the first frame and the briefing's backdrop showed it small with a
+    // black band beside it (YouTuber's report 2026-11-17). The level's start comes before that
+    // render, so it is drawn at the zoom the player then sees.
+    OnGameTick(e);
+}
+
 void ClearOutsideLevel() {
     uint8_t* e = Engine();
     if (!e) return;
@@ -486,6 +502,34 @@ bool TakeView(View& out) {
     out.snap = nullptr;                 // already in the presenter's texture
     out.w = g_worldW;
     out.h = g_worldH;
+    return true;
+}
+
+void OnBackdropWorldDrawn(unsigned render) {
+    g_backdropWorldRender = 0;
+    if (!g_installed || !g_enabled || !g_shown.on) return;     // only when the world is shown magnified
+    const uint8_t* bits = nullptr;
+    int pitch = 0, bw = 0, bh = 0;
+    if (!DDM::BackBits(bits, pitch, bw, bh) || bw <= 0 || bh <= 0) return;
+    g_backdropWorld.resize(static_cast<size_t>(bw) * bh);
+    for (int y = 0; y < bh; ++y) {
+        std::memcpy(g_backdropWorld.data() + static_cast<size_t>(y) * bw, bits + static_cast<size_t>(y) * pitch,
+                    static_cast<size_t>(bw) * 2);
+    }
+    g_backdropWorldW = bw;
+    g_backdropWorldH = bh;
+    g_backdropWorldRender = render;
+}
+
+bool BackdropWorld(unsigned render, View& out) {
+    if (!g_enabled || !g_shown.on || render == 0 || g_backdropWorldRender != render) return false;
+    out.m = g_shown.m;
+    out.cropX = g_shown.cropX;
+    out.cropY = g_shown.cropY;
+    out.worldH = g_shown.worldH;
+    out.snap = g_backdropWorld.data();
+    out.w = g_backdropWorldW;
+    out.h = g_backdropWorldH;
     return true;
 }
 

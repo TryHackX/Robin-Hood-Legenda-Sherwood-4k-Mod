@@ -325,6 +325,15 @@ Do sprawdzenia przy okazji: czy miganie ikon akcji ma teraz właściwe tempo; po
      `WindowsKey=1` usuwa flagę); OBS: instalator GOG ustawia `game.exe` RUNASADMIN (flagi zgodności w rejestrze) —
      przechwytywanie gry działa tylko z OBS jako administrator, przechwytywanie okna metodą „Windows 10 (1903+)” zawsze
      (README). Film: wyruszenie z obozu z 1.2.0 = błąd naprawiony w 1.2.1. Test ciągły: PASS, 0 błędów, 142,9 kl./s.
+   - ✔ **v1.2.3 — trzecie zgłoszenie youtubera** (2026-11-17 w nocy; zrzuty 2.1–2.5 z 1.2.1 i jego zapisy —
+     `tools\out\zgloszenie_yt_2026-11-17c\`, `tools\out\yt_savegame_2026-11-17\`; linia zamachu potwierdzona przez niego
+     przy przybliżeniu i oddaleniu): tło pytania „Chcesz rozpocząć wybraną misję?” przy oddaleniu (korony drzew szły
+     przez powiększanie okien — render tła odbywa się wewnątrz Draw okna misji, czasem w klatce pośredniej), pierwsza
+     odprawa i pierwsza klatka poziomu bez czarnego pasa (start poziomu w lupie przed pierwszym renderem), portrety w
+     równym rzędzie i wszystkie (ukryte okna portretów obozu liczyły się do grupy), mapa kampanii w HD we wszystkich
+     stanach (obrazki prosto z `DATA\Interface\Default.res`, `tools\hd\res_pictures.py`), hak `RenderFrame` także przy
+     `SmoothMotion=0`. Opis: `docs\HD_MODE.md` §7. Zapisy gracza po teście zgodne z kopią sprzed testów (hasze).
+     ☐ Reszta obrazków z `Default.res` (1126, ~150 MB w HD; m.in. 75 klatek mówiących głów) — po decyzji o rozmiarze.
    - ✔ **Wydanie na GitHubie** (2026-11-14): v1.0.0 (README po angielsku), paczki grafiki HD jako osobne wydanie
      (7 plików ZIP < 2 GB; magazyn postaci w dwóch częściach — mod czyta `sprites.dat` + `sprites.dat.2`).
 5. ◐ Klatki pośrednie animacji postaci (prośba użytkownika; „jak się nie uda, trudno"): eksperyment zakończony

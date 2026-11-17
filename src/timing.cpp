@@ -15,6 +15,7 @@
 #include "ddm/ddm_hd.h"
 #include "widescreen_patch.h"
 #include "view_zoom.h"
+#include "ui_scale.h"
 
 #include <MinHook.h>
 #include <emmintrin.h>
@@ -273,6 +274,7 @@ namespace Timing {
         volatile bool     g_backdropRender = false;
         volatile bool     g_lastRenderBackdrop = false;
         volatile unsigned g_backdropRenders = 0;
+        unsigned g_dialogInExtraFrames = 0;     // dialogs opened by a window during an extra frame
         bool g_extraActive  = false; // the previous tick was drawn with extra frames
         bool g_tickSmoothed = false; // this tick's own frame showed interpolated positions
         bool g_tickExtras   = false; // this tick is expected to be drawn with extra frames
@@ -290,8 +292,22 @@ namespace Timing {
         void __fastcall Hook_RenderFrame(void* pGame, void* edx, int showCursor, int doPresent) {
             const bool fromTick = !g_inExtraFrame &&
                                   reinterpret_cast<uintptr_t>(_ReturnAddress()) == kAddrTickRenderRet;
-            if (!g_inExtraFrame && reinterpret_cast<uintptr_t>(_ReturnAddress()) == kAddrBackdropRenderRet) {
+            if (reinterpret_cast<uintptr_t>(_ReturnAddress()) == kAddrBackdropRenderRet) {
                 // a dialog's backdrop: drawn as the game draws it, nothing else of a frame here
+                if (g_inExtraFrame) {
+                    // A window opens its dialog from its Draw - also in one of our extra frames, and
+                    // the whole dialog then runs inside that frame's RenderFrame (camp of Sherwood,
+                    // "start the chosen mission?", 2026-11-17: the backdrop render was taken for an
+                    // extra frame). The dialog is no extra frame: the objects go back to where they
+                    // are (its answer may end the level), animations and HUD timers run as usual.
+                    MotionSmooth::Restore();
+                    g_inExtraFrame = false;
+                    if (g_dialogInExtraFrames++ == 0) {
+                        Logger::Info("Extra frames: a window opened a dialog during an extra frame - the dialog runs as a frame of the tick.");
+                    }
+                }
+                ViewZoom::PrepareLevel();        // the first briefing of a level: its zoom first
+                UiScale::BeginBackdropRender();
                 g_backdropRender = true;
                 g_lastRenderBackdrop = true;
                 ++g_backdropRenders;
@@ -299,9 +315,11 @@ namespace Timing {
                 if (DDM::TraceActive()) DDM::TraceMark("--- RenderFrame (a dialog's backdrop)");
                 o_RenderFrame(pGame, edx, showCursor, doPresent);
                 g_backdropRender = false;
+                UiScale::EndBackdropRender();
                 return;
             }
             g_lastRenderBackdrop = false;
+            if (fromTick) ViewZoom::PrepareLevel();   // a new level's first frame: at the player's zoom
             bool overridden = false;
             if (MotionSmooth::IsEnabled() && (g_inExtraFrame || fromTick)) {
                 if (fromTick) {
@@ -716,13 +734,16 @@ namespace Timing {
                 Logger::Info("Extra frames: per-frame animation step guarded=%d, afterimage counter guarded=%d, HUD blink timers guarded=%d, "
                              "cursor shape kept between ticks=%d.", animOk ? 1 : 0, ghostOk ? 1 : 0, hudOk ? 1 : 0, cursorOk ? 1 : 0);
 
-                // object smoothing wraps every RenderFrame call
-                if (MotionSmooth::Initialize()) {
+                // Every RenderFrame call is wrapped: object smoothing (SmoothMotion=1), a dialog's
+                // backdrop render and a new level's start before its first frame (with or without
+                // the smoothing - before 1.2.3 SmoothMotion=0 lost those two as well)
+                MotionSmooth::Initialize();
+                {
                     auto* renderAddr = reinterpret_cast<uint8_t*>(0x005105D0);
                     if (MH_CreateHook(renderAddr, reinterpret_cast<LPVOID>(&Hook_RenderFrame),
                                       reinterpret_cast<LPVOID*>(&o_RenderFrame)) != MH_OK ||
                         MH_EnableHook(renderAddr) != MH_OK) {
-                        Logger::Warn("MotionSmooth: could not hook RenderFrame - object smoothing inactive.");
+                        Logger::Warn("Timing: could not hook RenderFrame - object smoothing, dialog backdrops and level starts inactive.");
                     }
                 }
             } else {

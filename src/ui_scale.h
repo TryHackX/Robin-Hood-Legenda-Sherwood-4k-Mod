@@ -36,6 +36,12 @@ namespace UiScale {
     float MenuZoomMouseScale();                              // input thread: 1, or less while zoomed
     void  MenuZoomUnavailable();                             // presenter: no Direct3D 11 - feature off
 
+    // Timing: a dialog's backdrop render (RHGame::RenderFrame(0, 0) from 0x0053B6B0) begins / ended.
+    // A window opens such a dialog from its own Draw, so the render runs inside the mission's
+    // window drawing: that state is set aside meanwhile and comes back after (main thread).
+    void BeginBackdropRender();
+    void EndBackdropRender();
+
     // A dialog of the game is up (its dialog loop drew last) - main thread. Needs the
     // WindowManager::Draw hook (interface scale or menu zoom possible).
     bool DialogShown();

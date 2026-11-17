@@ -57,10 +57,14 @@ original DirectDraw wrapper, plus optional HD graphics prepared with AI models f
 - Menus and game dialogs (briefing, Esc menu, save/load, options) shown full-screen instead of a small 1024×768 box
   in the middle — **in HD**: menu backgrounds upscaled by AI (HD pack), and the letters, buttons, the briefing's
   parchment, seals (also highlighted under the cursor), portraits and the campaign map drawn from HD versions
-  (`hd\fonts\`, `hd\menu_parts\`, in the mod archive). Questions asked during a mission (mission won, start the chosen
-  mission in the Sherwood camp) show the level behind them as it was on the screen. The portraits of several
-  selected characters stay evenly spaced along the bottom; the skills tooltip of a merry man sits next to the pointer.
-  Loading a saved game shows a black screen as in the original (no ragged black box over the menu background). Optional
+  (`hd\fonts\`, `hd\menu_parts\`, in the mod archive). The campaign map is HD in every state of the campaign: all
+  five castles (drawn and coloured, with their glow), flags, path markers and the Sheriff's army arrows — taken
+  straight from the game's `DATA\Interface\Default.res` (`tools\hd\res_pictures.py`). Questions asked during a
+  mission (mission won, start the chosen mission in the Sherwood camp) show the level behind them exactly as it was
+  on the screen, tree tops and the hedge included, also at any zoom; the first briefing of a level shows the level at
+  the zoom you will play with (no black band beside small levels). The portraits of the selected characters stand in
+  an even row along the bottom (all of them, also with four or five selected); the skills tooltip of a merry man
+  sits next to the pointer. Loading a saved game or a mission shows a black screen as in the original. Optional
   **remade menu backgrounds** that fill the whole widescreen (`hd\menu\remake\`, made with `tools\hd\menu_remake.py`
   from pictures painted by an image AI; F10 → "MENU W HD"). The in-game menu (Esc) opens in ~0.08 s instead of ~0.4 s.
 - **In-game settings panel — F10** (HD graphics, interface, minimap, smooth zoom, menus, VSync, filter, FPS counter,
@@ -83,7 +87,7 @@ You need three things from the **Releases** page (right side of the repository p
 under **Assets** — not "Source code (zip)" / "Source code (tar.gz)": GitHub adds those two to every release by
 itself, they hold only the source code and are not needed to play.
 - [**the mod — newest version**](https://github.com/TryHackX/Robin-Hood-Legenda-Sherwood-4k-Mod/releases/latest):
-  `SherwoodEngineFix-v….zip` (about 29 MB),
+  `SherwoodEngineFix-v….zip` (about 33 MB),
 - [**HD graphics pack 1**](https://github.com/TryHackX/Robin-Hood-Legenda-Sherwood-4k-Mod/releases/tag/hd-pack-1):
   the HD pictures (7 archives, 3 of them required),
 - optional: [**remade menu backgrounds 2**](https://github.com/TryHackX/Robin-Hood-Legenda-Sherwood-4k-Mod/releases/tag/menu-remake-2)
@@ -205,8 +209,8 @@ the `ultrasharp` variant and the icons are for non-commercial use), RIFE by hzwe
 - The engine itself has only three zoom levels (0.5 / 1 / 2); the smooth zoom magnifies its 1.0 or 2.0 picture. Below
   2.0 the original pixels are shown (HD pictures need 2.0; since 1.1.7 they are enlarged with a sharper filter), above
   2.0 the HD picture is magnified further.
-- On small levels (smaller than the screen at zoom 1.0) the very first briefing of a mission shows the level behind
-  it at its own size with black bands; from the first moment of play the level fills the screen as usual.
+- Behind the game's questions and briefings in a mission the level is shown from the game's own picture, magnified
+  — a little softer than the HD view around it while the question is up.
 
 ## Building from source
 

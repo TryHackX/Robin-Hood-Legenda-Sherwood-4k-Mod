@@ -1,4 +1,5 @@
 #include "ddm_hd_menu.h"
+#include "ddm.h"
 #include "ddm_hd.h"
 #include "../config.h"
 #include "../logger.h"
@@ -217,7 +218,11 @@ namespace {
         const ULONGLONG t0 = GetTickCount64();
         g_backdropShow = g_backdrop;
         const float m = g_lupa.m;
-        const int worldRows = (std::min)(h, static_cast<int>(g_lupa.worldH));
+        // not the hedge band along the bottom: its black base and the black frame below a level
+        // smaller than the view were the same pixel in both copies - the magnified world showed
+        // through the hedge ("the bushes break up", YouTuber's report 2026-11-17)
+        int worldRows = (std::min)(h, static_cast<int>(g_lupa.worldH));
+        if (const int band = DDM::LastHudBandTop(); band > 0) worldRows = (std::min)(worldRows, band);
         static std::vector<uint32_t> dark;          // RGB565 -> darkened 0x00RRGGBB
         dark.resize(65536);
         for (uint32_t c = 0; c < 65536; ++c) dark[c] = to8888[cand[c]];
@@ -846,14 +851,19 @@ void NoteDialogStart(bool fromBack) {
     fromBack = fromBack || Timing::LastRenderWasBackdrop();
     g_worldValid = fromBack ? DDM::CopyBack(g_world, g_worldW, g_worldH) : DDM::CopyFront(g_world, g_worldW, g_worldH);
     ViewZoom::View v;
-    if (g_worldValid && ViewZoom::LastWorld(v) && v.w == g_worldW && v.h == g_worldH) {
+    // the world of that very render when the level comes from it (the copy of the last frame the player
+    // saw had the figures a little elsewhere - and in an extra frame they stood between two ticks)
+    const bool sameRender = fromBack && Timing::LastRenderWasBackdrop() &&
+                            ViewZoom::BackdropWorld(Timing::BackdropRenderCount(), v);
+    if (g_worldValid && (sameRender || ViewZoom::LastWorld(v)) && v.w == g_worldW && v.h == g_worldH) {
         g_lupaWorld.assign(v.snap, v.snap + static_cast<size_t>(v.w) * v.h);
         g_lupa = v;
         g_lupa.snap = nullptr;
         g_lupaValid = true;
     }
     Logger::Info("HD menu: dialog start - level copied%s%s (%u ms).", fromBack ? " from the frame being drawn" : "",
-                 g_lupaValid ? " with the magnified world" : "", static_cast<unsigned>(GetTickCount64() - t0));
+                 g_lupaValid ? (sameRender ? " with the magnified world of the same render" : " with the magnified world") : "",
+                 static_cast<unsigned>(GetTickCount64() - t0));
     if (TestHarness::Enabled() && g_worldValid) {
         // test mode: both pictures as the backdrop compares them (tools\out\harness\dialog_level.raw / _world.raw)
         const std::string dir = GameDir() + "tools\\out\\harness\\";

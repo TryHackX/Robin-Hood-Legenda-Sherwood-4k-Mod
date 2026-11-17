@@ -656,6 +656,40 @@ w górę), resztę powiększa prezenter — **tylko świat**:
     8And16BitAggregateBlts RUNASADMIN HIGHDPIAWARE`) — gra działa jako administrator, OBS bez uprawnień nie wstrzykuje
     przechwytywania gry. Rozwiązanie po stronie gracza (README): przechwytywanie okna „Windows 10 (1903+)” albo OBS
     jako administrator.
+- **Tło pytań w obozie, pierwsza odprawa, portrety, mapa kampanii** (2026-11-17, v1.2.3; trzecie zgłoszenie youtubera,
+  zrzuty 2.1–2.5 z 1.2.1, sprawdzone w tle na jego zapisach — kopia w `tools\out\yt_savegame_2026-11-17\`, profil po
+  teście w `backups\yt_profile_004_after_test_2026-11-17\`; w jego obozie V „Wyślij wybranych bohaterów na misję” jest
+  dopiero, gdy Robin w drużynie ma ✓ — zapis „Sherwood” ma taki stan):
+  - „Krzaczki się rozpadają, obrazy nachodzą” (2.2): tło okna = render `RenderFrame(0,0)` z konstruktora menedżera okna
+    `0x0053B6B0`, wywołany z Draw okna misji, czyli przy `g_drawDepth = 1` — korony drzew (`BlendBlit 0x005EC5F0`, 40 %)
+    szły przez `Transform` jak obrazki okna (przesunięte ×2 albo wycięte jako „środkowa komórka”). Do tego okno otwiera
+    się czasem w naszej klatce pośredniej: render tła nie był rozpoznawany (`!g_inExtraFrame`), a cały dialog działał
+    jako klatka pośrednia (zamrożone `AnimAdvance`, przesunięte obiekty `MotionSmooth`). Teraz: `UiScale::Begin/
+    EndBackdropRender` odkłada i przywraca cały stan rysowania okien (głębokość, okno, kotwice, `g_pieces`, grupy,
+    minimapa); w klatce pośredniej `MotionSmooth::Restore()` i `g_inExtraFrame = false` przed renderem tła (log
+    „a window opened a dialog during an extra frame”). Kopia świata do tła lupy pochodzi z TEGO SAMEGO renderu
+    (`ViewZoom::OnBackdropWorldDrawn` w haku Draw `0x00510618` przy `InBackdropRender`, numer renderu =
+    `Timing::BackdropRenderCount()`; `NoteDialogStart` bierze ją przez `BackdropWorld`) — poziom i świat równe piksel w
+    piksel poza oknami. Pas żywopłotu (`DDM::LastHudBandTop`) nie należy do świata powiększanego w tle.
+  - Czarny pas obok pierwszej odprawy (2.1) i mignięcie pierwszej klatki poziomu: `ViewZoom::OnGameTick` szedł na końcu
+    tiku, po pierwszym renderze nowego poziomu (silnik jeszcze przy zoomie 1,0, poziom 1920 px na ekranie 2560).
+    `ViewZoom::PrepareLevel()` przed renderem tiku i przed renderem tła — start poziomu przed pierwszą klatką. Hak
+    `RenderFrame` (`timing.cpp`) jest teraz zakładany także przy `SmoothMotion=0` (wcześniej bez niego znikały poprawki
+    tła okien z 1.2.1).
+  - Portrety (2.4): ukryte okna portretów w obozie (`+0x5C` = pokazane) leżały stosem w x=225 i liczyły się do grupy
+    (odstęp 0 → cały rząd od rogu, część poza ekranem: „4 zaznaczone, 3 portrety”) — `CollectWindows` je pomija.
+    Rząd przy dolnej krawędzi: miejsca gry (225 + 499·i przy 2560) ściśnięte współczynnikiem min(1, 2048/szer.) od
+    pierwszego portretu — krok ~400 px, równy rząd bez przerw między powiększonymi portretami.
+  - Wczytywanie (2.5): zapis z menu Esc i start misji — czarne klatki gry, bez warstwy menu (sprawdzone śladem: start
+    misji wypełnia bufor czernią `FILL (0,0,2560,1440)` → `OnScreenFill` z 1.2.2).
+  - Mapa kampanii w HD w każdym stanie kampanii: plik `DATA\Interface\Default.res` („SRES”: wpisy `BTTN`/`PICC`/
+    `PIC `/`CUR `…, obrazki `u16 w, u16 h, u32 format (0 = RGB565, 1 = zlib), u32 rozmiar`) trzyma wszystkie obrazki
+    menu jako RGB565 — klucz moda (`Fnv` w `ddm_hd_patch.cpp`) da się policzyć bez gry: `tools\hd\res_pictures.py`
+    (58 z 63 zebranych przez grę obrazków ma klucz z pliku), `--write --sizes …` zapisuje je jako `part_*.raw` dla
+    `upscale_menu_parts.py`; przegląd grup: `tools\hd\res_sheet.py`, struktura: `tools\hd\res_parse.py`. Dodane: 5 zamków
+    × 4 (szkic + 3 klatki poświaty), 12 znaczników ścieżek, 10 strzałek wojsk szeryfa, czerwona flaga (niebieskiej
+    flagi nie ma w pliku jako osobnego obrazka). W pliku jest 1126 obrazków (~150 MB w HD) — reszta (m.in. 75 klatek
+    mówiących głów 120×160) czeka.
 - **Wydajność sprite'ów HD** (2026-11-17, v1.2.1): `Sprites::TryShadowBlit` (główna ścieżka sprite'ów HD przez procedury
   gry `0x0062261C/0x006220EC`) liczona po 8 pikseli SSE2 (przezroczyste/ukryte zostają, cień przyciemnia pojedynczo, reszta
   = piksel HD). Las misji z obozu: klatka pośrednia 11,2 → 7,1 ms, 86 → 140 kl./s. Do diagnozy: plik mapy linkera

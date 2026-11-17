@@ -1678,10 +1678,17 @@ void TraceMark(const char* text) {
     DDM_TRACE("%s", text);
 }
 
+int g_lastHudBandTop = 0;          // main thread: the band of the last frame that drew it (see LastHudBandTop)
+
 int TakeHudBandTop() {
     const int top = g_hudBandTop;
     g_hudBandTop = 0;
+    if (top > 0) g_lastHudBandTop = top;
     return top;
+}
+
+int LastHudBandTop() {
+    return g_hudBandTop > 0 ? g_hudBandTop : g_lastHudBandTop;
 }
 
 void LogFaultContext(uintptr_t faultAddress) {

@@ -26,4 +26,6 @@ namespace DDM {
     // Presenter, main thread: the first frame row of the hedge strip along the bottom edge when the mission's
     // interface drew it since the last call (0 = not drawn) - those rows are interface, never world.
     int TakeHudBandTop();
+    // ... the same without taking it: the band's top row seen last (0 = never drawn)
+    int LastHudBandTop();
 }

@@ -294,6 +294,10 @@ namespace {
                     g_camDragMap = nullptr;
                     g_winDragMap = nullptr;
                 }
+            } else if (InMission()) {
+                // the backdrop's own world, the windows not yet drawn: the dialog's level (taken from
+                // this render) is compared with it pixel for pixel
+                ViewZoom::OnBackdropWorldDrawn(Timing::BackdropRenderCount());
             }
         }
         const bool scale = g_factor > 1 && InMission() && from == 0x00510618;
@@ -1019,7 +1023,11 @@ namespace {
         ScreenSize(w, h);
         for (void* const* it = begin; it < end; ++it) {
             auto* win = static_cast<const uint8_t*>(*it);
-            if (!win || !Readable(win, 0x84) || !win[0x80]) continue;
+            // +0x5C: the window is shown (vtable +0x44 returns it; the portraits' Draw stops at once
+            // without it). In the camp every merry man has a portrait window, the hidden ones stacked
+            // at one place - counted along, the gap between portraits was 0 and the row was enlarged
+            // from the corner: portraits off the screen ("4 selected, 3 portraits", YouTuber 2026-11-17)
+            if (!win || !Readable(win, 0x84) || !win[0x80] || !win[0x5C]) continue;
             WinInfo& info = g_wins[g_winCount];
             info.win = win;
             info.vt = *reinterpret_cast<const uint32_t*>(win);
@@ -1242,12 +1250,17 @@ namespace {
                 if (ax == w * 0.5f) ax = static_cast<float>(static_cast<int>(cx));
                 if (ay == h * 0.5f) ay = static_cast<float>(static_cast<int>(cy));
                 if (ay == h && PerWindowClass(vt)) {
-                    // portraits of several selected characters: the game spreads them evenly over
-                    // the whole width - each grows from its own middle (from their screen thirds
-                    // the outer ones were pushed to the edges and the last two touched), kept on
-                    // the screen
+                    // Portraits of several selected characters: the game gives the team 5 fixed places
+                    // spread over the whole width (at 2560: x = 225 + 499 * place) - at 1024 they lie
+                    // close together, at 2560 doubled the gaps were wider than the portraits ("gaps",
+                    // YouTuber 2026-11-17). The places stay where they are relative to each other (a
+                    // portrait never jumps when the selection changes), the distances shrink to the
+                    // proportions of a 2048 wide screen (1024 doubled); the first place stays where a
+                    // single portrait is (225); kept on the screen.
                     const float wd = (rc[2] - rc[0]) * f;
-                    float left = cx - wd * 0.5f;
+                    const float first = 0.1f * (w - 65.0f) - 24.5f;
+                    const float k = (std::min)(1.0f, 2048.0f / w);
+                    float left = first + (rc[0] - first) * k;
                     left = (std::max)(0.0f, (std::min)(w - wd, left));
                     ax = static_cast<float>(static_cast<int>((f * rc[0] - left) / (f - 1.0f)));
                 } else if (ay == h && ax == 0.0f) {
@@ -1291,6 +1304,99 @@ namespace {
         auto& cur = g_pieces[g_piecesCur];
         if (cur.size() < 4096) cur.push_back(Piece{ l, t, r, b, ax, ay });
     }
+
+    // The mission's drawing state while a dialog's backdrop render runs (BeginBackdropRender).
+    struct DrawState {
+        int   depth = 0;
+        void* window = nullptr;
+        bool  fixedAnchor = false, groupAnchor = false, groupSet = false, cursorDrawing = false;
+        float fixedAx = 0.0f, fixedAy = 0.0f, groupAx = 0.0f, groupAy = 0.0f;
+        int   piecesCur = 0;
+        std::vector<Piece> pieces[2];
+        std::vector<Drawn> drawn[2];
+        bool  mapSeen = false, mapShown = false, mapAnchorValid = false, mapOrigValid = false;
+        float mapAx = 0.0f, mapAy = 0.0f, mapOrig[4] = {};
+        WinInfo wins[64];
+        int   winCount = 0, lastWin = 0;
+        Group groups[64];
+        int   groupCount = 0;
+    };
+    DrawState g_beforeBackdrop;
+    int g_backdropNesting = 0;
+}
+
+void BeginBackdropRender() {
+    if (g_backdropNesting++ > 0) return;
+    DrawState& s = g_beforeBackdrop;
+    s.depth = g_drawDepth;
+    s.window = g_curWindow;
+    s.fixedAnchor = g_fixedAnchor;
+    s.fixedAx = g_fixedAx;
+    s.fixedAy = g_fixedAy;
+    s.groupAnchor = g_groupAnchor;
+    s.groupSet = g_groupSet;
+    s.groupAx = g_groupAx;
+    s.groupAy = g_groupAy;
+    s.cursorDrawing = g_cursorDrawing;
+    s.piecesCur = g_piecesCur;
+    for (int i = 0; i < 2; ++i) {
+        s.pieces[i] = g_pieces[i];
+        s.drawn[i] = g_drawn[i];
+    }
+    s.mapSeen = g_mapSeen;
+    s.mapShown = g_mapShown.load(std::memory_order_relaxed);
+    s.mapAnchorValid = g_mapAnchorValid;
+    s.mapAx = g_mapAx;
+    s.mapAy = g_mapAy;
+    s.mapOrigValid = g_mapOrigValid;
+    std::memcpy(s.mapOrig, g_mapOrig, sizeof(s.mapOrig));
+    std::memcpy(s.wins, g_wins, sizeof(s.wins));
+    s.winCount = g_winCount;
+    s.lastWin = g_lastWin;
+    std::memcpy(static_cast<void*>(s.groups), g_groups, sizeof(s.groups));
+    s.groupCount = g_groupCount;
+    // The render draws the world and the windows as a frame of its own: the world outside any window
+    // (else its translucent tree tops went through the windows' enlarging - moved, cut off or left
+    // out behind "start the chosen mission?" in the camp, YouTuber's report 2026-11-17), the windows
+    // from depth 0 as in every frame.
+    g_drawDepth = 0;
+    g_curWindow = nullptr;
+    g_fixedAnchor = false;
+    g_groupAnchor = false;
+    g_groupSet = false;
+    g_cursorDrawing = false;
+}
+
+void EndBackdropRender() {
+    if (g_backdropNesting <= 0 || --g_backdropNesting > 0) return;
+    DrawState& s = g_beforeBackdrop;
+    g_drawDepth = s.depth;
+    g_curWindow = s.window;
+    g_fixedAnchor = s.fixedAnchor;
+    g_fixedAx = s.fixedAx;
+    g_fixedAy = s.fixedAy;
+    g_groupAnchor = s.groupAnchor;
+    g_groupSet = s.groupSet;
+    g_groupAx = s.groupAx;
+    g_groupAy = s.groupAy;
+    g_cursorDrawing = s.cursorDrawing;
+    g_piecesCur = s.piecesCur;
+    for (int i = 0; i < 2; ++i) {
+        g_pieces[i].swap(s.pieces[i]);
+        g_drawn[i].swap(s.drawn[i]);
+    }
+    g_mapSeen = s.mapSeen;
+    g_mapShown.store(s.mapShown, std::memory_order_relaxed);
+    g_mapAnchorValid = s.mapAnchorValid;
+    g_mapAx = s.mapAx;
+    g_mapAy = s.mapAy;
+    g_mapOrigValid = s.mapOrigValid;
+    std::memcpy(g_mapOrig, s.mapOrig, sizeof(g_mapOrig));
+    std::memcpy(g_wins, s.wins, sizeof(g_wins));
+    g_winCount = s.winCount;
+    g_lastWin = s.lastWin;
+    std::memcpy(static_cast<void*>(g_groups), s.groups, sizeof(g_groups));
+    g_groupCount = s.groupCount;
 }
 
 int Factor() {

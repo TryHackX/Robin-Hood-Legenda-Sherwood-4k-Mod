@@ -30,6 +30,10 @@ namespace ViewZoom {
 
     // main thread, once per game tick (before the game's update): level start, engine level
     void OnGameTick(uint8_t* engine);
+    // timing.cpp, main thread, before every RenderFrame of the tick / a dialog's backdrop: a level that
+    // has not ticked yet (its first frame, the first briefing) is started now, at the zoom the player
+    // will see
+    void PrepareLevel();
     // UiScale, main thread: the mission's world is drawn, its windows are not yet
     void OnWorldDrawn();
     // UiScale, main thread, at the same moment (every mission frame, also a dialog's backdrop): the
@@ -56,6 +60,12 @@ namespace ViewZoom {
     // the last frame with the world, if it was magnified: its world copy and the magnification
     // (ddm_hd_menu.cpp: the backdrop of a dialog shows the world the same way)
     bool LastWorld(View& out);
+    // A dialog's backdrop render drew the world (UiScale's Draw hook, before the windows): its copy,
+    // numbered with Timing::BackdropRenderCount(). BackdropWorld gives it - with the magnification of
+    // the last frame - when it belongs to that render: the level the dialog takes from the back buffer
+    // is the same picture, pixel for pixel (no ghosts of moving figures at their unmagnified place).
+    void OnBackdropWorldDrawn(unsigned render);
+    bool BackdropWorld(unsigned render, View& out);
     // UiScale::Hook_DrawRect: the minimap's camera rectangle -> the part the player sees
     bool MapViewRect(float rect[4]);
 

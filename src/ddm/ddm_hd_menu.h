@@ -49,8 +49,10 @@ namespace DDM::HD::Menu {
     bool GetBackdrop(Backdrop& out);
 
     // UiScale, main thread: the game's dialog loop starts - in a mission the picture on the
-    // screen is still the level (the backdrop is made from it).
-    void NoteDialogStart();
+    // screen is still the level (the backdrop is made from it). `fromBack`: a dialog opened while
+    // the mission's frame was being drawn - the level is that frame in the back buffer (the one
+    // the smooth zoom's world copy belongs to), not the older one on the screen.
+    void NoteDialogStart(bool fromBack = false);
 
     // The HD menu picture under crop pixel (cx, cy) of `crop`, when the canvas there still holds the
     // picture's pixel `px` (RGB565): its 2x2 block (BGRA, rows `stride` pixels apart); else nullptr.

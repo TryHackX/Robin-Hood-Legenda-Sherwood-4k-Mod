@@ -606,6 +606,39 @@ w górę), resztę powiększa prezenter — **tylko świat**:
   `WindowX/WindowY` (-1 = środek); `window_manager.cpp`: `g_monitorWidth/Height` = rozmiar okna, `g_winX/g_winY` = jego
   miejsce (tworzenie, `SetWindowPos`, `MoveWindow`, `ApplyBorderless`, `ClipCursor`). Sprawdzone w tle: 1600×900 na środku
   monitora 2560×1440, prezenter rysuje 1600×900.
+- **Okna dialogowe otwierane z okna misji — „zamarzanie” w obozie** (2026-11-17, v1.2.1; zrzut youtubera 3.jpg:
+  kwadraty pergaminu za kursorem, rozmazany świat z prawej). Odtworzone w tle komendą `win` (konsola gry: singleton
+  `0x0045BBE0` → `[0x6C0808]`, komenda WIN `0x0045CDA0` thiscall(console,int,int) ret 8; pierwsze pole konsoli = obiekt
+  gry od startu misji `0x0050F850`): po 1. i 2. misji obóz Sherwood (poziom 1920×1088), mapa kampanii, „Chcesz
+  rozpocząć wybraną misję?”. Przyczyny i poprawki:
+  - Pytanie otwiera okno misji (klasa `0x006796D4`, samo rysuje pergamin 400×200) z wnętrza swojego Draw, czyli w
+    trakcie `WindowManager::Draw` misji (powiększanie ×2 włączone): `ShowDialog 0x0053BB80` (thiscall(manager, okno,
+    pętla, tło), ret 0xC, jedyne wywołanie z `DoModal 0x00544B80`) — hak `Hook_ShowDialog` odkłada stan powiększania
+    (`g_drawDepth`, `g_curWindow`, kotwica) na czas okna. Wcześniej każdy blit okna rósł ×2 wokół środka, a
+    przywracanie tła spod kursora (zapis 1:1, przywrócenie przez `0x005F1A32`) lądowało ×2 gdzie indziej — kursor
+    zostawiał kwadraty. Dodatkowo `UiScale::Drawing()` jest fałszywe przy działającej pętli okna.
+  - Konstruktor menedżera okna (`0x0053B6B0`) renderuje misję raz na tło: `RenderFrame(0,0)` z `0x0053B6CD` (gra woła
+    `RenderFrame` tylko stąd i z tiku `0x0050FF05`). `Timing::InBackdropRender()`: bez skutków „klatki misji”
+    (`g_missionFramed`, wyłączanie przybliżenia menu, kopia świata lupy, przeciągana mapa); okna ze środkowej komórki
+    siatki są w nim pomijane (puste prostokąty w `Transform`) — nie ma już pergaminu ×2 wystającego spod okna.
+  - Poziom do tła okna (`NoteDialogStart`) bierze się z tej samej klatki co kopia świata lupy: okno otwarte z okna
+    misji → tylny bufor w `Hook_ShowDialog` (przód trzymał starszą klatkę pośrednią — animowana woda, korony drzew i
+    krzaki różniły się, tło było sklejone ze świata powiększonego i niepowiększonego); po renderze tła też tylny bufor.
+  - Na poziomie mniejszym niż widok przy zoomie 1,0 silnik rysuje tylko poziom, reszta klatki zostawała z klatek przy
+    zoomie 2 (powiększony strumień z prawej). `ViewZoom::ClearOutsideLevel()` czyści ją na czarno po narysowaniu świata
+    (`DDM::FillBack`), w każdej klatce misji.
+  - Przyciemnione tło: zamiast zgadywania koloru przyciemnienia (głosowanie — rzadkie kolory spod pergaminu dawały
+    kropki w kształcie postaci na 2. stronie podsumowania) dokładna tablica ostatniego barwienia gry
+    (`HD::LastBackdropColouring`, ta sama co przy szybkim menu Esc) albo „bez zmiany”, gdy któraś pasuje do ≥ 30 % tła.
+  - Podświetlenie pieczęci V/X pod kursorem to osobny obrazek rysowany tą samą procedurą (`0x00622550`); brakowało jego
+    wersji HD. Zebrane obrazki z kampanii (pieczęcie, portrety odpraw 158×154, pergamin pytania, mapa kampanii
+    629×480, znaczniki) powiększone `upscale_menu_parts.py` — 50 plików `.hdp`. Zbieranie: bez animacji (ta sama
+    szerokość, inna wysokość w ciągu 2 s — napisy końcowe dały 5160 plików / 5,5 GB, przeniesione do
+    `hd\work\menu_parts_napisy_koncowe\`) i najwyżej 300 na sesję.
+- **Wydajność sprite'ów HD** (2026-11-17, v1.2.1): `Sprites::TryShadowBlit` (główna ścieżka sprite'ów HD przez procedury
+  gry `0x0062261C/0x006220EC`) liczona po 8 pikseli SSE2 (przezroczyste/ukryte zostają, cień przyciemnia pojedynczo, reszta
+  = piksel HD). Las misji z obozu: klatka pośrednia 11,2 → 7,1 ms, 86 → 140 kl./s. Do diagnozy: plik mapy linkera
+  (`/MAP`, `src\build\Release\winmm.map`) — adresy z `tools\stack_sample.ps1` („WINMM.dll(game dir)+0x…”) daje się nazwać.
 - **Linia zamachu** (zgłoszenie 2026-11-15: przy max zoomie pomarańczowa linia rysuje się gdzie indziej niż kursor,
   po zoomie „rysowanie zamachów chyba nie działa”): gest (wciśnięcie i ruch myszą w walce, `Manual.pdf` s. 27) nie
   daje się wywołać w teście w tle — test wstrzykuje tylko dane buforowane DirectInput. Od v1.1.7 hak `DrawLine`

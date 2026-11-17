@@ -468,6 +468,12 @@ public:
     STDMETHOD(GetDC)(HDC* out) override {
         if (!out) return DDERR_INVALIDPARAMS;
         std::lock_guard<std::recursive_mutex> lock(g.lock);
+        // The first GetDC moves the pixels into a DIB section - not while the game holds a Lock
+        // on them: its pointer would be freed memory (code review 2026-11-17).
+        if (!st.dib && lockCount > 0) {
+            *out = nullptr;
+            return DDERR_SURFACEBUSY;
+        }
         if (!PromoteToDib()) {
             *out = nullptr;
             return DDERR_GENERIC;
@@ -660,7 +666,10 @@ HRESULT Surface::DoBlt(const RECT* dstRect, Surface* src, const RECT* srcRect, D
     if (d.right <= d.left || d.bottom <= d.top) return DDERR_INVALIDRECT;
     // interface scale: the game's windows draw in coordinates of half the screen
     const bool uiScaled = dstRect && UiScale::Drawing() && g.primary && (this == g.primary || this == g.primary->back);
-    if (uiScaled) UiScale::ScaleRect(d);
+    if (uiScaled) {
+        UiScale::ScaleRect(d);
+        if (d.right <= d.left || d.bottom <= d.top) return DD_OK;     // left out (a dialog's backdrop render)
+    }
 
     if (flags & DDBLT_COLORFILL) {
         if (!fx) return DDERR_INVALIDPARAMS;
@@ -761,10 +770,12 @@ HRESULT Surface::DoBlt(const RECT* dstRect, Surface* src, const RECT* srcRect, D
         // The game asks for more than the source holds when a map is smaller than the view.
         // Real DirectDraw rejects the whole blit; show black around the valid part instead of
         // leaving stale pixels of earlier frames.
-        if (srcOutside && !keyed) {
+        // (Not for a copy within one surface: the fill would blacken the source before it is read.)
+        if (srcOutside && !keyed && src != this) {
             RECT whole = d;
             if (ClipToBounds(whole, w, h)) {
                 Fill16(buf(), whole, 0);
+                HD::Patch::OnOverwrite(buf(), whole);
             }
         }
         // keep the destination inside this surface
@@ -1573,6 +1584,20 @@ bool BackBits(const uint8_t*& bits, int& pitch, int& w, int& h) {
     pitch = b.pitch;
     w = b.w;
     h = b.h;
+    return true;
+}
+
+bool FillBack(const RECT& r, uint16_t colour) {
+    std::lock_guard<std::recursive_mutex> lock(g.lock);
+    if (!g.primary || !g.primary->back || !g.primary->back->st.bits) return false;
+    const Buf b = g.primary->back->buf();
+    RECT c = r;
+    if (!ClipToBounds(c, b.w, b.h)) return false;
+    for (int y = c.top; y < c.bottom; ++y) {
+        auto* row = reinterpret_cast<uint16_t*>(b.bits + static_cast<size_t>(y) * b.pitch) + c.left;
+        std::fill(row, row + (c.right - c.left), colour);
+    }
+    HD::Patch::OnOverwrite(b, c);
     return true;
 }
 

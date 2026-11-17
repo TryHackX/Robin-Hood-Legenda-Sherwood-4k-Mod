@@ -6,6 +6,7 @@
 #include "../timing.h"
 
 #include <MinHook.h>
+#include <emmintrin.h>
 #include <algorithm>
 #include <atomic>
 #include <cstdio>
@@ -1351,6 +1352,14 @@ bool TryShadowBlit(const uint16_t* src, uint16_t* dst, uint32_t cols, uint32_t r
     const auto* mask = reinterpret_cast<const uint16_t*>(kAddrSpanMask);
     const int32_t mul = static_cast<int16_t>(static_cast<uint16_t>(factor << 6));
     const bool cut = rec->masked;
+    // SSE2, 8 HD pixels at a time, for the usual keyed sprite (2026-11-17: in the forest of the
+    // camp's first mission the trees' HD frames took ~9 ms of an 11 ms frame here, pixel by pixel):
+    // transparent or hidden pixels stay, shadow pixels darken what lies below (one by one, they
+    // are few), the rest is the HD pixel - exactly what the loop below does for each pixel.
+    const __m128i vKey = _mm_set1_epi16(static_cast<short>(kKey));
+    const __m128i vShadowA = _mm_set1_epi16(static_cast<short>(kMarker));
+    const __m128i vShadowB = _mm_set1_epi16(static_cast<short>(marker & 0xFFFF));
+    const __m128i vAll = _mm_set1_epi16(-1);
     for (int y = 0; y < static_cast<int>(rows) * 2; ++y) {
         const int hy = 2 * sy + y;
         if (hy >= hd->h) break;
@@ -1358,7 +1367,36 @@ bool TryShadowBlit(const uint16_t* src, uint16_t* dst, uint32_t cols, uint32_t r
         const auto* low = reinterpret_cast<const uint16_t*>(sb.bits + static_cast<size_t>(sy + (y >> 1)) * sb.pitch) + sx;
         auto* out = reinterpret_cast<uint16_t*>(db.bits + static_cast<size_t>(dy + y) * db.pitch) + dx;
         const int n = (std::min)(static_cast<int>(cols) * 2, hd->w - 2 * sx);
-        for (int x = 0; x < n; ++x) {
+        int x = 0;
+        if (keyed && marker <= 0xFFFFu) {
+            const uint16_t* hp = row + 2 * sx;
+            for (; x + 8 <= n; x += 8) {
+                const __m128i p = _mm_loadu_si128(reinterpret_cast<const __m128i*>(hp + x));
+                __m128i skip = _mm_cmpeq_epi16(p, vKey);
+                if (cut) {
+                    const __m128i l4 = _mm_loadl_epi64(reinterpret_cast<const __m128i*>(low + (x >> 1)));
+                    skip = _mm_or_si128(skip, _mm_cmpeq_epi16(_mm_unpacklo_epi16(l4, l4), vKey));
+                }
+                const __m128i shadow = _mm_andnot_si128(skip, _mm_or_si128(_mm_cmpeq_epi16(p, vShadowA), _mm_cmpeq_epi16(p, vShadowB)));
+                const __m128i write = _mm_andnot_si128(_mm_or_si128(skip, shadow), vAll);
+                const int wm = _mm_movemask_epi8(write), sm = _mm_movemask_epi8(shadow);
+                if (wm) {
+                    auto* op = reinterpret_cast<__m128i*>(out + x);
+                    if (wm == 0xFFFF) {
+                        _mm_storeu_si128(op, p);
+                    } else {
+                        const __m128i o = _mm_loadu_si128(op);
+                        _mm_storeu_si128(op, _mm_or_si128(_mm_and_si128(write, p), _mm_andnot_si128(write, o)));
+                    }
+                }
+                if (sm) {
+                    for (int i = 0; i < 8; ++i) {
+                        if (sm & (1 << (2 * i))) out[x + i] = Darken565(out[x + i], mul, mask);
+                    }
+                }
+            }
+        }
+        for (; x < n; ++x) {
             const uint32_t p = row[2 * sx + x];
             if (p == kKey) {
                 if (keyed) continue;

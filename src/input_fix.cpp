@@ -140,10 +140,12 @@ namespace {
         }
         int internalW = 0, internalH = 0, monitorW = 0, monitorH = 0;
         WindowManager::GetInternalResolution(internalW, internalH);
-        WindowManager::GetMonitorResolution(monitorW, monitorH);
-        if (internalW <= 0 || monitorW <= 0 || internalW >= monitorW) {
+        WindowManager::GetMonitorResolution(monitorW, monitorH);    // the window's size
+        if (internalW <= 0 || monitorW <= 0 || internalW == monitorW) {
             return zoom;
         }
+        // both ways (2026-11-17, code review): 2560 internal in a 1920 screen or a smaller window
+        // moved the pointer up to 40 % slower on the screen than Windows' own pointer
         return static_cast<float>(internalW) / static_cast<float>(monitorW) * zoom;
     }
 

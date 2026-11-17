@@ -379,6 +379,22 @@ void OnGameTick(uint8_t* e) {
     }
 }
 
+void ClearOutsideLevel() {
+    uint8_t* e = Engine();
+    if (!e) return;
+    const float zr = F(e, kRenderZoom) > 0.01f ? F(e, kRenderZoom) : F(e, kZoom);
+    const float camX = F(e, kRenderCam), camY = F(e, kRenderCam + 4);
+    const float W = F(e, kViewport), H = F(e, kViewport + 4) - Strip();
+    const float lw = F(e, kLevelSize), lh = F(e, kLevelSize + 4);
+    if (zr < 0.01f || W < 1.0f || H < 1.0f || lw < 1.0f || lh < 1.0f || W > 16384.0f || H > 16384.0f) return;
+    // the level's right and bottom edges in frame pixels (the camera never lies left of / above it)
+    const float r = (lw - camX) * zr, b = (lh - camY) * zr;
+    const int right = static_cast<int>(std::ceil(r)), bottom = static_cast<int>(std::ceil(b));
+    const int w = static_cast<int>(W), h = static_cast<int>(H);
+    if (right > 0 && right < w) DDM::FillBack(RECT{ right, 0, w, h }, 0);
+    if (bottom > 0 && bottom < h) DDM::FillBack(RECT{ 0, bottom, (std::min)(right, w), h }, 0);
+}
+
 void OnWorldDrawn() {
     g_viewPending = false;
     uint8_t* e = Engine();

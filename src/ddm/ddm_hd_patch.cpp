@@ -249,6 +249,21 @@ namespace {
         std::snprintf(name, sizeof(name), "part_%016llx.raw", static_cast<unsigned long long>(key));
         const std::string path = dir + name;
         if (GetFileAttributesA(path.c_str()) != INVALID_FILE_ATTRIBUTES) return;
+        // The credits draw their scrolling text as one picture 400 wide that grows every frame: 5160
+        // files, 5.5 GB on 2026-11-15/16. A picture of the same width but another height than one
+        // collected in the last two seconds is such an animation (two seals side by side have the
+        // same size: both are kept), and a session collects at most 300 pictures.
+        static int s_collected = 0;
+        static LONG s_lastW = 0, s_lastH = 0;
+        static DWORD s_lastAt = 0;
+        const LONG pw = r.right - r.left, ph = r.bottom - r.top;
+        const DWORD now = GetTickCount();
+        const bool animation = pw == s_lastW && ph != s_lastH && now - s_lastAt < 2000;
+        s_lastW = pw;
+        s_lastH = ph;
+        s_lastAt = now;
+        if (animation || s_collected >= 300) return;
+        ++s_collected;
         CreateDirectoryA(dir.c_str(), nullptr);
         FILE* f = std::fopen(path.c_str(), "wb");
         if (!f) return;

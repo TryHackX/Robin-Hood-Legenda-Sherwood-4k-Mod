@@ -329,9 +329,21 @@ namespace {
     using PFN_ProcessInputEvent = uint8_t(__cdecl*)(uint32_t type, const DiRecord* rec);
     PFN_ProcessInputEvent o_ProcessInputEvent = nullptr;
 
+    // Esc closes the panel on the main thread (Poll); the same press may reach this input thread only
+    // afterwards - it opened the game's in-game menu too (code review 2026-11-17). Kept here, the
+    // next Esc going down within half a second is the panel's.
+    std::atomic<DWORD> g_escClosedAt{ 0 };
+
     uint8_t __cdecl Hook_ProcessInputEvent(uint32_t type, const DiRecord* rec) {
-        if ((type & 0xFF) == 1 && rec && (rec->data & 0x80) && g_open.load(std::memory_order_relaxed)) {
-            return 0;   // a key going down: the panel's (released keys still reach the game)
+        if ((type & 0xFF) == 1 && rec && (rec->data & 0x80)) {
+            if (g_open.load(std::memory_order_relaxed)) {
+                return 0;   // a key going down: the panel's (released keys still reach the game)
+            }
+            const DWORD closed = g_escClosedAt.load(std::memory_order_relaxed);
+            if (rec->ofs == 0x01 && closed && GetTickCount() - closed < 500) {     // DIK_ESCAPE
+                g_escClosedAt.store(0, std::memory_order_relaxed);
+                return 0;
+            }
         }
         return o_ProcessInputEvent(type, rec);
     }
@@ -618,6 +630,7 @@ void Poll() {
         return;
     }
     if (esc) {
+        g_escClosedAt.store(GetTickCount() | 1u, std::memory_order_relaxed);
         Open(false);
         return;
     }

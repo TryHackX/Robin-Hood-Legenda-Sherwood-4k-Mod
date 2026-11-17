@@ -269,6 +269,10 @@ namespace Timing {
         using PFN_RenderFrameHook = void(__fastcall*)(void* pGame, void* edx, int showCursor, int doPresent);
         PFN_RenderFrameHook o_RenderFrame = nullptr;
         constexpr uintptr_t kAddrTickRenderRet = 0x0050FF0A; // RHGame::Run, after its RenderFrame call
+        constexpr uintptr_t kAddrBackdropRenderRet = 0x0053B6D2; // 0x0053B6B0 (a dialog's backdrop), after RenderFrame(0, 0)
+        volatile bool     g_backdropRender = false;
+        volatile bool     g_lastRenderBackdrop = false;
+        volatile unsigned g_backdropRenders = 0;
         bool g_extraActive  = false; // the previous tick was drawn with extra frames
         bool g_tickSmoothed = false; // this tick's own frame showed interpolated positions
         bool g_tickExtras   = false; // this tick is expected to be drawn with extra frames
@@ -286,6 +290,18 @@ namespace Timing {
         void __fastcall Hook_RenderFrame(void* pGame, void* edx, int showCursor, int doPresent) {
             const bool fromTick = !g_inExtraFrame &&
                                   reinterpret_cast<uintptr_t>(_ReturnAddress()) == kAddrTickRenderRet;
+            if (!g_inExtraFrame && reinterpret_cast<uintptr_t>(_ReturnAddress()) == kAddrBackdropRenderRet) {
+                // a dialog's backdrop: drawn as the game draws it, nothing else of a frame here
+                g_backdropRender = true;
+                g_lastRenderBackdrop = true;
+                ++g_backdropRenders;
+                g_renderPhase = -1.0f;
+                if (DDM::TraceActive()) DDM::TraceMark("--- RenderFrame (a dialog's backdrop)");
+                o_RenderFrame(pGame, edx, showCursor, doPresent);
+                g_backdropRender = false;
+                return;
+            }
+            g_lastRenderBackdrop = false;
             bool overridden = false;
             if (MotionSmooth::IsEnabled() && (g_inExtraFrame || fromTick)) {
                 if (fromTick) {
@@ -835,6 +851,18 @@ namespace Timing {
 
     bool InExtraFrame() {
         return g_inExtraFrame;
+    }
+
+    bool InBackdropRender() {
+        return g_backdropRender;
+    }
+
+    unsigned BackdropRenderCount() {
+        return g_backdropRenders;
+    }
+
+    bool LastRenderWasBackdrop() {
+        return g_lastRenderBackdrop;
     }
 
     float RenderPhase() {

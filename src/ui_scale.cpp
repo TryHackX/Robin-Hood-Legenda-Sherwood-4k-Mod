@@ -278,15 +278,22 @@ namespace {
             g_dialogShown = true;
             MenuZoomDialog();
         } else if (from == 0x00510618) {
-            g_dialogShown = false;
-            g_missionFramed = true;
-            MenuZoomOff();
-            if (InMission()) {
-                ViewZoom::OnWorldDrawn();   // the world is drawn, the windows not yet: smooth zoom's copy
-                FollowMapDrag();        // the dragged map where the cursor is now, in every frame
-            } else {
-                g_camDragMap = nullptr;
-                g_winDragMap = nullptr;
+            if (InMission()) ViewZoom::ClearOutsideLevel();     // the world is drawn: nothing stale beside it
+            // A dialog renders the mission once for its backdrop (Timing::InBackdropRender): no frame
+            // the player sees - the dialog-after-a-dialog guard, the menu zoom, the smooth zoom's copy
+            // (it must stay the one of the frame on the screen, which the dialog takes as the level)
+            // and the dragged map stay as they are (code review 2026-11-17).
+            if (!Timing::InBackdropRender()) {
+                g_dialogShown = false;
+                g_missionFramed = true;
+                MenuZoomOff();
+                if (InMission()) {
+                    ViewZoom::OnWorldDrawn();   // the world is drawn, the windows not yet: smooth zoom's copy
+                    FollowMapDrag();        // the dragged map where the cursor is now, in every frame
+                } else {
+                    g_camDragMap = nullptr;
+                    g_winDragMap = nullptr;
+                }
             }
         }
         const bool scale = g_factor > 1 && InMission() && from == 0x00510618;
@@ -527,6 +534,7 @@ namespace {
             return o_DrawRect(mgr, edx, id, view ? rc : rect, colour, flags);
         }
         Transform(rc[0], rc[1], rc[2], rc[3]);
+        if (rc[2] <= rc[0] || rc[3] <= rc[1]) return 1;     // left out (a dialog's backdrop render)
         const uint32_t r = o_DrawRect(mgr, edx, id, rc, colour, flags);
         // lines as thick as the rest of the enlarged picture (the routine clips to the surface)
         for (int i = 1; i < g_factor; ++i) {
@@ -668,6 +676,45 @@ namespace {
     using PFN_DialogLoop = void(__fastcall*)(void* dlg, void* edx);
     PFN_DialogLoop o_DialogLoop = nullptr;
     volatile int   g_dialogLoopDepth = 0;
+
+    // 0x0053BB80 shows a dialog (thiscall(manager, dialog, loop, backdrop), ret 0xC; only from
+    // DoModal 0x00544B80): it puts the dialog up (0x0053C650), makes the backdrop when asked
+    // (0x0053B1F0) and runs the dialog loop when asked. It may start from inside the mission's window manager:
+    // a window's click handler runs during its Draw ("mission won - leave the level?", the mission
+    // chosen on the camp's map). The dialog and the cursor's background copies are not the
+    // mission's interface - with the enlarging still on, every blit of the dialog grew 2x about
+    // the screen centre: the parchment twice, the cursor's background put back 2x elsewhere
+    // (squares wherever the cursor went, the cursor itself never wiped; 2026-11-17, the camp's
+    // mission choice in a YouTuber's game). The mission's drawing state is set aside for the
+    // dialog and comes back for the rest of the mission's windows.
+    using PFN_ShowDialog = uint32_t(__fastcall*)(void* mgr, void* edx, void* dlg, uint32_t loop, uint32_t backdrop);
+    PFN_ShowDialog o_ShowDialog = nullptr;
+    bool g_nestedNoted = false;
+
+    uint32_t __fastcall Hook_ShowDialog(void* mgr, void* edx, void* dlg, uint32_t loop, uint32_t backdrop) {
+        const int savedDepth = g_drawDepth;
+        void* const savedWindow = g_curWindow;
+        const bool savedFixed = g_fixedAnchor;
+        if (savedDepth > 0 && !g_nestedNoted) {
+            g_nestedNoted = true;
+            Logger::Info("UiScale: a dialog opened while the mission's windows were drawn (window vtable %08X) - shown at its own size.",
+                         savedWindow && Readable(savedWindow, 4) ? *static_cast<const uint32_t*>(savedWindow) : 0u);
+        }
+        g_drawDepth = 0;
+        g_curWindow = nullptr;
+        g_fixedAnchor = false;
+        if (savedDepth > 0 && g_dialogLoopDepth == 0 && loop) {
+            // the level for the dialog's backdrop: the frame being drawn, before the dialog puts
+            // itself up and presents (the dialog loop below then keeps it)
+            DDM::HD::Menu::NoteDialogStart(true);
+            g_missionFramed = false;
+        }
+        const uint32_t r = o_ShowDialog(mgr, edx, dlg, loop, backdrop);
+        g_drawDepth = savedDepth;
+        g_curWindow = savedWindow;
+        g_fixedAnchor = savedFixed;
+        return r;
+    }
 
     void __fastcall Hook_DialogLoop(void* dlg, void* edx) {
         // The level is still on the screen - unless another dialog was shown last (the pages of
@@ -846,6 +893,8 @@ namespace {
         g_fnCenterCamera(engine, nullptr, pt);
     }
 
+    void NoteDragLevel();
+
     void __fastcall Hook_MapDrag(uint8_t* map, void* edx, const float* pointer) {
         if (!map || !pointer || !map[0x120]) {      // closed: the original does nothing either
             o_MapDrag(map, edx, pointer);
@@ -854,6 +903,7 @@ namespace {
         if (!map[0xB0]) {           // the drag starts
             g_camDragMap = nullptr;
             g_winDragMap = nullptr;
+            NoteDragLevel();
             g_winLast[0] = g_winLast[1] = -1e9f;
             float c[4];
             if (g_mapDragCamera && !g_edgePress.load(std::memory_order_relaxed) && MapContent(map, c) &&
@@ -879,11 +929,27 @@ namespace {
         if (map[0xB0]) g_winDragMap = map;
     }
 
+    // The map window a drag started on belongs to the level of that moment: after the mission ended
+    // (a quick load, a scripted end while the button was held) the pointer is freed memory - still
+    // committed, so Readable() passes (code review 2026-11-17). The level's surface and the map's
+    // vtable are compared before the map is touched again.
+    void* g_dragLevel = nullptr;
+    void NoteDragLevel() {
+        const auto* engine = *reinterpret_cast<const uint8_t* const*>(kAddrEnginePtr);
+        g_dragLevel = engine && Readable(engine + 0x48C4, 4) ? *reinterpret_cast<void* const*>(engine + 0x48C4) : nullptr;
+    }
+    bool DragMapAlive(const uint8_t* map) {
+        if (!map || !Readable(map, 0x130) || *reinterpret_cast<const uint32_t*>(map) != kMapVtable) return false;
+        const auto* engine = *reinterpret_cast<const uint8_t* const*>(kAddrEnginePtr);
+        return engine && Readable(engine + 0x48C4, 4) && g_dragLevel &&
+               *reinterpret_cast<void* const*>(engine + 0x48C4) == g_dragLevel;
+    }
+
     // every drawn frame, before the mission's windows: the dragged window where the cursor is now
     void FollowMapDrag() {
         uint8_t* map = g_winDragMap;
         if (!map) return;
-        if (!Readable(map, 0x130) || !map[0xB0] || !map[0x120]) {
+        if (!DragMapAlive(map) || !map[0xB0] || !map[0x120]) {
             g_winDragMap = nullptr;
             return;
         }
@@ -912,7 +978,7 @@ namespace {
         if (*reinterpret_cast<const uint16_t*>(ptr + 0xA4) & 0x40) return;     // still held
         uint8_t* const maps[2] = { g_camDragMap, g_winDragMap };
         for (uint8_t* map : maps) {
-            if (map && Readable(map, 0x130)) map[0xB0] = 0;
+            if (DragMapAlive(map)) map[0xB0] = 0;
         }
         g_camDragMap = nullptr;
         g_winDragMap = nullptr;
@@ -1086,8 +1152,27 @@ namespace {
         float w, h, ax, ay;
         ScreenSize(w, h);
         const void* win = g_curWindow;
-        NoteDrawn(win, l, t, r, b);
         float rc[4];
+        // A dialog's backdrop render (Timing::InBackdropRender): the windows in the middle of the
+        // screen are left out (an empty rectangle: the callers draw nothing). The dialog lies there,
+        // and the window that opened it had drawn the same parchment 2x there, which stuck out
+        // around the dialog shown 1.875x - a doubled title above "mission won - leave the level?" and
+        // "start the chosen mission?" (2026-11-17). The edges' windows stay as the player sees them.
+        if (Timing::InBackdropRender()) {
+            float cx = (l + r) * 0.5f, cy = (t + b) * 0.5f;
+            if (WindowRect(win, w, h, rc)) {
+                cx = (rc[0] + rc[2]) * 0.5f;
+                cy = (rc[1] + rc[3]) * 0.5f;
+            }
+            float mx = 0.0f, my = 0.0f;
+            Anchor(cx, cy, w, h, mx, my);
+            if (mx == w * 0.5f && my == h * 0.5f) {
+                r = l;
+                b = t;
+                return;
+            }
+        }
+        NoteDrawn(win, l, t, r, b);
         if (g_fixedAnchor) {
             ax = g_fixedAx;
             ay = g_fixedAy;
@@ -1283,7 +1368,8 @@ unsigned CursorSerial() {
 }
 
 bool Drawing() {
-    return g_factor > 1 && g_drawDepth > 0;
+    // never inside a dialog's loop: the dialog is no part of the mission's interface (Hook_ShowDialog)
+    return g_factor > 1 && g_drawDepth > 0 && g_dialogLoopDepth == 0;
 }
 
 void ScaleRect(RECT& rc) {
@@ -1346,6 +1432,12 @@ void Install() {
     if (!Hook(0x0053C390, kDialogLoop, sizeof(kDialogLoop), reinterpret_cast<void*>(&Hook_DialogLoop),
               reinterpret_cast<void**>(&o_DialogLoop))) {
         Logger::Warn("UiScale: dialog loop not recognised - dialogs in a mission are zoomed with their backdrop.");
+    }
+    // showing a dialog: push ebx / mov ebx,[esp+0Ch] / push esi / push edi / mov edi,[esp+10h]
+    static const uint8_t kShowDialog[] = { 0x53, 0x8B, 0x5C, 0x24, 0x0C, 0x56, 0x57, 0x8B, 0x7C, 0x24, 0x10 };
+    if (!Hook(0x0053BB80, kShowDialog, sizeof(kShowDialog), reinterpret_cast<void*>(&Hook_ShowDialog),
+              reinterpret_cast<void**>(&o_ShowDialog))) {
+        Logger::Warn("UiScale: dialog start not recognised - a dialog opened from a mission window may be drawn 2x.");
     }
     const auto& cfg = SherwoodConfig::Get();
     // the opened map: dragging on its picture moves the camera, its edges drag the window

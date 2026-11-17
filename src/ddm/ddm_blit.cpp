@@ -489,6 +489,13 @@ namespace {
 void SmoothPicture2x16(const Buf& dst, const RECT& dr, const Buf& src, const RECT& sr, const RECT& clip, uint32_t key) {
     const int sw = sr.right - sr.left, sh = sr.bottom - sr.top;
     if (sw <= 0 || sh <= 0 || clip.right <= clip.left || clip.bottom <= clip.top) return;
+    // Interface pictures are small. A big one (a screen-sized copy enlarged by mistake - the dialog
+    // opened from a mission window, code review 2026-11-17) would make an entry of 30-45 MB per
+    // build and push every HUD picture out of the cache: filtered directly, only the clip.
+    if (static_cast<int64_t>(sw) * sh > 512 * 512) {
+        SmoothSprite2x16(dst, dr, src, sr, clip, key, kNoColor, 256, nullptr, false, false);
+        return;
+    }
     const bool clamp = t_edgeClamp;
     SmoothEntry* e = nullptr;
     for (SmoothEntry* c : g_smooth) {
@@ -530,7 +537,16 @@ void SmoothPicture2x16(const Buf& dst, const RECT& dr, const Buf& src, const REC
         return;
     }
     g_smoothBytes -= e->bytes;
-    Build(*e, src);
+    try {
+        Build(*e, src);
+    } catch (const std::bad_alloc&) {
+        // no memory for the cache (a 32-bit process): every entry goes, this picture is filtered directly
+        for (SmoothEntry* c : g_smooth) delete c;
+        g_smooth.clear();
+        g_smoothBytes = 0;
+        SmoothSprite2x16(dst, dr, src, sr, clip, key, kNoColor, 256, nullptr, false, false);
+        return;
+    }
     e->bytes = EntryBytes(*e);
     g_smoothBytes += e->bytes;
     e->lastUse = ++g_smoothUse;

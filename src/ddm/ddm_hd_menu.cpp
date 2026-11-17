@@ -2,6 +2,8 @@
 #include "ddm_hd.h"
 #include "../config.h"
 #include "../logger.h"
+#include "../test_harness.h"
+#include "../timing.h"
 #include "../ui_scale.h"
 #include "../view_zoom.h"
 #include "../window_manager.h"
@@ -135,6 +137,32 @@ namespace {
             for (int x = 0; x < w; x += 2) {
                 if (rowIn && x >= crop.left && x < crop.right) continue;
                 vote(row + x);
+            }
+        }
+        // The vote guesses: a level colour seen mostly under the dialog's pictures got a colour of the
+        // picture as its "darkened" colour, and there the picture counted as level - the level showed
+        // through it in dots shaped like what lay below (the statistics page after a mission,
+        // 2026-11-17). The game darkens with a known per-pixel map (0x0053B330, the colour table
+        // made for it, bit-identical) or not at all: whichever of the two fits the backdrop clearly
+        // replaces the guesses.
+        {
+            const uint16_t* coloured = HD::LastBackdropColouring();
+            size_t nMap = 0, nSame = 0, nAll = 0;
+            for (int y = crop.top; y < crop.bottom; y += 2) {
+                const size_t row = static_cast<size_t>(y) * w;
+                for (int x = crop.left; x < crop.right; x += 2) {
+                    const uint16_t a = g_world[row + x], b = comp[row + x];
+                    ++nAll;
+                    nSame += a == b ? 1u : 0u;
+                    nMap += coloured && coloured[a] == b ? 1u : 0u;
+                }
+            }
+            if (nAll > 0) {
+                if (coloured && nMap >= nSame && nMap * 10 >= nAll * 3) {
+                    for (uint32_t c = 0; c < 65536; ++c) cand[c] = coloured[c];
+                } else if (nSame * 10 >= nAll * 3) {
+                    for (uint32_t c = 0; c < 65536; ++c) cand[c] = static_cast<uint16_t>(c);
+                }
             }
         }
         // The options opened from the in-game menu cover the shown part with a picture of their own:
@@ -786,12 +814,19 @@ bool GetBackdrop(Backdrop& out) {
     return true;
 }
 
-void NoteDialogStart() {
+void NoteDialogStart(bool fromBack) {
     g_worldValid = false;
     g_lupaValid = false;
     if (!UiScale::MenuZoomOn() || *reinterpret_cast<void* const*>(0x006C0FA8) == nullptr) return;
     const ULONGLONG t0 = GetTickCount64();
-    g_worldValid = DDM::CopyFront(g_world, g_worldW, g_worldH);
+    // The level must be the same picture as the world copy below. A dialog opened from a mission
+    // window (its click handler runs while the tick's frame is drawn) rendered the mission once for
+    // its backdrop: that render is in the back buffer, of the same tick as the world copy - the
+    // front buffer holds an older, perhaps in-between frame, and every pixel of the level differed
+    // from the world copy: the backdrop showed the level at its size beside the magnified part (the
+    // camp of Sherwood, 2026-11-17).
+    fromBack = fromBack || Timing::LastRenderWasBackdrop();
+    g_worldValid = fromBack ? DDM::CopyBack(g_world, g_worldW, g_worldH) : DDM::CopyFront(g_world, g_worldW, g_worldH);
     ViewZoom::View v;
     if (g_worldValid && ViewZoom::LastWorld(v) && v.w == g_worldW && v.h == g_worldH) {
         g_lupaWorld.assign(v.snap, v.snap + static_cast<size_t>(v.w) * v.h);
@@ -799,8 +834,22 @@ void NoteDialogStart() {
         g_lupa.snap = nullptr;
         g_lupaValid = true;
     }
-    Logger::Info("HD menu: dialog start - level copied%s (%u ms).", g_lupaValid ? " with the magnified world" : "",
-                 static_cast<unsigned>(GetTickCount64() - t0));
+    Logger::Info("HD menu: dialog start - level copied%s%s (%u ms).", fromBack ? " from the frame being drawn" : "",
+                 g_lupaValid ? " with the magnified world" : "", static_cast<unsigned>(GetTickCount64() - t0));
+    if (TestHarness::Enabled() && g_worldValid) {
+        // test mode: both pictures as the backdrop compares them (tools\out\harness\dialog_level.raw / _world.raw)
+        const std::string dir = GameDir() + "tools\\out\\harness\\";
+        auto dump = [&](const char* name, const std::vector<uint16_t>& px) {
+            FILE* f = std::fopen((dir + name).c_str(), "wb");
+            if (!f) return;
+            const uint32_t hdr[2] = { static_cast<uint32_t>(g_worldW), static_cast<uint32_t>(g_worldH) };
+            std::fwrite(hdr, sizeof(hdr), 1, f);
+            std::fwrite(px.data(), 2, px.size(), f);
+            std::fclose(f);
+        };
+        dump("dialog_level.raw", g_world);
+        if (g_lupaValid) dump("dialog_world.raw", g_lupaWorld);
+    }
 }
 
 int Describe(char* out, int size) {

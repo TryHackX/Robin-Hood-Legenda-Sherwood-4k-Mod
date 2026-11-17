@@ -33,6 +33,8 @@ namespace DDM {
     bool CopyBack(std::vector<uint16_t>& out, int& w, int& h);
     // ... its pixels in place (main thread: valid until the game draws again)
     bool BackBits(const uint8_t*& bits, int& pitch, int& w, int& h);
+    // ... rect `r` of it filled with one colour (main thread)
+    bool FillBack(const RECT& r, uint16_t colour);
 }
 
 namespace DDM::HD {
@@ -77,6 +79,10 @@ namespace DDM::HD {
     // bit 1: plain 2x sprites, bit 2: tinted polygons, bit 3: DirectDraw keyed 2x stretch blits.
     // Bit 4 (16): every picture of a tick shows the in-between frame of a sprite that has one.
     // Bit 5 (32): ground overlays (chimney smoke) are drawn as animated water (HDWater=2/3).
+    // Main thread: the colour table (RGB565 -> RGB565) of the game's last colouring of a dialog's
+    // backdrop (0x0053B330, hue and factor as the game passed them), nullptr when none was made yet.
+    const uint16_t* LastBackdropColouring();
+
     void SetDebugFlags(unsigned flags);
     unsigned DebugFlags();
 }

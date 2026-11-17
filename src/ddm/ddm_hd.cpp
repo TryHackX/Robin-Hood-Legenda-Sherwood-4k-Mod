@@ -842,11 +842,20 @@ namespace {
         return t.map.data();
     }
 
+    // the last colouring (the HD menu's dialog backdrop compares the level with it - LastBackdropColouring)
+    uint32_t g_colourHue = 0;
+    float    g_colourFactor = 0.0f;
+    bool     g_colourKnown = false;
+
     uint8_t __cdecl Hook_Colorize(int id, uint32_t hue, float factor) {
         auto* mgr = *reinterpret_cast<uint8_t* const*>(kAddrSurfaceManager);
         if (!mgr || *reinterpret_cast<const uint16_t*>(mgr + 0x10C) != 16 || !Diag::IsMainThread()) {
+            g_colourKnown = false;
             return o_Colorize(id, hue, factor);     // 15-bit colour: the game's own way
         }
+        g_colourHue = hue & 0xFFFF;
+        g_colourFactor = factor;
+        g_colourKnown = true;
         LARGE_INTEGER q0{}, q1{}, qf{};
         QueryPerformanceCounter(&q0);
         alignas(8) uint8_t info[64] = {};           // the game's lock record (24 bytes used)
@@ -943,6 +952,7 @@ namespace {
             // the rectangles are cut to the frame here, the source by the same share.
             float r[4] = { dstRect[0], dstRect[1], dstRect[2], dstRect[3] };
             UiScale::ScaleRectF(r);
+            if (r[2] <= r[0] || r[3] <= r[1]) return 1;     // left out (a dialog's backdrop render)
             int fw = 0, fh = 0;
             WindowManager::GetInternalResolution(fw, fh);
             const bool inside = r[0] >= 0.0f && r[1] >= 0.0f && r[2] <= static_cast<float>(fw) && r[3] <= static_cast<float>(fh);
@@ -1002,6 +1012,10 @@ bool TryBackgroundBlit(const Buf& dst, const RECT& d, const RECT& clip,
     if (!lookup && lockGeneration != g_lockGen && now - g_lastVerifyMs >= 500) {
         lookup = true;
     }
+    // Another surface magnified 2x that is no level picture: drawn as the game draws it, and the
+    // state of the level's HD picture stays - forgetting it here cost the next background blit a
+    // new hash and base copy and reset the water loops (code review 2026-11-17).
+    if (identity != g_identity && !IsLevelBackground(src)) return false;
     if (lookup) {
         const bool sameSurface = identity == g_identity && g_lookupVariant == g_variant;
         g_lockGen = lockGeneration;
@@ -1788,6 +1802,10 @@ bool MakeGroundDifference(GroundAnim& anim, const Buf& src, int mx, int my, int1
     return false;
 }
 } // namespace
+
+const uint16_t* LastBackdropColouring() {
+    return g_colourKnown ? ColorizeTable(g_colourHue, g_colourFactor) : nullptr;
+}
 
 void OnGameTick() {
     if (!SherwoodConfig::Get().hdBackgrounds) return;

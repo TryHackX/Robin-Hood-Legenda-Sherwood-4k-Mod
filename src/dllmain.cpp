@@ -32,7 +32,7 @@
 namespace {
     bool g_isGameProcess = false;
     PVOID g_vehHandle = nullptr;
-    std::atomic<bool> g_crashLogged{false};
+    std::atomic<int> g_crashLogs{0};     // exceptions logged so far (the first few are)
 
     bool ResolveModuleOffset(uintptr_t addr, char* outBuf, size_t outSize) {
         HMODULE mod = nullptr;
@@ -72,11 +72,27 @@ namespace {
             default: return EXCEPTION_CONTINUE_SEARCH;
         }
 
-        if (g_crashLogged.exchange(true, std::memory_order_acq_rel)) {
+        const uintptr_t eip = reinterpret_cast<uintptr_t>(ep->ExceptionRecord->ExceptionAddress);
+        // This handler sees every exception first, also the ones caught afterwards: the mod's own
+        // guarded reads (__try around game memory that may be gone) are expected and never logged,
+        // and the first few others are (one of them used to be the only report - a later real
+        // crash went unlogged, code review 2026-11-17).
+        {
+            HMODULE self = nullptr;
+            if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                   reinterpret_cast<LPCSTR>(&CrashVectoredHandler), &self) &&
+                self && code == EXCEPTION_ACCESS_VIOLATION) {
+                HMODULE at = nullptr;
+                if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                       reinterpret_cast<LPCSTR>(eip), &at) && at == self) {
+                    return EXCEPTION_CONTINUE_SEARCH;
+                }
+            }
+        }
+        if (g_crashLogs.fetch_add(1, std::memory_order_acq_rel) >= 3) {
             return EXCEPTION_CONTINUE_SEARCH;
         }
 
-        const uintptr_t eip = reinterpret_cast<uintptr_t>(ep->ExceptionRecord->ExceptionAddress);
         HMODULE mod = nullptr;
         char modPath[MAX_PATH] = {};
         const char* modName = "<unknown>";
@@ -100,12 +116,12 @@ namespace {
             const ULONG_PTR op = ep->ExceptionRecord->ExceptionInformation[0];
             const ULONG_PTR addr = ep->ExceptionRecord->ExceptionInformation[1];
             const char* opStr = (op == 0) ? "READ" : (op == 1) ? "WRITE" : (op == 8) ? "DEP" : "OTHER";
-            Logger::Error("FATAL %s (0x%08lX) %s 0x%08lX at %s+0x%08X (EIP=0x%08X, TID=%lu)",
+            Logger::Error("EXCEPTION %s (0x%08lX) %s 0x%08lX at %s+0x%08X (EIP=0x%08X, TID=%lu)",
                           codeName, code, opStr, static_cast<unsigned long>(addr),
                           modName, static_cast<uint32_t>(rva), static_cast<uint32_t>(eip),
                           GetCurrentThreadId());
         } else {
-            Logger::Error("FATAL %s (0x%08lX) at %s+0x%08X (EIP=0x%08X, TID=%lu)",
+            Logger::Error("EXCEPTION %s (0x%08lX) at %s+0x%08X (EIP=0x%08X, TID=%lu)",
                           codeName, code, modName, static_cast<uint32_t>(rva),
                           static_cast<uint32_t>(eip), GetCurrentThreadId());
         }

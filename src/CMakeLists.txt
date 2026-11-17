@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(SherwoodEngineFix VERSION 1.2.0 LANGUAGES C CXX)
+project(SherwoodEngineFix VERSION 1.2.1 LANGUAGES C CXX)
 
 # Enforce 32-bit (x86) architecture
 if(NOT CMAKE_SIZEOF_VOID_P EQUAL 4)
@@ -84,3 +84,7 @@ set_target_properties(winmm PROPERTIES
     OUTPUT_NAME "winmm"
     PREFIX ""
 )
+
+# A linker map next to the DLL (build folder): addresses from stack samples
+# (tools\stack_sample.ps1, "WINMM.dll(game dir)+0x...") resolve to function names.
+target_link_options(winmm PRIVATE /MAP)

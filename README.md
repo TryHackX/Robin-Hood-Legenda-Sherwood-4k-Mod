@@ -17,7 +17,10 @@ original DirectDraw wrapper, plus optional HD graphics prepared with AI models f
 - Extra frames between game ticks (the game runs its logic 25 times per second): smooth map scrolling, smooth cursor,
   smooth movement of characters and projectiles — at the monitor's refresh rate; game speed unchanged.
 - The enlarged interface is filtered once and kept (it was filtered again in every frame): a frame at 2560×1440 costs
-  about 4.5 ms of processor time instead of 10 ms, so the game holds the monitor's refresh rate.
+  about 4.5 ms of processor time instead of 10 ms, so the game holds the monitor's refresh rate. HD characters,
+  trees and objects are drawn 8 pixels at a time (SSE2): on wooded levels a frame takes ~7 ms instead of ~11 ms
+  (140 instead of 86 frames a second).
+- If the graphics driver resets (update, sleep, a GPU hiccup), Direct3D 11 comes back by itself after a few seconds.
 - Input fixes (high polling rate mice, mouse re-acquired after Alt+Tab), audio fixes (hearing range on wide screens),
   hang watchdog, removed thread deadlock when scrolling with the screen edge.
 
@@ -52,7 +55,9 @@ original DirectDraw wrapper, plus optional HD graphics prepared with AI models f
 - Minimap in the top-right corner; dragging on it moves the camera, the map window is moved by its edges.
 - Menus and game dialogs (briefing, Esc menu, save/load, options) shown full-screen instead of a small 1024×768 box
   in the middle — **in HD**: menu backgrounds upscaled by AI (HD pack), and the letters, buttons, the briefing's
-  parchment, seals and portraits drawn from HD versions (`hd\fonts\`, `hd\menu_parts\`, in the mod archive). Optional
+  parchment, seals (also highlighted under the cursor), portraits and the campaign map drawn from HD versions
+  (`hd\fonts\`, `hd\menu_parts\`, in the mod archive). Questions asked during a mission (mission won, start the chosen
+  mission in the Sherwood camp) show the level behind them as it was on the screen. Optional
   **remade menu backgrounds** that fill the whole widescreen (`hd\menu\remake\`, made with `tools\hd\menu_remake.py`
   from pictures painted by an image AI; F10 → "MENU W HD"). The in-game menu (Esc) opens in ~0.08 s instead of ~0.4 s.
 - **In-game settings panel — F10** (HD graphics, interface, minimap, smooth zoom, menus, VSync, filter, FPS counter,
@@ -188,8 +193,8 @@ the `ultrasharp` variant and the icons are for non-commercial use), RIFE by hzwe
 - The engine itself has only three zoom levels (0.5 / 1 / 2); the smooth zoom magnifies its 1.0 or 2.0 picture. Below
   2.0 the original pixels are shown (HD pictures need 2.0; since 1.1.7 they are enlarged with a sharper filter), above
   2.0 the HD picture is magnified further.
-- Reported, not reproduced yet: after choosing the next mission in the Sherwood camp the screen may stop refreshing.
-  A saved game from the camp (`DATA\Savegame`) and `SherwoodFix.log` would help.
+- On small levels (smaller than the screen at zoom 1.0) the very first briefing of a mission shows the level behind
+  it at its own size with black bands; from the first moment of play the level fills the screen as usual.
 
 ## Building from source
 

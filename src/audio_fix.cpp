@@ -131,9 +131,23 @@ namespace {
         }
     }
 
+    // the level the object was seen in (the engine's map surface, E+0x48C4): another level may have
+    // another sound object - the old one is only written to again after the game set its range anew
+    void* g_hearingLevel = nullptr;
+    void* CurrentLevel() {
+        const auto* engine = *reinterpret_cast<const uint8_t* const*>(0x006C0FA8);
+        if (!engine) return nullptr;
+        __try {
+            return *reinterpret_cast<void* const*>(engine + 0x48C4);
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            return nullptr;
+        }
+    }
+
     void __fastcall Hook_SetHearing(uint8_t* self, void* edx, float factor) {
         g_OrigSetHearing(self, edx, factor);
         g_hearingObj = self;
+        g_hearingLevel = CurrentLevel();
         for (int i = 0; i < 4; ++i) {
             g_hearingBase[i] = *reinterpret_cast<const float*>(self + kHearingOffsets[i]);
         }
@@ -200,8 +214,9 @@ void Initialize() {
 }
 
 void OnGameTick() {
-    // the internal resolution may have changed since the game last set the range
-    if (g_hearingObj && HearingScale() != g_hearingApplied) {
+    // the internal resolution may have changed since the game last set the range - written only
+    // while the object belongs to the level running now (code review 2026-11-17)
+    if (g_hearingObj && HearingScale() != g_hearingApplied && g_hearingLevel && CurrentLevel() == g_hearingLevel) {
         ApplyHearing();
     }
 }

@@ -988,11 +988,29 @@ void Frame(const uint8_t* bits, int pitch, int w, int h) {
         }
     }
 
+    // A lost device (driver update, a GPU reset, sleep) used to leave the GDI fallback for the rest
+    // of the session - no menu zoom, no HD layers, no smooth zoom (code review 2026-11-17). Direct3D 11
+    // is tried again after 2, 5, 15 and 60 seconds.
+    static DWORD retryAt = 0;
+    static int retries = 0;
+    if (g_backend == Backend::GDI && retryAt != 0 && GetTickCount() - retryAt < 0x80000000u) {
+        retryAt = 0;
+        if (InitD3D11()) {
+            g_backend = Backend::D3D11;
+            Logger::Info("Present: Direct3D 11 is back (attempt %d).", retries);
+        } else {
+            ReleaseD3D();
+            static const DWORD kWait[] = { 2000, 5000, 15000, 60000 };
+            if (retries < 4) retryAt = (GetTickCount() + kWait[retries++]) | 1u;
+        }
+    }
     if (g_backend == Backend::D3D11) {
         if (!FrameD3D11(bits, pitch, w, h)) {
-            Logger::Warn("Present: Direct3D 11 frame failed - switching to GDI.");
+            Logger::Warn("Present: Direct3D 11 frame failed - GDI for now, Direct3D 11 again in 2 s.");
             ReleaseD3D();
             g_backend = Backend::GDI;
+            if (retries < 4) retryAt = (GetTickCount() + 2000) | 1u;
+            ++retries;
         }
         if (g_capturePath) { // the frame ended before the dump point
             TestHarness::ShotDone(false, 0, 0);
@@ -1000,7 +1018,7 @@ void Frame(const uint8_t* bits, int pitch, int w, int h) {
         }
     }
     if (g_backend == Backend::GDI) {
-        UiScale::MenuZoomUnavailable();
+        if (retryAt == 0) UiScale::MenuZoomUnavailable();      // for good: the menu zoom needs Direct3D 11
         FrameGDI(bits, pitch, w, h);
     }
 }

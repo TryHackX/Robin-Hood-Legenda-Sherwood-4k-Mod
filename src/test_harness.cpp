@@ -261,6 +261,13 @@ namespace {
                 if (i > 4 && camState != 3 && camState != 4) break;
             }
             Ack(seq, "ok zoom=%.2f", zoom);
+        } else if (!std::strcmp(cmd, "win")) {
+            // win the running mission through the game's console (reaches the camp of Sherwood);
+            // it changes the profile's campaign - back up DATA\Savegame first (tools\save_backup.ps1)
+            g_mainCmd.store(3);
+            const DWORD t0 = GetTickCount();
+            while (g_mainCmd.load() != 0 && GetTickCount() - t0 < 3000) Sleep(5);
+            Ack(seq, g_mainCmd.exchange(0) != 0 ? "err no game tick in 3 s (menu open?)" : "ok");
         } else if (!std::strcmp(cmd, "wheel")) {
             int notches = 0;
             if (std::sscanf(args, "%d", &notches) != 1 || notches == 0) { Ack(seq, "err usage: wheel NOTCHES"); return; }
@@ -634,6 +641,21 @@ void OnGameTick() {
     if (!g_enabled) return;
     const int cmd = g_mainCmd.load(std::memory_order_relaxed);
     if (cmd == 0) return;
+    if (cmd == 3) {
+        // The game's developer console (created on demand by 0x0045BBE0, which returns it; the
+        // mission start puts the game object into its first field at 0x0050F850). Its command
+        // WIN = 0x0045CDA0, __thiscall(console, int, int), ret 8: "Mission won !" and the
+        // campaign goes on as after a won mission (in the camp of Sherwood after mission 1).
+        using PFN_GetConsole = void* (__cdecl*)();
+        using PFN_ConsoleCommand = void(__thiscall*)(void* console, int, int);
+        void* console = reinterpret_cast<PFN_GetConsole>(0x0045BBE0)();
+        if (console && *reinterpret_cast<void**>(console)) {
+            reinterpret_cast<PFN_ConsoleCommand>(0x0045CDA0)(console, 0, 0);
+            Logger::Warn("TEST MODE: console command WIN - the mission counts as won.");
+        }
+        g_mainCmd.store(0);
+        return;
+    }
     // RHEngine::ZoomInRequest 0x004DBE40 / ZoomOutRequest 0x004DBDB0: __thiscall(E, Event*), ret 4;
     // [evt+8] != 0 = zoom about the screen centre instead of the cursor (docs\ZOOM_CAMERA.md)
     using PFN_ZoomRequest = void(__thiscall*)(void* engine, void* evt);

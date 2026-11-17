@@ -299,9 +299,23 @@ Do sprawdzenia przy okazji: czy miganie ikon akcji ma teraz właściwe tempo; po
      zoomie (punkty śladu w pikselach klatki), portrety bez przeskakiwania (decyzja układu trzymana dla tej samej liczby
      okien), okno bez ramek mniejsze niż ekran (`WindowWidth/Height/X/Y`). Audyt: test ciągły 4 min z interfejsem —
      0 błędów, 0 ostrzeżeń, ~143 kl./s (długie „tiki” = okna gry otwarte w teście). Opis: `docs\HD_MODE.md` §7.
-     ☐ Ekran „zamarza” po wyborze misji w obozie Sherwood (3.jpg: kawałki pergaminu i kursora zostają) — nie do
-     odtworzenia w teście w tle (kampania gracza w 1. misji); potrzebny zapis z obozu i log od gracza.
+     ✔ Ekran „zamarza” po wyborze misji w obozie Sherwood (3.jpg) — v1.2.1.
      ☐ Linia zamachu: potwierdzenie na prawdziwej myszy (w teście w tle pędzel nie rysuje). ☐ HD poniżej zoomu 2.
+   - ✔ **v1.2.1 — audyt kodu i gry** (2026-11-17, „zrób jeszcze raz audyt… chcemy mieć porządny remake”): dwa przeglądy
+     kodu (renderer; haki/wejście/okno — wszystkie ~45 haków na `Game.exe` zgodne z konwencją i `ret N`) + kampania
+     w tle do obozu komendą konsoli gry `win` (odtworzenie zgłoszenia youtubera). Poprawione: okna dialogowe otwierane
+     z okna misji (kwadraty za kursorem, pergamin ×2, tło sklejone z dwóch skal, śmieci poza poziomem przy zoomie 1),
+     kropki w przyciemnionym tle podsumowania misji, podświetlone pieczęcie i 27 nowych obrazków menu w HD (mapa
+     kampanii, portrety odpraw, pergamin pytania), sprite'y HD po 8 pikseli (las: 86 → 140 kl./s), powrót Direct3D 11
+     po resecie sterownika, kursor tej samej prędkości co w Windows także przy 2560 na 1080p i w mniejszym oknie, Esc
+     zamykające F10 nie otwiera menu gry, przeciągana minimapa po końcu misji, zasięg słyszenia po zmianie poziomu,
+     `GetDC` na zablokowanej powierzchni, wypełnienie przy kopii w jednej powierzchni, pamięć podręczna powiększeń
+     (limit i brak pamięci), rejestrator wyjątków (nie zużywa jedynego raportu na wyjątki obsłużone). Test ciągły 4 min
+     z interfejsem: PASS, 0 błędów, 143,5 kl./s. Opis: `docs\HD_MODE.md` §7. Kopia stanu kampanii z obozu do testów:
+     `backups\savegame_camp_test_2026-11-17\` (zapisy gracza przywrócone).
+     ☐ Pierwsza odprawa na poziomie mniejszym od ekranu: tło jeszcze bez lupy (czarne pasy). ☐ Pozostałe z przeglądu
+     (niski priorytet): cienie łatek menu rozpoznawane tylko po adresie, stan lupy przy szybkim wczytaniu tego samego
+     poziomu, panel F10 w menu głównym po misji uważa, że misja trwa.
    - ✔ **Wydanie na GitHubie** (2026-11-14): v1.0.0 (README po angielsku), paczki grafiki HD jako osobne wydanie
      (7 plików ZIP < 2 GB; magazyn postaci w dwóch częściach — mod czyta `sprites.dat` + `sprites.dat.2`).
 5. ◐ Klatki pośrednie animacji postaci (prośba użytkownika; „jak się nie uda, trudno"): eksperyment zakończony

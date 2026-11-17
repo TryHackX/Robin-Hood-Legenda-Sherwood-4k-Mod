@@ -32,6 +32,12 @@ namespace ViewZoom {
     void OnGameTick(uint8_t* engine);
     // UiScale, main thread: the mission's world is drawn, its windows are not yet
     void OnWorldDrawn();
+    // UiScale, main thread, at the same moment (every mission frame, also a dialog's backdrop): the
+    // frame beside / below a level smaller than the view black. At the engine's zoom 1.0 on a level
+    // smaller than the screen (the camp of Sherwood: 1920x1088) the engine draws only the level and
+    // leaves the rest as it was - pieces of earlier frames at zoom 2.0 (the stream, magnified) stayed
+    // there and showed in dialog backdrops (YouTuber's report 2026-11-17) and without the smooth zoom.
+    void ClearOutsideLevel();
 
     // presenter, main thread: the magnification for the frame being presented (once per frame)
     struct View {

@@ -688,8 +688,28 @@ w górę), resztę powiększa prezenter — **tylko świat**:
     (58 z 63 zebranych przez grę obrazków ma klucz z pliku), `--write --sizes …` zapisuje je jako `part_*.raw` dla
     `upscale_menu_parts.py`; przegląd grup: `tools\hd\res_sheet.py`, struktura: `tools\hd\res_parse.py`. Dodane: 5 zamków
     × 4 (szkic + 3 klatki poświaty), 12 znaczników ścieżek, 10 strzałek wojsk szeryfa, czerwona flaga (niebieskiej
-    flagi nie ma w pliku jako osobnego obrazka). W pliku jest 1126 obrazków (~150 MB w HD) — reszta (m.in. 75 klatek
-    mówiących głów 120×160) czeka.
+    flagi nie ma w pliku jako osobnego obrazka). W pliku jest 1126 obrazków — resztę zrobiła v1.2.4 (niżej).
+- **Interfejs misji z obrazków HD** (2026-11-17, v1.2.4; „Tak, zrób” + „te małe też”): wszystkie obrazki z
+  `DATA\Interface\Default.res` o bokach ≥ 4 (bez 6 pełnoekranowych teł menu, które mają własne HD) powiększone
+  `upscale_menu_parts.py` (sgi; 631 + 216 nowych, razem 939 plików `.hdp`, 89 MB; małe obrazki: korekta kolorów
+  liczona na wersji z ramką, bo jej rozmycie potrzebuje ≥ 6 pikseli). Interfejs ×2 rysuje obrazki przez
+  `SmoothPicture2x16` (`ddm_blit.cpp`, pamięć podręczna powiększeń): przy budowie wpisu `BuildFromHd` pyta
+  `HD::Patch::InterfacePicture` (klucz treści `Fnv` jak w menu, `LoadPicture` z pamięcią odpowiedzi) i robi przebiegi
+  wpisu z obrazka HD — pełne piksele (alfa ≥ ~248) jako kolor, brzeg jako sumy z pokryciem w szesnastkach, sam cień
+  jako przyciemnienie do 50 %. Tylko dla klucza koloru 0x07C0 albo rysowania bez klucza i obrazka bez przezroczystości.
+  Obrazki zmienne (zdrowie, liczby) dostają nowy klucz — bez wersji HD zostaje filtr. Polecenie testowe `patch`
+  pokazuje `ui=znalezione/zapytane`. W obozie: 18/18 obrazków interfejsu z HD, żywopłot bez szwów.
+- **Tło okna wczytywania po wczytaniu gry** (2026-11-17, v1.2.4; błąd od 1.2.2): `OnScreenFill` (pełne wypełnienie
+  ekranu przy wczytywaniu innego poziomu) zeruje płótna i kopię źródła `g_srcCrop`, ale skrót „ten sam obrazek co
+  ostatnio — tylko zmienione piksele” w `OnScreenCopy` (statyczne `lastPic`/`lastBase`) zostawał: czarne otoczenie
+  obrazka menu równało się wyzerowanej kopii, więc wypełniał się tylko środek — remake okna wczytywania / zapisu był
+  widoczny tylko w ramce 1024×485. Teraz `g_fullRefill` po `OnScreenFill` = pełne wypełnienie płócien przy następnej
+  kopii. Sprawdzone: Lincoln → wczytanie obozu → okno wczytywania na cały ekran.
+- **Pasy przy wczytywaniu poziomów** (2026-11-17, pytanie użytkownika „czy wszystkie mapy wczytują się bez pasa”):
+  pas może dać tylko poziom węższy / niższy od ekranu przy zoomie 1 — obóz Sherwood 1920×1088, Derby 1920×2752,
+  Nottingham 2304×3520, rozstaje 1408×960 i 1792×1152 (Leicester, Lincoln i York zawsze wypełniają ekran; rozmiary z
+  nagłówków `.map`). `tools\check_level_bands.ps1` wczytuje po kolei zapisy z listy (`-Scroll N` = starsze) i mierzy
+  czarny pasek przy prawej krawędzi i nad żywopłotem: na zapisach youtubera (cała kampania) bez pasa po wczytaniu.
 - **Wydajność sprite'ów HD** (2026-11-17, v1.2.1): `Sprites::TryShadowBlit` (główna ścieżka sprite'ów HD przez procedury
   gry `0x0062261C/0x006220EC`) liczona po 8 pikseli SSE2 (przezroczyste/ukryte zostają, cień przyciemnia pojedynczo, reszta
   = piksel HD). Las misji z obozu: klatka pośrednia 11,2 → 7,1 ms, 86 → 140 kl./s. Do diagnozy: plik mapy linkera

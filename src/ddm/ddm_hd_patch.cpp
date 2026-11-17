@@ -919,12 +919,42 @@ double TakeTimeUs() {
     return us;
 }
 
+namespace {
+    unsigned g_uiAsked = 0, g_uiFound = 0;
+    bool     g_uiNoted = false;
+}
+
+bool InterfacePicture(const Buf& src, const RECT& r, int& w2, int& h2, const uint32_t*& bgra, const uint8_t*& shade) {
+    if (!SherwoodConfig::Get().hdMenu || !Diag::IsMainThread()) return false;
+    const int w = r.right - r.left, h = r.bottom - r.top;
+    // the files are made for pictures with both sides >= 4 (as the menus'); a picture that changes
+    // (health, numbers) gets a new key at every change - the lookups stay few: the caller asks only
+    // when it builds its cached 2x version, and the answer per key is kept (LoadPicture)
+    if (w < 4 || h < 4 || static_cast<int64_t>(w) * h > 640 * 480 || r.left < 0 || r.top < 0 || r.right > src.w ||
+        r.bottom > src.h || g_pics.size() > 50000) {
+        return false;
+    }
+    ++g_uiAsked;
+    const Picture* p = LoadPicture(Fnv(src, r), w, h);
+    if (!p) return false;
+    ++g_uiFound;
+    if (!g_uiNoted) {
+        g_uiNoted = true;
+        Logger::Info("HD menu parts: the mission interface draws its pictures from them too (first: %dx%d).", w, h);
+    }
+    w2 = p->w2;
+    h2 = p->h2;
+    bgra = p->bgra.data();
+    shade = p->shade.data();
+    return true;
+}
+
 int Describe(char* out, int size) {
     return std::snprintf(out, size,
                          "shadows=%u created=%u resets=%u copies=%u glyphs=%u glyphsNoHd=%u pictures=%u picturesNoHd=%u "
-                         "picLoaded=%u picCollected=%u active=%d",
+                         "picLoaded=%u picCollected=%u ui=%u/%u active=%d",
                          static_cast<unsigned>(g_shadows.size()), g_created, g_resets, g_copies, g_glyphs, g_glyphsNoHd,
-                         g_pictures, g_picturesNoHd, g_picLoaded, g_picCollected, Active() ? 1 : 0);
+                         g_pictures, g_picturesNoHd, g_picLoaded, g_picCollected, g_uiFound, g_uiAsked, Active() ? 1 : 0);
 }
 
 } // namespace DDM::HD::Patch

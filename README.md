@@ -51,8 +51,12 @@ original DirectDraw wrapper, plus optional HD graphics prepared with AI models f
 **Interface**
 - Mission interface 2× larger (each window grows from its own screen corner, clicks land where you see them), with an
   **HD font**: the letters of tooltips, messages, money and names come from upscaled versions of the game's own fonts
-  (`hd\fonts\`, included in the mod archive) instead of being magnified 2×. The hedge along the bottom runs along the
-  whole width with any number of characters; sword swings (hold the left button and draw) work at every zoom.
+  (`hd\fonts\`, included in the mod archive) instead of being magnified 2×. **Its pictures are HD too** (since
+  1.2.4): the portraits on their parchments, action and item icons, buttons, the hedge, the minimap's frame and the
+  corner icons come from AI-upscaled versions of every picture in the game's interface file
+  (`DATA\Interface\Default.res` → `hd\menu_parts\`, in the mod archive) instead of being smoothed 2×. The hedge along
+  the bottom runs along the whole width with any number of characters; sword swings (hold the left button and draw)
+  work at every zoom.
 - Minimap in the top-right corner; dragging on it moves the camera, the map window is moved by its edges.
 - Menus and game dialogs (briefing, Esc menu, save/load, options) shown full-screen instead of a small 1024×768 box
   in the middle — **in HD**: menu backgrounds upscaled by AI (HD pack), and the letters, buttons, the briefing's
@@ -87,7 +91,7 @@ You need three things from the **Releases** page (right side of the repository p
 under **Assets** — not "Source code (zip)" / "Source code (tar.gz)": GitHub adds those two to every release by
 itself, they hold only the source code and are not needed to play.
 - [**the mod — newest version**](https://github.com/TryHackX/Robin-Hood-Legenda-Sherwood-4k-Mod/releases/latest):
-  `SherwoodEngineFix-v….zip` (about 33 MB),
+  `SherwoodEngineFix-v….zip` (about 63 MB),
 - [**HD graphics pack 1**](https://github.com/TryHackX/Robin-Hood-Legenda-Sherwood-4k-Mod/releases/tag/hd-pack-1):
   the HD pictures (7 archives, 3 of them required),
 - optional: [**remade menu backgrounds 2**](https://github.com/TryHackX/Robin-Hood-Legenda-Sherwood-4k-Mod/releases/tag/menu-remake-2)

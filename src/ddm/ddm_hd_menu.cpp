@@ -328,6 +328,9 @@ namespace {
     // what the canvases were made from: the source pixels of the shown part, and its key
     std::vector<uint16_t> g_srcCrop;
     uint64_t g_curKey = 0, g_curInner = 0;
+    // the canvases were emptied (OnScreenFill): the next copy fills all of them, not only the pixels
+    // that changed since the copy before
+    bool g_fullRefill = false;
 
     // Pictures under something the game drew over them (2026-11-16, user: the question whether to quit
     // showed the old 1x main menu, the credits' forest had no HD / remade version). The pixels a
@@ -705,9 +708,14 @@ void OnScreenCopy(const Buf& src, unsigned serial, unsigned gen, unsigned genWri
     if (g_srcCrop.size() != static_cast<size_t>(g_cw) * g_ch) g_srcCrop.assign(static_cast<size_t>(g_cw) * g_ch, 0);
     // The same picture with the same base as the last copy: only the pixels that changed since then
     // (the credits: the column of text) - the rest of the canvases is right already.
+    // (Not after the canvases were emptied: the black around a menu's picture equals the zeros the source
+    // copy was emptied to - only the picture's own pixels were filled again, and after loading a saved
+    // game the remade background of the load / save screen showed only in the middle, 2026-11-17.)
     static const Picture* lastPic = nullptr;
     static const void* lastBase = nullptr;
-    const bool same = !variantChanged && pic.get() == lastPic && base.get() == lastBase && pic;
+    const bool refillAll = variantChanged || g_fullRefill;
+    g_fullRefill = false;
+    const bool same = !refillAll && pic.get() == lastPic && base.get() == lastBase && pic;
     lastPic = pic.get();
     lastBase = base.get();
     int bl = r, bt = b, br = -1, bb = -1;
@@ -733,7 +741,7 @@ void OnScreenCopy(const Buf& src, unsigned serial, unsigned gen, unsigned genWri
     }
     g_curBase = base;
     const uint16_t* bp = base ? base->data() : nullptr;
-    if (variantChanged) FillCanvases(pic, 0, 0, g_cw, g_ch, bp);    // the emptied canvases again, all of them
+    if (refillAll) FillCanvases(pic, 0, 0, g_cw, g_ch, bp);         // the emptied canvases again, all of them
     else if (!same) FillCanvases(pic, l - crop.left, t - crop.top, r - crop.left, b - crop.top, bp);
     else if (br > bl) FillCanvases(pic, bl - crop.left, bt - crop.top, br - crop.left, bb - crop.top, bp);
 }
@@ -790,6 +798,7 @@ void OnScreenFill(const Buf& dst, const RECT& r) {
     g_curBase.reset();
     g_srcCrop.clear();
     g_src = Source{};
+    g_fullRefill = true;
 }
 
 bool GetLayer(const RECT& crop, Layer& out) {

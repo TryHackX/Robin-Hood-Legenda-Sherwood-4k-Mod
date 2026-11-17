@@ -120,8 +120,11 @@ def main():
         res = upscale(desc, padded, args.tile, args.overlap, dtype)
         if desc.scale != 2:
             res = cv2.resize(res, (padded.shape[1] * 2, padded.shape[0] * 2), interpolation=cv2.INTER_AREA)
+        small = min(h, w) < 16      # the colour fix's blur needs more pixels than a tiny picture has
+        if args.colorfix > 0 and small:
+            res = (color_fix(res, padded, args.colorfix) + 0.5).clip(0, 255).astype(np.uint8)
         res = res[pad * 2:pad * 2 + h * 2, pad * 2:pad * 2 + w * 2]
-        if args.colorfix > 0:
+        if args.colorfix > 0 and not small:
             res = (color_fix(res, filled, args.colorfix) + 0.5).clip(0, 255).astype(np.uint8)
         a2 = np.ones((h * 2, w * 2), np.float32) if colour.all() else contour(colour)
         s2 = contour(shade) if shade.any() else np.zeros((h * 2, w * 2), np.float32)

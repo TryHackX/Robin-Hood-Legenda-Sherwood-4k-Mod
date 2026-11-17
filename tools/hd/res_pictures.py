@@ -63,6 +63,8 @@ def main():
     ap.add_argument('--write', action='store_true')
     ap.add_argument('--min', type=int, default=16, help='skip pictures with a side shorter than this')
     ap.add_argument('--sizes', default='', help='only pictures of these sizes: 126x111,125x112,...')
+    ap.add_argument('--max-area', type=int, default=640 * 480 - 1,
+                    help='skip larger pictures (the full-screen menu backgrounds have HD versions of their own)')
     args = ap.parse_args()
     want = {tuple(int(v) for v in t.split('x')) for t in args.sizes.split(',') if t}
     import numpy as np
@@ -82,7 +84,7 @@ def main():
     WORK.mkdir(parents=True, exist_ok=True)
     wrote = 0
     for (o, w, h, raw), k in zip(pics, keys):
-        if min(w, h) < args.min or k in done or k in collected or (want and (w, h) not in want):
+        if min(w, h) < args.min or w * h > args.max_area or k in done or k in collected or (want and (w, h) not in want):
             continue
         px = np.frombuffer(raw, '<u2', w * h)
         marker = MARKER if (px == MARKER).any() else NONE

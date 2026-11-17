@@ -81,6 +81,13 @@ namespace DDM::HD::Patch {
     // Time spent here since the last call, in microseconds (the presenter's hitch report)
     double TakeTimeUs();
 
+    // The mission's interface enlarged 2x (ddm_blit.cpp, SmoothPicture2x16 - the HUD, portraits, icons,
+    // the hedge): the HD version of the whole picture in rect `r` of `src`, found by its content - the
+    // same files as the menus' (hd\menu_parts\<key>.hdp; most made from DATA\Interface\Default.res by
+    // tools\hd\res_pictures.py, sides >= 4): 2w x 2h BGRA (alpha = coverage) and the shadow coverage.
+    // Main thread only, HDMenu=1; false = none.
+    bool InterfacePicture(const Buf& src, const RECT& r, int& w2, int& h2, const uint32_t*& bgra, const uint8_t*& shade);
+
     // Test harness
     int Describe(char* out, int size);
 }

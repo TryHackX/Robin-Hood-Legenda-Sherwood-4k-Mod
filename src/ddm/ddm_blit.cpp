@@ -1,4 +1,5 @@
 #include "ddm_blit.h"
+#include "ddm_hd_patch.h"
 
 #include <emmintrin.h>
 #include <algorithm>
@@ -409,6 +410,67 @@ namespace {
         return true;
     }
 
+    // The HD version of the whole picture (AI-upscaled, the menus' files - ddm_hd_patch.h InterfacePicture)
+    // as the entry's runs instead of the filter: its colour where it covers fully, colour sums with
+    // their coverage on its soft edge, a darkening where only its shadow lies (the game darkens there).
+    // Only for pictures drawn with the green colour key the files were made with, or drawn without a
+    // key and covering every pixel.
+    bool BuildFromHd(SmoothEntry& e, const Buf& src) {
+        if (e.key != kNoColor && (e.key & 0xFFFFu) != 0x07C0u) return false;
+        const int sw = e.sr.right - e.sr.left, sh = e.sr.bottom - e.sr.top;
+        int w2 = 0, h2 = 0;
+        const uint32_t* bgra = nullptr;
+        const uint8_t* shade = nullptr;
+        if (!HD::Patch::InterfacePicture(src, e.sr, w2, h2, bgra, shade) || w2 != 2 * sw || h2 != 2 * sh) return false;
+        const size_t n = static_cast<size_t>(w2) * h2;
+        if (e.key == kNoColor) {
+            for (size_t i = 0; i < n; ++i) {
+                if ((bgra[i] >> 24) != 255u) return false;
+            }
+        }
+        auto to565 = [](uint32_t c) {
+            return static_cast<uint16_t>(((c >> 8) & 0xF800u) | ((c >> 5) & 0x07E0u) | ((c >> 3) & 0x001Fu));
+        };
+        // coverage in sixteenths: the colour's (alpha) or else half darkness under its shadow
+        auto coverAt = [&](size_t i, bool& colour) -> uint32_t {
+            const uint32_t a = bgra[i] >> 24;
+            colour = a > 0;
+            if (colour) return (a * 16u + 127u) / 255u;
+            return (static_cast<uint32_t>(shade[i]) * 8u + 127u) / 255u;
+        };
+        e.runs.clear();
+        e.color.clear();
+        e.acc.clear();
+        e.cover.clear();
+        for (int y = 0; y < h2; ++y) {
+            const size_t row = static_cast<size_t>(y) * w2;
+            int x = 0;
+            while (x < w2) {
+                bool colour = false;
+                const uint32_t first = coverAt(row + x, colour);
+                if (first == 0) { ++x; continue; }
+                SmoothRun run;
+                run.y = y;
+                run.x0 = x;
+                run.full = first >= 16;
+                run.off = run.full ? e.color.size() : e.acc.size();
+                for (; x < w2; ++x) {
+                    const uint32_t c = coverAt(row + x, colour);
+                    if (c == 0 || (c >= 16) != run.full) break;
+                    if (run.full) {
+                        e.color.push_back(to565(bgra[row + x]));
+                    } else {
+                        e.acc.push_back(colour ? c * Spread(to565(bgra[row + x])) : 0u);   // shadow: black
+                        e.cover.push_back(static_cast<uint8_t>(c));
+                    }
+                }
+                run.x1 = x;
+                e.runs.push_back(run);
+            }
+        }
+        return true;
+    }
+
     void Build(SmoothEntry& e, const Buf& src) {
         const int aw = e.area.right - e.area.left, ah = e.area.bottom - e.area.top;
         e.seen.resize(static_cast<size_t>(aw) * ah);
@@ -417,6 +479,7 @@ namespace {
                         reinterpret_cast<const uint16_t*>(src.bits + static_cast<size_t>(e.area.top + y) * src.pitch) + e.area.left,
                         static_cast<size_t>(aw) * 2);
         }
+        if (BuildFromHd(e, src)) return;
         e.runs.clear();
         e.color.clear();
         e.acc.clear();

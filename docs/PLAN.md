@@ -333,7 +333,10 @@ Do sprawdzenia przy okazji: czy miganie ikon akcji ma teraz właściwe tempo; po
      równym rzędzie i wszystkie (ukryte okna portretów obozu liczyły się do grupy), mapa kampanii w HD we wszystkich
      stanach (obrazki prosto z `DATA\Interface\Default.res`, `tools\hd\res_pictures.py`), hak `RenderFrame` także przy
      `SmoothMotion=0`. Opis: `docs\HD_MODE.md` §7. Zapisy gracza po teście zgodne z kopią sprzed testów (hasze).
-     ☐ Reszta obrazków z `Default.res` (1126, ~150 MB w HD; m.in. 75 klatek mówiących głów) — po decyzji o rozmiarze.
+   - ✔ **v1.2.4 — cały interfejs z obrazków HD** (2026-11-17 w nocy, „Tak, zrób” i „te małe też”): wszystkie obrazki
+     `Default.res` o bokach ≥ 4 w HD (939 plików, 89 MB w `hd\menu_parts\`), interfejs misji ×2 bierze je zamiast
+     filtra (`BuildFromHd` w `ddm_blit.cpp`). Sprawdzone pasy przy wczytywaniu zapisów na kolejnych poziomach
+     (`tools\check_level_bands.ps1`).
    - ✔ **Wydanie na GitHubie** (2026-11-14): v1.0.0 (README po angielsku), paczki grafiki HD jako osobne wydanie
      (7 plików ZIP < 2 GB; magazyn postaci w dwóch częściach — mod czyta `sprites.dat` + `sprites.dat.2`).
 5. ◐ Klatki pośrednie animacji postaci (prośba użytkownika; „jak się nie uda, trudno"): eksperyment zakończony

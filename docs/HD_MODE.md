@@ -582,6 +582,30 @@ w górę), resztę powiększa prezenter — **tylko świat**:
   przycięte przeregulowanie); m ≥ 2 jak dotąd. Porównanie `hd\compare\lupa15_bilinear_vs_catrom.png`. ☐ Prawdziwe HD
   poniżej zoomu 2: tło mapy w HD w prezenterze (mapa 1× i HD jako tekstury, test „piksel klatki = piksel mapy 1×” jak
   przy warstwach menu) — sprite'y zostałyby 1×.
+- **Linia zamachu — przyczyna i poprawka** (2026-11-17, v1.2.0; youtuber: „rysowanie walki zależy od zoomu”). Gest:
+  przytrzymany lewy przycisk = flaga wskaźnika `0x40` (`Pointer::Update 0x00628210`: 1 = kliknięcie przy puszczeniu,
+  8 = podwójne, 0x40 = trzymany; prawy 2/0x10/0x80) → menedżer zdarzeń `[0x6C0C4C]` (= `RHEngine+0x68`) zaczyna zapis
+  (`+0x1F`, czyszczenie listy `+0x5C`), każdy ruch dopisuje pozycję ekranową (`+0x84`) — tylko gdy tryb kursora `+0xA2`
+  = 0 i walczy zaznaczona postać (`0x004E1890`: ktoś z listy `E+0x49F8` ma przeciwnika `+0x268`); maks. 350 punktów,
+  intensywność 112,5 na punkt (`+0x2C`). Ślad rysuje silnik na końcu renderowania obiektów (`0x004D0A10` →
+  `0x00548800`: blokada powierzchni 0 = bufor tylny, pędzel `0x00548480` grubości ∝ intensywności) — RAZEM ZE ŚWIATEM,
+  więc lupa powiększała go i przesuwała. Rozpoznanie przy puszczeniu (`0x004DE290` → `0x004E1A40` → `0x00547600`)
+  porównuje kształt z pozycją walczącego z WorldToScreen (piksele klatki). Hak (`ui_scale.cpp` `TrailInFrame`): na czas
+  `0x00548800` i `0x00547600` punkty listy przeliczone `ViewZoom::ScreenToFrame`, potem przywrócone. W teście w tle
+  procedura śladu działa (blokady powierzchni), ale pędzel nic nie rysuje przy wstrzykiwanym ruchu — potwierdzenie na
+  prawdziwej myszy u gracza.
+- **Żywopłot na dole** (2026-11-17, v1.2.0; youtuber: „rośliny z portretami mają dziurę w środku i przy oddaleniu
+  zanikają”). Pasek = lewy koniec 320×165, prawy koniec, środek 160×110 raz na postać drużyny; w oryginale pas 80 px pod
+  światem był czarny. Z `FullHeightView=1` dziura i prześwity liści pokazywały świat, a lupa w prześwitach pokazywała
+  świat powiększony (piksel klatki = kopia świata). Teraz (`ddm.cpp` `HedgeStrip`, gałąź powiększonego interfejsu): przy
+  lewym końcu pas 80·2 px czarny na całą szerokość + środek (kopia z poprzedniej klatki) od lewego do prawego końca;
+  prezenter nie traktuje tego pasa jako świata (`DDM::TakeHudBandTop` → `lupaWorldH`; wcześniej czarne piksele pasa
+  trafiały na czarną ziemię i pokazywały pomarańczowe smugi). Portrety: decyzja „każdy od swojego miejsca / cały rząd od
+  rogu” trzymana dla tej samej liczby okien klasy (zaznaczony portret jest szerszy — rząd przeskakiwał).
+- **Okno mniejsze niż ekran** (2026-11-17, v1.2.0; prośba youtubera): `WindowWidth/WindowHeight` (0 = cały monitor),
+  `WindowX/WindowY` (-1 = środek); `window_manager.cpp`: `g_monitorWidth/Height` = rozmiar okna, `g_winX/g_winY` = jego
+  miejsce (tworzenie, `SetWindowPos`, `MoveWindow`, `ApplyBorderless`, `ClipCursor`). Sprawdzone w tle: 1600×900 na środku
+  monitora 2560×1440, prezenter rysuje 1600×900.
 - **Linia zamachu** (zgłoszenie 2026-11-15: przy max zoomie pomarańczowa linia rysuje się gdzie indziej niż kursor,
   po zoomie „rysowanie zamachów chyba nie działa”): gest (wciśnięcie i ruch myszą w walce, `Manual.pdf` s. 27) nie
   daje się wywołać w teście w tle — test wstrzykuje tylko dane buforowane DirectInput. Od v1.1.7 hak `DrawLine`

@@ -7,6 +7,10 @@ struct SherwoodConfig {
     int height = 1440;
     bool replace1024x768 = true;
     bool windowedBorderless = true;
+    // with windowedBorderless: the window's size on the monitor (0 = the whole monitor) and position
+    // (-1 = centred) - a borderless window smaller than the screen (2026-11-17, a YouTuber's wish)
+    int windowWidth = 0, windowHeight = 0;
+    int windowX = -1, windowY = -1;
     bool vsync = true;
     int maxFPS = 120;
     int shaderFilter = 1; // 0 = nearest, 1 = sharp bilinear, 2 = bilinear

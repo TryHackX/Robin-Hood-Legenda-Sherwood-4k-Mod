@@ -606,6 +606,62 @@ namespace {
         end[1] = saved[1];
     }
 
+    // The sword swing (2026-11-17, user and a YouTuber: at the smooth zoom's magnifications - in and out - the
+    // orange line of a swing was drawn far away from the pointer, and swings did not come out right). In a fight
+    // the player holds the button and draws the swing; the event manager ([0x6C0C4C] = RHEngine+0x68) records the
+    // pointer's SCREEN positions meanwhile (list +0x5C, filled from the mouse events of the main loop 0x0050FB7C).
+    // The engine draws that trail at the end of its object render (0x004D0A10 -> 0x00548800, pixels written into
+    // the frame, together with the world - so the smooth zoom magnified and moved it like the world), and
+    // recognises the swing from it (0x004E1A40 -> 0x00547600) against the fighter's position from WorldToScreen
+    // (frame pixels). While the smooth zoom shows another part of the frame, both routines get the points mapped
+    // into the frame (ViewZoom::ScreenToFrame, as the selection frame above), then the game's values are back.
+    using PFN_TrailDraw = uint32_t(__fastcall*)(void* mgr, void* edx, uint32_t colour);
+    using PFN_SwingRecognise = uint32_t(__fastcall*)(void* mgr, void* edx, void* a, void* b);
+    using PFN_ListAt = float*(__fastcall*)(void* list, void* edx, uint32_t index);
+    PFN_TrailDraw o_TrailDraw = nullptr;
+    PFN_SwingRecognise o_SwingRecognise = nullptr;
+    const auto g_fnListAt = reinterpret_cast<PFN_ListAt>(0x00610CB0);   // list::at(i) -> Vec2* (thiscall, ret 4)
+
+    struct TrailInFrame {
+        float* p[512];
+        float was[512][2];
+        int n = 0;
+        explicit TrailInFrame(void* mgr) {
+            if (!mgr) return;
+            auto* list = static_cast<uint8_t*>(mgr) + 0x5C;
+            const int count = *reinterpret_cast<const int*>(list + 8);        // 0x0053BF20: [list+8]
+            if (count <= 0) return;
+            for (int i = 0; i < count && n < 512; ++i) {
+                float* v = g_fnListAt(list, nullptr, static_cast<uint32_t>(i));
+                if (!v) continue;
+                float x = v[0], y = v[1];
+                if (!ViewZoom::ScreenToFrame(x, y)) continue;
+                p[n] = v;
+                was[n][0] = v[0];
+                was[n][1] = v[1];
+                ++n;
+                v[0] = x;
+                v[1] = y;
+            }
+        }
+        ~TrailInFrame() {
+            for (int i = 0; i < n; ++i) {
+                p[i][0] = was[i][0];
+                p[i][1] = was[i][1];
+            }
+        }
+    };
+
+    uint32_t __fastcall Hook_TrailDraw(void* mgr, void* edx, uint32_t colour) {
+        TrailInFrame inFrame(mgr);
+        return o_TrailDraw(mgr, edx, colour);
+    }
+
+    uint32_t __fastcall Hook_SwingRecognise(void* mgr, void* edx, void* a, void* b) {
+        TrailInFrame inFrame(mgr);
+        return o_SwingRecognise(mgr, edx, a, b);
+    }
+
     // The game's dialog loop (0x0053C390, thiscall, ret): main menu screens, briefing, in-game
     // menu. Known from its first instruction on - it copies its backdrop to the screen before
     // its window manager draws for the first time.
@@ -936,6 +992,24 @@ namespace {
             std::sort(lefts, lefts + n);
             for (int i = 1; i < n; ++i) g.minGap = (std::min)(g.minGap, lefts[i] - lefts[i - 1]);
             g.perWindow = g.minGap >= g.maxW * static_cast<float>(g_factor);
+            // The decision stays while the class has the same number of windows (2026-11-17, a YouTuber: "the
+            // portraits rearrange"): the selected character's portrait is wider (its action buttons), and with it
+            // the row switched between "each from its own place" and "the whole row from the corner" whenever the
+            // selection changed - the portraits jumped. Decided anew only when a character joins or leaves.
+            struct Kept { uint32_t vt; int count; bool perWindow; };
+            static Kept kept[16];
+            static int keptN = 0;
+            Kept* k = nullptr;
+            for (int i = 0; i < keptN; ++i) {
+                if (kept[i].vt == g.vt) { k = &kept[i]; break; }
+            }
+            if (k && k->count == g.count) {
+                g.perWindow = k->perWindow;
+            } else if (k) {
+                *k = Kept{ g.vt, g.count, g.perWindow };
+            } else if (keptN < 16) {
+                kept[keptN++] = Kept{ g.vt, g.count, g.perWindow };
+            }
         }
         ForgetGoneAnchors();
     }
@@ -1371,6 +1445,14 @@ void Install() {
     {
         static const uint8_t kLine[] = { 0x6A, 0xFF, 0x68, 0x78, 0x29, 0x67, 0x00, 0x64, 0xA1, 0x00, 0x00, 0x00, 0x00, 0x50 };
         Hook(0x005ECBD0, kLine, sizeof(kLine), reinterpret_cast<void*>(&Hook_DrawLine), reinterpret_cast<void**>(&o_DrawLine));
+        // the sword swing's trail and its recognition under the smooth zoom (see TrailInFrame)
+        static const uint8_t kTrail[] = { 0x6A, 0xFF, 0x68, 0xC0, 0x81, 0x66, 0x00, 0x64, 0xA1, 0x00, 0x00, 0x00, 0x00 };
+        static const uint8_t kSwing[] = { 0x6A, 0xFF, 0x68, 0xEA, 0x80, 0x66, 0x00, 0x64, 0xA1, 0x00, 0x00, 0x00, 0x00 };
+        const bool trail = Hook(0x00548800, kTrail, sizeof(kTrail), reinterpret_cast<void*>(&Hook_TrailDraw),
+                                reinterpret_cast<void**>(&o_TrailDraw));
+        const bool swing = Hook(0x00547600, kSwing, sizeof(kSwing), reinterpret_cast<void*>(&Hook_SwingRecognise),
+                                reinterpret_cast<void**>(&o_SwingRecognise));
+        Logger::Info("UiScale: sword swing under the smooth zoom - trail %d, recognition %d.", trail ? 1 : 0, swing ? 1 : 0);
     }
     if (!ok) {
         g_factor = 1;

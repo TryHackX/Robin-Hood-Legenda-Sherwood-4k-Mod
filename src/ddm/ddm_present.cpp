@@ -1,4 +1,5 @@
 #include "ddm_present.h"
+#include "ddm.h"
 #include "../config.h"
 #include "../logger.h"
 #include "../render_ddraw.h"
@@ -844,9 +845,12 @@ namespace {
             c.outH = static_cast<float>(vh);
             c.mode = static_cast<float>(SherwoodConfig::Get().shaderFilter);
             c.layer = backdropOn ? 2.0f : (layerOn ? 1.0f : (lupaOn ? 3.0f : 0.0f));
+            const int hudBand = DDM::TakeHudBandTop();
             if (lupaOn) {
                 c.lupaM = lupa.m;
                 c.lupaWorldH = lupa.worldH;
+                // the hedge strip along the bottom is interface in this frame (ddm.cpp HedgeStrip)
+                if (hudBand > 0 && static_cast<float>(hudBand) < c.lupaWorldH) c.lupaWorldH = static_cast<float>(hudBand);
                 c.lupaX = lupa.cropX;
                 c.lupaY = lupa.cropY;
             } else if (backdropOn && g_backShowOn) {

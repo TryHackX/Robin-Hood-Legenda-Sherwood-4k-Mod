@@ -603,6 +603,52 @@ bool ClipToBounds(RECT& r, int w, int h) {
     return r.right > r.left && r.bottom > r.top;
 }
 
+// The hedge along the bottom edge of a mission, interface twice as large (2026-11-17, a YouTuber and the user:
+// "the plants the portraits sit on have a hole in the middle", "zooming out they start to disappear"). The game
+// draws its left and right end (320x165, the left one first) and one middle piece (160x110) per character of the
+// team; the strip under the world (80 px) was black in the original. With the world drawn down to the bottom edge
+// the empty part of the strip showed the world, and so did the gaps between the leaves - where the smooth zoom
+// then showed the magnified world, the hedge seemed to dissolve. So when the left end comes, the strip is made
+// black over the whole width and the middle piece (of the last frame: copied, the game's surface may go away) is
+// laid from the left end to the right one; the game's own pieces and the portraits come on top.
+int g_hudBandTop = 0;              // main thread: see TakeHudBandTop
+
+void HedgeStrip(const Buf& dst, int w, int h, const RECT& d, const Buf& src, const RECT& s, uint16_t key) {
+    const int sw = s.right - s.left, sh = s.bottom - s.top;
+    const int f = UiScale::Factor();
+    static std::vector<uint16_t> mid;
+    static uint16_t midKey = 0;
+    if (sw == 160 && sh == 110 && d.bottom == h) {
+        if (s.left < 0 || s.top < 0 || s.right > src.w || s.bottom > src.h) return;
+        mid.resize(static_cast<size_t>(sw) * sh);
+        for (int y = 0; y < sh; ++y) {
+            std::memcpy(mid.data() + static_cast<size_t>(y) * sw, src.bits + static_cast<size_t>(s.top + y) * src.pitch + s.left * 2,
+                        static_cast<size_t>(sw) * 2);
+        }
+        midKey = key;
+        return;
+    }
+    if (sw != 320 || sh != 165 || d.left != 0 || d.bottom != h || f < 2) return;
+    RECT band{ 0, h - 80 * f, w, h };
+    if (ClipToBounds(band, w, h)) {
+        Fill16(dst, band, 0);
+        HD::Patch::OnOverwrite(dst, band);
+        // the smooth zoom must not take these rows for the world: black there matched dark ground and showed
+        // the magnified world through the strip
+        g_hudBandTop = band.top;
+    }
+    if (mid.empty()) return;
+    const Buf mb{ reinterpret_cast<uint8_t*>(mid.data()), 160 * 2, 160, 110 };
+    const RECT ms{ 0, 0, 160, 110 };
+    const int pw = 160 * f, ph = 110 * f, end = w - 320 * f;
+    for (int x = d.right; x < end; x += pw) {
+        const RECT md{ x, h - ph, x + pw, h };
+        RECT mc = md;
+        if (mc.right > end) mc.right = end;
+        if (ClipToBounds(mc, w, h)) SmoothPicture2x16(dst, md, mb, ms, mc, midKey);
+    }
+}
+
 HRESULT Surface::DoBlt(const RECT* dstRect, Surface* src, const RECT* srcRect, DWORD flags, const DDBLTFX* fx) {
     if (!st.bits) return DDERR_SURFACELOST;
     ++gen; // this surface is being drawn into
@@ -772,6 +818,9 @@ HRESULT Surface::DoBlt(const RECT* dstRect, Surface* src, const RECT* srcRect, D
         // a window of the game, twice as large: filtered (colour key respected); none of the
         // HD substitutions below concern the interface
         RECT clip = d;
+        if (keyed && dw == sw * 2 && dh == sh * 2 && Diag::IsMainThread()) {
+            HedgeStrip(buf(), w, h, d, src->buf(), s, keyColor);    // the hedge along the bottom edge (see there)
+        }
         if (ClipToBounds(clip, w, h)) {
             const bool inside = s.left >= 0 && s.top >= 0 && s.right <= src->w && s.bottom <= src->h;
             const bool cursor = UiScale::CursorDrawing() && keyed && inside && s_cursorSerial == UiScale::CursorSerial() &&
@@ -1599,6 +1648,12 @@ bool TraceActive() {
 
 void TraceMark(const char* text) {
     DDM_TRACE("%s", text);
+}
+
+int TakeHudBandTop() {
+    const int top = g_hudBandTop;
+    g_hudBandTop = 0;
+    return top;
 }
 
 void LogFaultContext(uintptr_t faultAddress) {

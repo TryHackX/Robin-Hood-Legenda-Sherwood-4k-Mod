@@ -294,6 +294,14 @@ Do sprawdzenia przy okazji: czy miganie ikon akcji ma teraz właściwe tempo; po
      INI wydania. README: pułapka „Wyodrębnij wszystkie” (dopisuje nazwę archiwum do ścieżki), rozdzielczość (stara rada
      „1920×1080 na monitorze 1080p” wyłączała HD — obraz i tak jest skalowany), przycisk 1920*1080 w opcjach gry, sekcja
      „If it does not work”. GitHub: zostają tylko najnowsze — v1.1.9 (mod), `hd-pack-1`, `menu-remake-2` (6 teł).
+   - ✔ **v1.2.0 — zgłoszenie youtubera** (2026-11-17; zrzuty mailem, komentarze pod filmem): żywopłot na dole na całą
+     szerokość z czarną podstawą (dziura i „znikające krzaczki” przy zoomie), linia i rozpoznanie zamachu przy każdym
+     zoomie (punkty śladu w pikselach klatki), portrety bez przeskakiwania (decyzja układu trzymana dla tej samej liczby
+     okien), okno bez ramek mniejsze niż ekran (`WindowWidth/Height/X/Y`). Audyt: test ciągły 4 min z interfejsem —
+     0 błędów, 0 ostrzeżeń, ~143 kl./s (długie „tiki” = okna gry otwarte w teście). Opis: `docs\HD_MODE.md` §7.
+     ☐ Ekran „zamarza” po wyborze misji w obozie Sherwood (3.jpg: kawałki pergaminu i kursora zostają) — nie do
+     odtworzenia w teście w tle (kampania gracza w 1. misji); potrzebny zapis z obozu i log od gracza.
+     ☐ Linia zamachu: potwierdzenie na prawdziwej myszy (w teście w tle pędzel nie rysuje). ☐ HD poniżej zoomu 2.
    - ✔ **Wydanie na GitHubie** (2026-11-14): v1.0.0 (README po angielsku), paczki grafiki HD jako osobne wydanie
      (7 plików ZIP < 2 GB; magazyn postaci w dwóch częściach — mod czyta `sprites.dat` + `sprites.dat.2`).
 5. ◐ Klatki pośrednie animacji postaci (prośba użytkownika; „jak się nie uda, trudno"): eksperyment zakończony

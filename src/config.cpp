@@ -102,6 +102,10 @@ void SherwoodConfig::Load(const std::string& iniPath) {
     }
     replace1024x768    = ReadBool("Display", "Replace1024x768", replace1024x768, p);
     windowedBorderless = ReadBool("Display", "WindowedBorderless", windowedBorderless, p);
+    windowWidth        = (std::max)(0, ReadInt("Display", "WindowWidth", windowWidth, p));
+    windowHeight       = (std::max)(0, ReadInt("Display", "WindowHeight", windowHeight, p));
+    windowX            = ReadInt("Display", "WindowX", windowX, p);
+    windowY            = ReadInt("Display", "WindowY", windowY, p);
     vsync              = ReadBool("Display", "VSync", vsync, p);
     maxFPS             = ReadInt("Display", "MaxFPS", maxFPS, p);
     shaderFilter       = ReadInt("Display", "ShaderFilter", shaderFilter, p);

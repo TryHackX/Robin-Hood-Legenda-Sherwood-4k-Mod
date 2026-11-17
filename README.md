@@ -12,7 +12,8 @@ original DirectDraw wrapper, plus optional HD graphics prepared with AI models f
 - Own in-memory DirectDraw + Direct3D 11 presentation (flip model) instead of the slow wrapper — no more lag in
   fights and while scrolling the camera.
 - Borderless full-screen window, working Alt+Tab (the game no longer freezes after switching back), VSync, image
-  scaling by shader (sharp pixels / sharp bilinear / soft).
+  scaling by shader (sharp pixels / sharp bilinear / soft). Optionally a borderless window smaller than the screen
+  (`WindowWidth`, `WindowHeight`, `WindowX`, `WindowY` in `SherwoodFix.ini`).
 - Extra frames between game ticks (the game runs its logic 25 times per second): smooth map scrolling, smooth cursor,
   smooth movement of characters and projectiles — at the monitor's refresh rate; game speed unchanged.
 - The enlarged interface is filtered once and kept (it was filtered again in every frame): a frame at 2560×1440 costs
@@ -46,7 +47,8 @@ original DirectDraw wrapper, plus optional HD graphics prepared with AI models f
 **Interface**
 - Mission interface 2× larger (each window grows from its own screen corner, clicks land where you see them), with an
   **HD font**: the letters of tooltips, messages, money and names come from upscaled versions of the game's own fonts
-  (`hd\fonts\`, included in the mod archive) instead of being magnified 2×.
+  (`hd\fonts\`, included in the mod archive) instead of being magnified 2×. The hedge along the bottom runs along the
+  whole width with any number of characters; sword swings (hold the left button and draw) work at every zoom.
 - Minimap in the top-right corner; dragging on it moves the camera, the map window is moved by its edges.
 - Menus and game dialogs (briefing, Esc menu, save/load, options) shown full-screen instead of a small 1024×768 box
   in the middle — **in HD**: menu backgrounds upscaled by AI (HD pack), and the letters, buttons, the briefing's
@@ -186,6 +188,8 @@ the `ultrasharp` variant and the icons are for non-commercial use), RIFE by hzwe
 - The engine itself has only three zoom levels (0.5 / 1 / 2); the smooth zoom magnifies its 1.0 or 2.0 picture. Below
   2.0 the original pixels are shown (HD pictures need 2.0; since 1.1.7 they are enlarged with a sharper filter), above
   2.0 the HD picture is magnified further.
+- Reported, not reproduced yet: after choosing the next mission in the Sherwood camp the screen may stop refreshing.
+  A saved game from the camp (`DATA\Savegame`) and `SherwoodFix.log` would help.
 
 ## Building from source
 

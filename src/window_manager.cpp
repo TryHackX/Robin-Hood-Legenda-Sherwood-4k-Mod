@@ -122,16 +122,30 @@ namespace WindowManager {
             return (attrDxcfg != INVALID_FILE_ATTRIBUTES && attrDDraw != INVALID_FILE_ATTRIBUTES);
         }
 
+        // g_monitorWidth/Height: the size of the window the game is shown in - the whole monitor, or the smaller
+        // borderless window of WindowWidth x WindowHeight (2026-11-17, a YouTuber's wish) at g_winX, g_winY
+        int g_winX = 0, g_winY = 0;
+
         void RefreshMonitorDimensions() {
             HMONITOR hMon = MonitorFromPoint({ 0, 0 }, MONITOR_DEFAULTTOPRIMARY);
             MONITORINFO mi{};
             mi.cbSize = sizeof(mi);
-            if (GetMonitorInfoA(hMon, &mi)) {
-                g_monitorWidth  = mi.rcMonitor.right - mi.rcMonitor.left;
-                g_monitorHeight = mi.rcMonitor.bottom - mi.rcMonitor.top;
+            RECT mon{ 0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN) };
+            if (GetMonitorInfoA(hMon, &mi)) mon = mi.rcMonitor;
+            const int mw = mon.right - mon.left, mh = mon.bottom - mon.top;
+            const auto& cfg = SherwoodConfig::Get();
+            if (cfg.windowWidth > 0 && cfg.windowHeight > 0 && (cfg.windowWidth < mw || cfg.windowHeight < mh)) {
+                g_monitorWidth  = (std::min)(cfg.windowWidth, mw);
+                g_monitorHeight = (std::min)(cfg.windowHeight, mh);
+                const int x = cfg.windowX >= 0 ? (std::min)(cfg.windowX, mw - g_monitorWidth) : (mw - g_monitorWidth) / 2;
+                const int y = cfg.windowY >= 0 ? (std::min)(cfg.windowY, mh - g_monitorHeight) : (mh - g_monitorHeight) / 2;
+                g_winX = mon.left + x;
+                g_winY = mon.top + y;
             } else {
-                g_monitorWidth  = GetSystemMetrics(SM_CXSCREEN);
-                g_monitorHeight = GetSystemMetrics(SM_CYSCREEN);
+                g_monitorWidth  = mw;
+                g_monitorHeight = mh;
+                g_winX = mon.left;
+                g_winY = mon.top;
             }
         }
 
@@ -158,8 +172,8 @@ namespace WindowManager {
                     if (!g_hasLocalDDrawWrapper) {
                         dwStyle = WS_POPUP | WS_CLIPSIBLINGS | WS_CLIPCHILDREN |
                                   (TestHarness::Enabled() ? 0u : static_cast<DWORD>(WS_VISIBLE));
-                        X = 0;
-                        Y = 0;
+                        X = g_winX;
+                        Y = g_winY;
                         nWidth  = g_monitorWidth;
                         nHeight = g_monitorHeight;
                     }
@@ -207,8 +221,8 @@ namespace WindowManager {
                 if (hWndInsertAfter == HWND_TOPMOST) {
                     hWndInsertAfter = HWND_NOTOPMOST;
                 }
-                X = 0;
-                Y = 0;
+                X = g_winX;
+                Y = g_winY;
                 cx = g_monitorWidth;
                 cy = g_monitorHeight;
                 uFlags &= ~(SWP_NOMOVE | SWP_NOSIZE);
@@ -225,8 +239,8 @@ namespace WindowManager {
             auto& cfg = SherwoodConfig::Get();
             if (hWnd && hWnd == g_hGameWnd && cfg.windowedBorderless && !g_hasLocalDDrawWrapper) {
                 RefreshMonitorDimensions();
-                X = 0;
-                Y = 0;
+                X = g_winX;
+                Y = g_winY;
                 nWidth  = g_monitorWidth;
                 nHeight = g_monitorHeight;
             }
@@ -373,11 +387,12 @@ namespace WindowManager {
             exStyle |= static_cast<LONG>(WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW);
         }
         setLong(hWnd, GWL_EXSTYLE, exStyle);
-        setPos(hWnd, HWND_NOTOPMOST, 0, 0, g_monitorWidth, g_monitorHeight,
+        setPos(hWnd, HWND_NOTOPMOST, g_winX, g_winY, g_monitorWidth, g_monitorHeight,
                SWP_FRAMECHANGED | (hidden ? (SWP_NOACTIVATE | SWP_NOZORDER | SWP_HIDEWINDOW) : SWP_SHOWWINDOW));
         InstallCursorHider(hWnd);
-        Logger::Info("WindowManager: borderless window %dx%d applied to hwnd=0x%08X%s.",
-                     g_monitorWidth, g_monitorHeight, reinterpret_cast<uintptr_t>(hWnd), hidden ? " (hidden: test mode)" : "");
+        Logger::Info("WindowManager: borderless window %dx%d at %d,%d applied to hwnd=0x%08X%s.",
+                     g_monitorWidth, g_monitorHeight, g_winX, g_winY, reinterpret_cast<uintptr_t>(hWnd),
+                     hidden ? " (hidden: test mode)" : "");
         if (!hidden) {
             BringToFrontAtStart(hWnd);
         }
@@ -510,7 +525,7 @@ namespace WindowManager {
             return;
         }
 
-        RECT clipRect{ 0, 0, g_monitorWidth, g_monitorHeight };
+        RECT clipRect{ g_winX, g_winY, g_winX + g_monitorWidth, g_winY + g_monitorHeight };
         ClipCursor(&clipRect);
     }
 }

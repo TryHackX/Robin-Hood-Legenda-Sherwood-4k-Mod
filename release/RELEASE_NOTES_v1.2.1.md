@@ -28,7 +28,7 @@ A full audit of the mod's code and a play-through of the campaign up to the Sher
   questions is now shown as it was on the screen, also when zoomed out, without the smeared stream at the right edge
   of the camp.
 - **Statistics page after a mission**: no more dark dots in the parchment.
-- **Seals in HD also when highlighted** under the cursor, plus 27 more menu pictures in HD: the campaign map, the
+- **Seals in HD also when highlighted** under the cursor, plus 30 more menu pictures in HD: the campaign map, the
   portraits of the briefings, the parchment of the questions, map markers.
 - **Faster on wooded levels**: HD characters, trees and objects are drawn 8 pixels at a time - in the forest of the
   first mission from the camp a frame takes ~7 ms instead of ~11 ms (140 instead of 86 frames a second).

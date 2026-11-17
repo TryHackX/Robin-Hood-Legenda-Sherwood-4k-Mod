@@ -305,7 +305,7 @@ Do sprawdzenia przy okazji: czy miganie ikon akcji ma teraz właściwe tempo; po
      kodu (renderer; haki/wejście/okno — wszystkie ~45 haków na `Game.exe` zgodne z konwencją i `ret N`) + kampania
      w tle do obozu komendą konsoli gry `win` (odtworzenie zgłoszenia youtubera). Poprawione: okna dialogowe otwierane
      z okna misji (kwadraty za kursorem, pergamin ×2, tło sklejone z dwóch skal, śmieci poza poziomem przy zoomie 1),
-     kropki w przyciemnionym tle podsumowania misji, podświetlone pieczęcie i 27 nowych obrazków menu w HD (mapa
+     kropki w przyciemnionym tle podsumowania misji, podświetlone pieczęcie i 30 nowych obrazków menu w HD (mapa
      kampanii, portrety odpraw, pergamin pytania), sprite'y HD po 8 pikseli (las: 86 → 140 kl./s), powrót Direct3D 11
      po resecie sterownika, kursor tej samej prędkości co w Windows także przy 2560 na 1080p i w mniejszym oknie, Esc
      zamykające F10 nie otwiera menu gry, przeciągana minimapa po końcu misji, zasięg słyszenia po zmianie poziomu,

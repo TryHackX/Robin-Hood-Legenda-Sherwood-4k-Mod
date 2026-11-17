@@ -632,7 +632,8 @@ w górę), resztę powiększa prezenter — **tylko świat**:
     (`HD::LastBackdropColouring`, ta sama co przy szybkim menu Esc) albo „bez zmiany”, gdy któraś pasuje do ≥ 30 % tła.
   - Podświetlenie pieczęci V/X pod kursorem to osobny obrazek rysowany tą samą procedurą (`0x00622550`); brakowało jego
     wersji HD. Zebrane obrazki z kampanii (pieczęcie, portrety odpraw 158×154, pergamin pytania, mapa kampanii
-    629×480, znaczniki) powiększone `upscale_menu_parts.py` — 50 plików `.hdp`. Zbieranie: bez animacji (ta sama
+    629×480, znaczniki i podświetlony zamek po 3. misji) powiększone `upscale_menu_parts.py` — 53 pliki `.hdp`
+    (sprawdzone w grze: mapa kampanii 1258×960, pergamin pytania, portrety, pieczęcie). Zbieranie: bez animacji (ta sama
     szerokość, inna wysokość w ciągu 2 s — napisy końcowe dały 5160 plików / 5,5 GB, przeniesione do
     `hd\work\menu_parts_napisy_koncowe\`) i najwyżej 300 na sesję.
 - **Wydajność sprite'ów HD** (2026-11-17, v1.2.1): `Sprites::TryShadowBlit` (główna ścieżka sprite'ów HD przez procedury

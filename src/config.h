@@ -57,6 +57,7 @@ struct SherwoodConfig {
 
     // [Input]
     bool rawMouseInput = true;
+    bool windowsKey = true;      // the Windows key works while the game is in front (no DISCL_NOWINKEY)
     bool lockCursorToWindow = true;
     int edgeScrollSpeed = 0; // map scroll speed in percent; 0 = scale with the internal width (width / 1024)
     int mouseReportRateHz = 125; // max mouse movement reports/s handed to the game (0 = unlimited/original)

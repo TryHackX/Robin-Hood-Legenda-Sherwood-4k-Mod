@@ -769,6 +769,24 @@ void OnSurfaceCopy(const Buf& dst, const Buf& src, unsigned serial, unsigned gen
     slot->time = GetTickCount();
 }
 
+void OnScreenFill(const Buf& dst, const RECT& r) {
+    // The game blanks the whole screen (loading a saved game: one colour fill of the back buffer,
+    // then black frames until the level is there). The menu picture is gone - its HD / remade
+    // version stayed wherever a black pixel happened to equal the old picture: a black, ragged
+    // rectangle in the middle of the remade background (YouTuber's report 2026-11-17).
+    if (g_orig.empty() || r.left > 0 || r.top > 0 || r.right < dst.w || r.bottom < dst.h) return;
+    std::fill(g_orig.begin(), g_orig.end(), 0u);
+    g_dirty = RECT{ 0, 0, g_cw, g_ch };
+    g_anyDirty = true;
+    g_anyLayer = false;
+    g_curKey = 0;
+    g_curInner = 0;
+    g_canvasPic = nullptr;
+    g_curBase.reset();
+    g_srcCrop.clear();
+    g_src = Source{};
+}
+
 bool GetLayer(const RECT& crop, Layer& out) {
     // the variant or the remade pictures switched (F10): the canvases again from the last picture
     if (CheckVariant() && !g_srcCrop.empty() && g_srcCrop.size() == g_orig.size()) {

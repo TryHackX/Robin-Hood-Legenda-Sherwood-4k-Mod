@@ -787,6 +787,7 @@ namespace {
     // The map: one window (vtable 0x00679B70) - the scroll button in the top-right corner, which
     // becomes the opened map (158x246 at 1039,90 on a 2560x1440 screen, the top middle).
     constexpr uint32_t kMapVtable = 0x00679B70;
+    constexpr uint32_t kTooltipVtable = 0x00678D18;     // the tooltip window that follows the pointer
     constexpr float kMapMargin = 8.0f;     // original pixels from the right edge
     constexpr float kMapTop = 104.0f;      // original pixels: below the face and the tower buttons
     bool g_mapCorner = false;
@@ -1034,9 +1035,13 @@ namespace {
                 if (g_groups[i].vt == info.vt) { g = &g_groups[i]; break; }
             }
             if (!g) {
+                // a whole new group: the slot still held last frame's numbers - the count of windows
+                // grew without end, the smallest gap and the widest window were remembered from any
+                // earlier frame, so the row-or-each decision (and its "same number of windows" guard
+                // of 1.2.0) depended on history: portraits in odd places (YouTuber, 2026-11-17)
                 g = &g_groups[g_groupCount++];
+                *g = Group{};
                 g->vt = info.vt;
-                g->box = Box{};
             }
             g->box.l = (std::min)(g->box.l, info.rc[0]);
             g->box.t = (std::min)(g->box.t, info.rc[1]);
@@ -1130,6 +1135,24 @@ namespace {
         return true;
     }
 
+    // the window's class (vtable) from this frame's list; 0 when it is not a window of the list
+    uint32_t WindowVt(const void* win) {
+        if (!win) return 0;
+        if (g_lastWin < g_winCount && g_wins[g_lastWin].win == win) return g_wins[g_lastWin].vt;
+        for (int i = 0; i < g_winCount; ++i) {
+            if (g_wins[i].win == win) return g_wins[i].vt;
+        }
+        return 0;
+    }
+
+    // several windows of this class lie far apart, each grows from its own place
+    bool PerWindowClass(uint32_t vt) {
+        for (int i = 0; i < g_groupCount; ++i) {
+            if (g_groups[i].vt == vt) return g_groups[i].perWindow && g_groups[i].count > 1;
+        }
+        return false;
+    }
+
     void NoteDrawn(const void* win, float l, float t, float r, float b) {
         auto& list = g_drawn[g_piecesCur];
         Drawn* d = nullptr;
@@ -1186,10 +1209,24 @@ namespace {
         } else if (WindowRect(win, w, h, rc)) {
             const float f = static_cast<float>(g_factor);
             const bool openMap = IsOpenMap(win, rc);
-            KeptAnchor* kept = FindKept(win);
+            // Only the map keeps the anchor it got when it appeared (the player drags it). Windows
+            // the game itself moves - the skills tooltip next to the pointer in the camp, the
+            // portraits of a new selection - took the old anchor along and were drawn away from
+            // their place or not at all on the screen (YouTuber's report 2026-11-17).
+            const uint32_t vt = WindowVt(win);
+            KeptAnchor* kept = vt == kMapVtable ? FindKept(win) : nullptr;
             if (kept && kept->w == rc[2] - rc[0] && kept->h == rc[3] - rc[1]) {
                 ax = kept->ax;      // the anchor it got when it appeared (it may have been dragged since)
                 ay = kept->ay;
+            } else if (vt == kTooltipVtable) {
+                // the tooltip next to the pointer (the skills of a merry man in the camp, the names of
+                // the buttons): it grows right and down from its corner at the pointer, where the game
+                // put it (grown from its middle it slid under the pointer); kept on the screen
+                const float wd = (rc[2] - rc[0]) * f, ht = (rc[3] - rc[1]) * f;
+                const float left = (std::max)(0.0f, (std::min)(w - wd, rc[0]));
+                const float top = (std::max)(0.0f, (std::min)(h - ht, rc[1]));
+                ax = static_cast<float>(static_cast<int>((f * rc[0] - left) / (f - 1.0f)));
+                ay = static_cast<float>(static_cast<int>((f * rc[1] - top) / (f - 1.0f)));
             } else if (g_mapCorner && openMap) {
                 // the opened map in the top-right corner, below the corner's pictures: the anchor
                 // that puts its enlarged top-right corner there
@@ -1204,7 +1241,16 @@ namespace {
                 Anchor(cx, cy, w, h, ax, ay);
                 if (ax == w * 0.5f) ax = static_cast<float>(static_cast<int>(cx));
                 if (ay == h * 0.5f) ay = static_cast<float>(static_cast<int>(cy));
-                if (ay == h && ax == 0.0f) {
+                if (ay == h && PerWindowClass(vt)) {
+                    // portraits of several selected characters: the game spreads them evenly over
+                    // the whole width - each grows from its own middle (from their screen thirds
+                    // the outer ones were pushed to the edges and the last two touched), kept on
+                    // the screen
+                    const float wd = (rc[2] - rc[0]) * f;
+                    float left = cx - wd * 0.5f;
+                    left = (std::max)(0.0f, (std::min)(w - wd, left));
+                    ax = static_cast<float>(static_cast<int>((f * rc[0] - left) / (f - 1.0f)));
+                } else if (ay == h && ax == 0.0f) {
                     // the row of portraits at the bottom left: it keeps the distance from the
                     // screen edge the game gave it (grown from the corner, the portrait sat twice
                     // as far in - "Robin pulled to the right"), unless the row would then run off
@@ -1214,7 +1260,7 @@ namespace {
                     if (ax + (rc[0] - ax) * f < 0.0f) ax = 0.0f;
                 }
             }
-            if (!kept || kept->w != rc[2] - rc[0] || kept->h != rc[3] - rc[1]) {
+            if (vt == kMapVtable && (!kept || kept->w != rc[2] - rc[0] || kept->h != rc[3] - rc[1])) {
                 if (!kept && g_kept.size() < 64) {
                     g_kept.push_back(KeptAnchor{ win, 0.0f, 0.0f, 0.0f, 0.0f });
                     kept = &g_kept.back();

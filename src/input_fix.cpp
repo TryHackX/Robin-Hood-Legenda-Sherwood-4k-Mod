@@ -439,6 +439,27 @@ void Initialize() {
         Logger::Warn("InputFix: Alt+Tab detector not recognised - the game may freeze after Alt+Tab in menus.");
     }
 
+    // The Windows key (2026-11-17, YouTuber: "the game does not react to the Windows key, only Alt+Tab
+    // gets out of it"): the game opens its keyboard with DISCL_NOWINKEY (0x10) - SetCooperativeLevel
+    // (vtable +0x34) with 0x16 at 0x005FA376 and 0x15 at 0x005FA5FE. Without the flag the key opens
+    // the Start menu as in any window; the game is left the way Alt+Tab leaves it (borderless window).
+    if (cfg.windowsKey) {
+        struct Site { uintptr_t at; uint8_t code[9]; uint8_t flags; };
+        static const Site kSites[] = {
+            { 0x005FA376, { 0x6A, 0x16, 0x53, 0x50, 0x8B, 0x10, 0xFF, 0x52, 0x34 }, 0x06 },
+            { 0x005FA5FE, { 0x6A, 0x15, 0x53, 0x56, 0x8B, 0x16, 0xFF, 0x52, 0x34 }, 0x05 },
+        };
+        int patched = 0;
+        for (const Site& s : kSites) {
+            if (std::memcmp(reinterpret_cast<const void*>(s.at), s.code, sizeof(s.code)) == 0 &&
+                Memory::PatchBytes(s.at + 1, &s.flags, 1)) {
+                ++patched;
+            }
+        }
+        Logger::Info("InputFix: the Windows key works while the game is in front (DISCL_NOWINKEY removed at %d of 2 places).",
+                     patched);
+    }
+
     if (cfg.mouseReportRateHz <= 0) {
         Logger::Info("InputFix: mouse report coalescing disabled (MouseReportRateHz=0).");
         return;

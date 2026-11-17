@@ -21,6 +21,7 @@ original DirectDraw wrapper, plus optional HD graphics prepared with AI models f
   trees and objects are drawn 8 pixels at a time (SSE2): on wooded levels a frame takes ~7 ms instead of ~11 ms
   (140 instead of 86 frames a second).
 - If the graphics driver resets (update, sleep, a GPU hiccup), Direct3D 11 comes back by itself after a few seconds.
+- The Windows key works while playing (the game blocked it; `WindowsKey` in `SherwoodFix.ini`).
 - Input fixes (high polling rate mice, mouse re-acquired after Alt+Tab), audio fixes (hearing range on wide screens),
   hang watchdog, removed thread deadlock when scrolling with the screen edge.
 
@@ -57,7 +58,9 @@ original DirectDraw wrapper, plus optional HD graphics prepared with AI models f
   in the middle — **in HD**: menu backgrounds upscaled by AI (HD pack), and the letters, buttons, the briefing's
   parchment, seals (also highlighted under the cursor), portraits and the campaign map drawn from HD versions
   (`hd\fonts\`, `hd\menu_parts\`, in the mod archive). Questions asked during a mission (mission won, start the chosen
-  mission in the Sherwood camp) show the level behind them as it was on the screen. Optional
+  mission in the Sherwood camp) show the level behind them as it was on the screen. The portraits of several
+  selected characters stay evenly spaced along the bottom; the skills tooltip of a merry man sits next to the pointer.
+  Loading a saved game shows a black screen as in the original (no ragged black box over the menu background). Optional
   **remade menu backgrounds** that fill the whole widescreen (`hd\menu\remake\`, made with `tools\hd\menu_remake.py`
   from pictures painted by an image AI; F10 → "MENU W HD"). The in-game menu (Esc) opens in ~0.08 s instead of ~0.4 s.
 - **In-game settings panel — F10** (HD graphics, interface, minimap, smooth zoom, menus, VSync, filter, FPS counter,
@@ -159,6 +162,15 @@ F10 panel.
    `hd\hd\…` or `SherwoodHD-…\hd\…`): `hd\maps\dat2\` must hold `.hdmap` files and `hd\sprites\_common\` the files
    named in step 2. F8 must not be switched to "ORYGINAL".
 4. **When asking for help, attach `SherwoodFix.log`** from the game folder (it is written anew at every start).
+
+## Recording and streaming (OBS)
+
+The GOG installer marks `game.exe` to **run as administrator** (a Windows compatibility setting — that is why Windows
+asks for permission when the game starts). OBS started normally cannot hook into a program running as administrator,
+so **Game Capture stays black**. Either:
+- in OBS use **Window Capture** of the game window with the capture method **"Windows 10 (1903 and up)"** — it records
+  only the game window (not the desktop), or
+- start **OBS as administrator** as well, then Game Capture works.
 
 ## Mod keys
 

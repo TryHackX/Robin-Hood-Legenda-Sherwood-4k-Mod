@@ -19,6 +19,9 @@ namespace DDM::HD::Menu {
     // DoBlt, main thread: a whole 1:1 copy between two surfaces of the screen's size, neither of them
     // the screen (the credits copy their fixed forest into the surface the scrolling text goes into).
     void OnSurfaceCopy(const Buf& dst, const Buf& src, unsigned serial, unsigned gen, unsigned genWrite);
+    // DoBlt, main thread: the screen (or its back buffer) was filled with one colour at rect `r` -
+    // over the whole surface the menu picture is gone (loading a saved game blanks the screen).
+    void OnScreenFill(const Buf& dst, const RECT& r);
 
     struct Layer {
         const uint32_t* orig = nullptr;   // w x h: 0 = no HD picture, else 0x10000 | original RGB565

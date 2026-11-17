@@ -154,6 +154,7 @@ void SherwoodConfig::Load(const std::string& iniPath) {
 
     // [Input]
     rawMouseInput      = ReadBool("Input", "RawMouseInput", rawMouseInput, p);
+    windowsKey         = ReadBool("Input", "WindowsKey", windowsKey, p);
     lockCursorToWindow = ReadBool("Input", "LockCursorToWindow", lockCursorToWindow, p);
     edgeScrollSpeed    = ReadInt("Input", "EdgeScrollSpeed", edgeScrollSpeed, p);
     mouseReportRateHz  = ReadInt("Input", "MouseReportRateHz", mouseReportRateHz, p);

@@ -316,6 +316,15 @@ Do sprawdzenia przy okazji: czy miganie ikon akcji ma teraz właściwe tempo; po
      ☐ Pierwsza odprawa na poziomie mniejszym od ekranu: tło jeszcze bez lupy (czarne pasy). ☐ Pozostałe z przeglądu
      (niski priorytet): cienie łatek menu rozpoznawane tylko po adresie, stan lupy przy szybkim wczytaniu tego samego
      poziomu, panel F10 w menu głównym po misji uważa, że misja trwa.
+   - ✔ **v1.2.2 — drugie zgłoszenie youtubera** (2026-11-17 wieczorem; zrzuty 1.1–1.3 i film z 1.2.0 —
+     `tools\out\zgloszenie_yt_2026-11-17b\`): portrety kilku zaznaczonych postaci w równych odstępach (gra rozkłada je
+     na całą szerokość; rosły od tercji ekranu) + błąd od 1.0.0: grupy klas okien nie były zerowane co klatkę (licznik
+     rósł bez końca, decyzja układu zależała od historii); dymek umiejętności w obozie przy kursorze (kotwica
+     zapamiętana tylko dla minimapy, dymek rośnie od rogu przy kursorze); wczytywanie zapisu = czarny ekran (pełne
+     wypełnienie ekranu kończy obraz menu HD); klawisz Windows (gra otwiera klawiaturę z `DISCL_NOWINKEY` —
+     `WindowsKey=1` usuwa flagę); OBS: instalator GOG ustawia `game.exe` RUNASADMIN (flagi zgodności w rejestrze) —
+     przechwytywanie gry działa tylko z OBS jako administrator, przechwytywanie okna metodą „Windows 10 (1903+)” zawsze
+     (README). Film: wyruszenie z obozu z 1.2.0 = błąd naprawiony w 1.2.1. Test ciągły: PASS, 0 błędów, 142,9 kl./s.
    - ✔ **Wydanie na GitHubie** (2026-11-14): v1.0.0 (README po angielsku), paczki grafiki HD jako osobne wydanie
      (7 plików ZIP < 2 GB; magazyn postaci w dwóch częściach — mod czyta `sprites.dat` + `sprites.dat.2`).
 5. ◐ Klatki pośrednie animacji postaci (prośba użytkownika; „jak się nie uda, trudno"): eksperyment zakończony

@@ -680,6 +680,9 @@ HRESULT Surface::DoBlt(const RECT* dstRect, Surface* src, const RECT* srcRect, D
             Fill16(buf(), d, static_cast<uint16_t>(fx->dwFillColor));
             Diag::AddValue(Diag::C_PX_FILL, static_cast<uint64_t>(d.right - d.left) * (d.bottom - d.top));
             HD::Patch::OnOverwrite(buf(), d);
+            if (g.primary && (this == g.primary || this == g.primary->back) && Diag::IsMainThread()) {
+                HD::Menu::OnScreenFill(buf(), d);
+            }
         }
         return DD_OK;
     }

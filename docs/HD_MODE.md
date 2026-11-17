@@ -636,6 +636,26 @@ w górę), resztę powiększa prezenter — **tylko świat**:
     (sprawdzone w grze: mapa kampanii 1258×960, pergamin pytania, portrety, pieczęcie). Zbieranie: bez animacji (ta sama
     szerokość, inna wysokość w ciągu 2 s — napisy końcowe dały 5160 plików / 5,5 GB, przeniesione do
     `hd\work\menu_parts_napisy_koncowe\`) i najwyżej 300 na sesję.
+- **Portrety, dymek umiejętności, wczytywanie** (2026-11-17, v1.2.2; drugie zgłoszenie youtubera):
+  - Portrety zaznaczonych postaci (klasa okna `0x0067A348`, 112×131 przy dolnej krawędzi): gra rozkłada N portretów
+    równo na całą szerokość (5 postaci: x = 225, 724, 1223, 1722, 2221). W trybie „każde okno od siebie” rosły od
+    tercji ekranu (lewa krawędź / własny środek / prawa krawędź) — nierówne odstępy, dwa ostatnie stykały się. Teraz
+    przy dolnej krawędzi każdy rośnie od własnego środka (`PerWindowClass`), trzymany na ekranie. Przy okazji błąd od
+    1.0.0 w `CollectWindows`: nowa grupa klasy dostawała tylko klasę i prostokąt — licznik okien, najmniejszy odstęp i
+    najszersze okno zostawały z poprzednich klatek (licznik rósł bez końca, więc ochrona decyzji z 1.2.0 nie działała).
+  - Zapamiętana kotwica okna (`KeptAnchor`) tylko dla minimapy (gracz ją przeciąga). Dymek przy kursorze (klasa
+    `0x00678D18`, gra przestawia go za kursorem) brał kotwicę z pierwszego pokazania i rysował się gdzie indziej albo
+    poza ekranem („migają albo z przesunięciem”); teraz rośnie w prawo i w dół od rogu przy kursorze, jak w grze.
+  - Wczytywanie zapisu: gra wypełnia cały tylny bufor czernią (`FILL d=(0,0,2560,1440)`) i pokazuje czarne klatki.
+    Warstwa HD menu zostawała z obrazem ekranu wczytywania i pokazywała go tam, gdzie czarny piksel równał się
+    pikselowi starego obrazu (poszarpany czarny prostokąt). `HD::Menu::OnScreenFill`: pełne wypełnienie ekranu
+    kończy obraz menu.
+  - Klawisz Windows: `SetCooperativeLevel` klawiatury z `0x16`/`0x15` (`DISCL_NOWINKEY`) w `0x005FA376`/`0x005FA5FE` →
+    `0x06`/`0x05` (`WindowsKey=1`, `input_fix.cpp`).
+  - OBS: flagi zgodności GOG dla `game.exe` (HKLM/HKCU `AppCompatFlags\Layers`: `DWM8And16BitMitigation
+    8And16BitAggregateBlts RUNASADMIN HIGHDPIAWARE`) — gra działa jako administrator, OBS bez uprawnień nie wstrzykuje
+    przechwytywania gry. Rozwiązanie po stronie gracza (README): przechwytywanie okna „Windows 10 (1903+)” albo OBS
+    jako administrator.
 - **Wydajność sprite'ów HD** (2026-11-17, v1.2.1): `Sprites::TryShadowBlit` (główna ścieżka sprite'ów HD przez procedury
   gry `0x0062261C/0x006220EC`) liczona po 8 pikseli SSE2 (przezroczyste/ukryte zostają, cień przyciemnia pojedynczo, reszta
   = piksel HD). Las misji z obozu: klatka pośrednia 11,2 → 7,1 ms, 86 → 140 kl./s. Do diagnozy: plik mapy linkera

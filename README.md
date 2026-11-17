@@ -80,7 +80,7 @@ You need three things from the **Releases** page (right side of the repository p
 under **Assets** — not "Source code (zip)" / "Source code (tar.gz)": GitHub adds those two to every release by
 itself, they hold only the source code and are not needed to play.
 - [**the mod — newest version**](https://github.com/TryHackX/Robin-Hood-Legenda-Sherwood-4k-Mod/releases/latest):
-  `SherwoodEngineFix-v….zip` (about 21 MB),
+  `SherwoodEngineFix-v….zip` (about 29 MB),
 - [**HD graphics pack 1**](https://github.com/TryHackX/Robin-Hood-Legenda-Sherwood-4k-Mod/releases/tag/hd-pack-1):
   the HD pictures (7 archives, 3 of them required),
 - optional: [**remade menu backgrounds 2**](https://github.com/TryHackX/Robin-Hood-Legenda-Sherwood-4k-Mod/releases/tag/menu-remake-2)

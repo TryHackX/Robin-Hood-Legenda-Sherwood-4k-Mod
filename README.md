@@ -200,8 +200,8 @@ Tested with OBS 33: **Game Capture records the mod's picture.** Four things get 
    choice as before). If the game and OBS still run on different cards, tick *SLI/Crossfire Capture Mode (Slow)* in the
    Game Capture's properties.
 
-Window Capture with the capture method *Windows 10 (1903 and up)* records only the game's window too. Display Capture
-always works, but records the whole screen.
+Window Capture with the capture method *Modern (WGC)* (older OBS: *Windows 10 (1903 and up)*) records only the game's
+window too. Display Capture always works, but records the whole screen.
 
 ## Mod keys
 

@@ -57,7 +57,15 @@ original DirectDraw wrapper, plus optional HD graphics prepared with AI models f
   (`DATA\Interface\Default.res` → `hd\menu_parts\`, in the mod archive) instead of being smoothed 2×. The hedge along
   the bottom runs along the whole width with any number of characters; sword swings (hold the left button and draw)
   work at every zoom.
-- Minimap in the top-right corner; dragging on it moves the camera, the map window is moved by its edges.
+- Minimap in the top-right corner; dragging on it moves the camera, the map window is moved by its edges. **Its size
+  and picture can be chosen** (since 1.2.5, F10 → "MINIMAPA - WIELKOSC" / "MINIMAPA - OBRAZ"): classic 2× (as the
+  rest of the interface), smaller 1.5×, larger 2.5×, large 3× or very large 5× (the tall maps of Nottingham and
+  Derby stop at what fits above the hedge, about 4.4×); the classic picture, the classic picture upscaled, a **new
+  picture made from the level's HD background**, or the new one **tinted like the old map on parchment** (the
+  default). The new pictures are ready files in the mod archive (`hd\minimap\`, made with `tools\hd\make_minimaps.py`)
+  — nothing is generated while you play. The Sherwood camp's own map picture shows a forest path, not the camp
+  (perhaps on purpose; the camp itself shows no minimap): it stays, upscaled 4× (`MinimapCamp=1` in the INI: the
+  real camp like the other levels).
 - Menus and game dialogs (briefing, Esc menu, save/load, options) shown full-screen instead of a small 1024×768 box
   in the middle — **in HD**: menu backgrounds upscaled by AI (HD pack), and the letters, buttons, the briefing's
   parchment, seals (also highlighted under the cursor), portraits and the campaign map drawn from HD versions
@@ -91,7 +99,7 @@ You need three things from the **Releases** page (right side of the repository p
 under **Assets** — not "Source code (zip)" / "Source code (tar.gz)": GitHub adds those two to every release by
 itself, they hold only the source code and are not needed to play.
 - [**the mod — newest version**](https://github.com/TryHackX/Robin-Hood-Legenda-Sherwood-4k-Mod/releases/latest):
-  `SherwoodEngineFix-v….zip` (about 63 MB),
+  `SherwoodEngineFix-v….zip` (about 144 MB),
 - [**HD graphics pack 1**](https://github.com/TryHackX/Robin-Hood-Legenda-Sherwood-4k-Mod/releases/tag/hd-pack-1):
   the HD pictures (7 archives, 3 of them required),
 - optional: [**remade menu backgrounds 2**](https://github.com/TryHackX/Robin-Hood-Legenda-Sherwood-4k-Mod/releases/tag/menu-remake-2)
@@ -129,7 +137,8 @@ Unpack **each** archive into the game folder (see above). Afterwards the game fo
 **Step 3 — the mod (after the HD pictures).** Unpack `SherwoodEngineFix-v….zip` (the newest release) into the game
 folder — **after** the HD archives: it carries newer versions of some small HD files of the pack. Afterwards
 `winmm.dll` and `SherwoodFix.ini` lie **right next to `Game.exe`**. (The archive holds: `winmm.dll`, `SherwoodFix.ini`,
-`README.md`, the HD fonts `hd\fonts\`, HD pictures of the interface, menus and dialogs `hd\menu_parts\` (about 940),
+`README.md`, the HD fonts `hd\fonts\`, HD pictures of the interface, menus and dialogs `hd\menu_parts\` (about 960),
+the HD pictures of the opened minimap `hd\minimap\`,
 run-time icons `hd\sprites\_icons\`, small files and the credits' background in `hd\menu\<variant>\`, and the lists of
 the in-between frames `hd\sprites\_between\between.q`, `between.v1.q`, `between.t`.) Updating from an older version:
 unpack the new archive over it; keep your `SherwoodFix.ini` if you changed settings (answer "skip" for that one file).
@@ -174,11 +183,14 @@ F10 panel.
 ## Recording and streaming (OBS)
 
 The GOG installer marks `game.exe` to **run as administrator** (a Windows compatibility setting — that is why Windows
-asks for permission when the game starts). OBS started normally cannot hook into a program running as administrator,
-so **Game Capture stays black**. Either:
-- in OBS use **Window Capture** of the game window with the capture method **"Windows 10 (1903 and up)"** — it records
-  only the game window (not the desktop), or
-- start **OBS as administrator** as well, then Game Capture works.
+asks for permission when the game starts). Windows keeps programs without administrator rights away from such a
+program: OBS started normally records **a black picture with Game Capture and Window Capture**, and **its hotkeys do
+not work while the game is in front** (they work again after Alt+Tab). Display Capture works, but records the whole
+screen.
+
+**Start OBS as administrator** as well (right-click its shortcut → *Run as administrator*; for good: *Properties →
+Compatibility → Run this program as an administrator*). Then Game Capture, Window Capture and the hotkeys work.
+`SherwoodFix.log` says at the start whether the game runs as administrator (`Process: runs as administrator`).
 
 ## Mod keys
 
@@ -188,6 +200,11 @@ so **Game Capture stays black**. Either:
 | F8 | HD background ↔ original (quick comparison) |
 | F7 / F6 | next / previous HD graphics variant |
 | F9 | in-between frames of character animations (when generated) |
+
+Quick save and quick load are the game's own keys (F1 and F5, unless changed in the game's Options → Keyboard). The
+F10 panel ("KLAWISZ SZYBKIEGO ZAPISU" / "KLAWISZ SZYBKIEGO ODCZYTU") or `QuickSaveKey=` / `QuickLoadKey=` in
+`SherwoodFix.ini` move them to another key, or leave an action without any key (`none` — for example so that a game
+is never loaded by accident). The game's own key settings stay as they are.
 
 ## HD graphics — how they were made
 
@@ -200,6 +217,9 @@ also rebuild them from your own copy of the game:
 - `extract_maps.py`, `upscale_variants.py` — map backgrounds (variants: `dat2`, `sgi`, `ultrasharp`, `aomr`),
 - `extract_sprites.py`, `upscale_sprites.py`, `upscale_icons.py` — characters, objects, icons,
 - `upscale_menu.py` — menu backgrounds (the mod collects them into `hd\work\menu_frames\` by itself),
+- `res_pictures.py`, `upscale_menu_parts.py` — the pictures of the interface, menus and dialogs,
+- `minimap_pictures.py`, `make_minimaps.py` — the opened minimap: the game's map pictures (`DATA\Levels\*\*.min`)
+  and new ones made from the levels' HD backgrounds,
 - `make_inbetweens.py` + `rife_net.py` — in-between animation frames,
 - `tools\make_hd_packs.py` — packs them into the archives above.
 

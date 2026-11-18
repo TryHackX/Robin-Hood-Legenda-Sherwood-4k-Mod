@@ -1,10 +1,13 @@
 #include "ddm_blit.h"
 #include "ddm_hd_patch.h"
+#include "../diag.h"
 
 #include <emmintrin.h>
 #include <algorithm>
 #include <climits>
+#include <cmath>
 #include <cstring>
+#include <new>
 #include <vector>
 
 namespace DDM {
@@ -388,6 +391,8 @@ namespace {
         size_t   bytes = 0;
         unsigned changes = 0;           // consecutive uses that found the picture changed
         unsigned direct = 0;            // uses left that filter directly (a picture that keeps changing)
+        bool scaled = false;            // ScaledPicture16: any size (outW x outH) instead of 2x
+        int  outW = 0, outH = 0;
     };
     std::vector<SmoothEntry*> g_smooth;
     size_t   g_smoothBytes = 0;
@@ -562,7 +567,7 @@ void SmoothPicture2x16(const Buf& dst, const RECT& dr, const Buf& src, const REC
     const bool clamp = t_edgeClamp;
     SmoothEntry* e = nullptr;
     for (SmoothEntry* c : g_smooth) {
-        if (c->bits == src.bits && c->pitch == src.pitch && c->srcW == src.w && c->srcH == src.h && c->key == key &&
+        if (!c->scaled && c->bits == src.bits && c->pitch == src.pitch && c->srcW == src.w && c->srcH == src.h && c->key == key &&
             c->clamp == clamp && EqualRect(&c->sr, &sr)) {
             e = c;
             break;
@@ -615,6 +620,268 @@ void SmoothPicture2x16(const Buf& dst, const RECT& dr, const Buf& src, const REC
     e->lastUse = ++g_smoothUse;
     DrawEntry(*e, dst, dr, clip);
     TrimCache();
+}
+
+// ------------------------------------------------------------------ the opened map at its own size
+// The map window drawn at [Display] MapScale (1.5x .. 4x, 2026-11-18, user: "different sizes of the minimap"):
+// its pictures - the scroll with the level and the people's markers - are scaled to any size once and kept like
+// the 2x pictures above (an entry per picture and size, the same runs). The source is the picture's HD version
+// (HD::Patch::MapPicture: the minimap made from the level's HD background, 4x, or the game's picture upscaled,
+// 2x) or the game's own pixels. Resampled with a tent filter as wide as the reduction (at least one source
+// pixel: bilinear when enlarging), colour premultiplied by coverage - the transparent green never bleeds in.
+namespace {
+    struct Taps {
+        std::vector<int> first, count;
+        std::vector<size_t> off;
+        std::vector<float> w;
+    };
+
+    void MakeTaps(int in, int out, Taps& t) {
+        const float scale = static_cast<float>(in) / static_cast<float>(out);
+        const float support = (std::max)(1.0f, scale);
+        t.first.assign(out, 0);
+        t.count.assign(out, 0);
+        t.off.assign(out, 0);
+        t.w.clear();
+        for (int o = 0; o < out; ++o) {
+            const float c = (static_cast<float>(o) + 0.5f) * scale - 0.5f;
+            const int i0 = (std::max)(0, static_cast<int>(std::floor(c - support)) + 1);
+            const int i1 = (std::min)(in - 1, static_cast<int>(std::ceil(c + support)) - 1);
+            const size_t off = t.w.size();
+            float sum = 0.0f;
+            for (int i = i0; i <= i1; ++i) {
+                const float wgt = (std::max)(0.0f, 1.0f - std::fabs(static_cast<float>(i) - c) / support);
+                t.w.push_back(wgt);
+                sum += wgt;
+            }
+            if (sum <= 0.0f) {      // outside every tap (cannot happen with support >= 1): the nearest pixel
+                t.w.resize(off);
+                t.w.push_back(1.0f);
+                t.first[o] = (std::max)(0, (std::min)(in - 1, static_cast<int>(std::lround(c))));
+                t.count[o] = 1;
+                t.off[o] = off;
+                continue;
+            }
+            for (size_t k = off; k < t.w.size(); ++k) t.w[k] /= sum;
+            t.first[o] = i0;
+            t.count[o] = i1 - i0 + 1;
+            t.off[o] = off;
+        }
+    }
+
+    // planar-interleaved floats, `ch` per pixel
+    void Resample(const std::vector<float>& src, int sw, int sh, int ch, std::vector<float>& dst, int dw, int dh) {
+        Taps tx, ty;
+        MakeTaps(sw, dw, tx);
+        MakeTaps(sh, dh, ty);
+        std::vector<float> tmp(static_cast<size_t>(dw) * sh * ch, 0.0f);
+        for (int y = 0; y < sh; ++y) {
+            const float* row = src.data() + static_cast<size_t>(y) * sw * ch;
+            float* out = tmp.data() + static_cast<size_t>(y) * dw * ch;
+            for (int x = 0; x < dw; ++x) {
+                const float* wgt = tx.w.data() + tx.off[x];
+                float* o = out + static_cast<size_t>(x) * ch;
+                for (int k = 0; k < tx.count[x]; ++k) {
+                    const float* p = row + static_cast<size_t>(tx.first[x] + k) * ch;
+                    for (int c = 0; c < ch; ++c) o[c] += wgt[k] * p[c];
+                }
+            }
+        }
+        dst.assign(static_cast<size_t>(dw) * dh * ch, 0.0f);
+        const size_t rowLen = static_cast<size_t>(dw) * ch;
+        for (int y = 0; y < dh; ++y) {
+            float* out = dst.data() + static_cast<size_t>(y) * rowLen;
+            const float* wgt = ty.w.data() + ty.off[y];
+            for (int k = 0; k < ty.count[y]; ++k) {
+                const float* row = tmp.data() + static_cast<size_t>(ty.first[y] + k) * rowLen;
+                const float wk = wgt[k];
+                for (size_t i = 0; i < rowLen; ++i) out[i] += wk * row[i];
+            }
+        }
+    }
+
+    void BuildScaled(SmoothEntry& e, const Buf& src) {
+        const int aw = e.area.right - e.area.left, ah = e.area.bottom - e.area.top;
+        e.seen.resize(static_cast<size_t>(aw) * ah);
+        for (int y = 0; y < ah; ++y) {
+            std::memcpy(e.seen.data() + static_cast<size_t>(y) * aw,
+                        reinterpret_cast<const uint16_t*>(src.bits + static_cast<size_t>(e.area.top + y) * src.pitch) + e.area.left,
+                        static_cast<size_t>(aw) * 2);
+        }
+        const int sw = e.sr.right - e.sr.left, sh = e.sr.bottom - e.sr.top;
+        constexpr int kCh = 5;      // red, green, blue (premultiplied, 0..255), coverage, shadow (0..1)
+        std::vector<float> in;
+        int iw = 0, ih = 0;
+        int wk = 0, hk = 0;
+        const uint32_t* bgra = nullptr;
+        const uint8_t* shade = nullptr;
+        const bool keyOk = e.key == kNoColor || (e.key & 0xFFFFu) == 0x07C0u;   // the files' own colour key
+        if (keyOk && HD::Patch::MapPicture(src, e.sr, wk, hk, bgra, shade) && wk >= sw && hk >= sh) {
+            const size_t n = static_cast<size_t>(wk) * hk;
+            bool opaque = true;
+            in.resize(n * kCh);
+            for (size_t i = 0; i < n; ++i) {
+                const uint32_t c = bgra[i];
+                const float a = static_cast<float>(c >> 24) / 255.0f;
+                if ((c >> 24) != 255u) opaque = false;
+                in[i * kCh + 0] = static_cast<float>((c >> 16) & 0xFFu) * a;
+                in[i * kCh + 1] = static_cast<float>((c >> 8) & 0xFFu) * a;
+                in[i * kCh + 2] = static_cast<float>(c & 0xFFu) * a;
+                in[i * kCh + 3] = a;
+                in[i * kCh + 4] = static_cast<float>(shade[i]) / 255.0f;
+            }
+            if (e.key == kNoColor && !opaque) {
+                in.clear();     // drawn without a key: only a picture that covers every pixel (as BuildFromHd)
+            } else {
+                iw = wk;
+                ih = hk;
+            }
+        }
+        if (in.empty()) {
+            iw = sw;
+            ih = sh;
+            in.assign(static_cast<size_t>(iw) * ih * kCh, 0.0f);
+            for (int y = 0; y < sh; ++y) {
+                const auto* row = reinterpret_cast<const uint16_t*>(src.bits + static_cast<size_t>(e.sr.top + y) * src.pitch) + e.sr.left;
+                for (int x = 0; x < sw; ++x) {
+                    const uint32_t p = row[x];
+                    if (e.key != kNoColor && p == (e.key & 0xFFFFu)) continue;
+                    float* o = in.data() + (static_cast<size_t>(y) * sw + x) * kCh;
+                    const uint32_t r5 = p >> 11, g6 = (p >> 5) & 63u, b5 = p & 31u;
+                    o[0] = static_cast<float>((r5 << 3) | (r5 >> 2));
+                    o[1] = static_cast<float>((g6 << 2) | (g6 >> 4));
+                    o[2] = static_cast<float>((b5 << 3) | (b5 >> 2));
+                    o[3] = 1.0f;
+                }
+            }
+        }
+        std::vector<float> out;
+        Resample(in, iw, ih, kCh, out, e.outW, e.outH);
+        auto to565 = [](float r, float g, float b) {
+            const auto c8 = [](float v) { return static_cast<uint32_t>((std::max)(0.0f, (std::min)(255.0f, v + 0.5f))); };
+            return static_cast<uint16_t>(((c8(r) & 0xF8u) << 8) | ((c8(g) & 0xFCu) << 3) | (c8(b) >> 3));
+        };
+        e.runs.clear();
+        e.color.clear();
+        e.acc.clear();
+        e.cover.clear();
+        for (int y = 0; y < e.outH; ++y) {
+            const float* row = out.data() + static_cast<size_t>(y) * e.outW * kCh;
+            // coverage in sixteenths: the colour's, or else half darkness under its shadow (as BuildFromHd)
+            auto coverAt = [&](int x, bool& colour, uint16_t& c565) -> uint32_t {
+                const float* p = row + static_cast<size_t>(x) * kCh;
+                const uint32_t cov = static_cast<uint32_t>((std::min)(1.0f, p[3]) * 16.0f + 0.5f);
+                colour = cov > 0;
+                if (colour) {
+                    const float inv = 1.0f / (std::max)(p[3], 1e-6f);
+                    c565 = to565(p[0] * inv, p[1] * inv, p[2] * inv);
+                    return cov;
+                }
+                return static_cast<uint32_t>((std::min)(1.0f, p[4]) * 8.0f + 0.5f);
+            };
+            int x = 0;
+            while (x < e.outW) {
+                bool colour = false;
+                uint16_t c565 = 0;
+                const uint32_t first = coverAt(x, colour, c565);
+                if (first == 0) { ++x; continue; }
+                SmoothRun run;
+                run.y = y;
+                run.x0 = x;
+                run.full = colour && first >= 16;
+                run.off = run.full ? e.color.size() : e.acc.size();
+                for (; x < e.outW; ++x) {
+                    const uint32_t c = coverAt(x, colour, c565);
+                    if (c == 0 || (colour && c >= 16) != run.full) break;
+                    if (run.full) {
+                        e.color.push_back(c565);
+                    } else {
+                        e.acc.push_back(colour ? c * Spread(c565) : 0u);   // shadow: black
+                        e.cover.push_back(static_cast<uint8_t>((std::min)(c, 15u)));
+                    }
+                }
+                run.x1 = x;
+                e.runs.push_back(run);
+            }
+        }
+    }
+}
+
+void ScaledPicture16(const Buf& dst, const RECT& dr, const Buf& src, const RECT& sr, const RECT& clip, uint32_t key) {
+    const int sw = sr.right - sr.left, sh = sr.bottom - sr.top;
+    const int dw = dr.right - dr.left, dh = dr.bottom - dr.top;
+    if (sw <= 0 || sh <= 0 || dw <= 0 || dh <= 0 || clip.right <= clip.left || clip.bottom <= clip.top) return;
+    const bool keyed = key != kNoColor;
+    if (static_cast<int64_t>(sw) * sh > 512 * 512 || static_cast<int64_t>(dw) * dh > 2048 * 2048 || !Diag::IsMainThread()) {
+        Stretch16(dst, dr, src, sr, clip, keyed, static_cast<uint16_t>(key & 0xFFFFu), false, false);
+        return;
+    }
+    SmoothEntry* e = nullptr;
+    for (SmoothEntry* c : g_smooth) {
+        if (c->scaled && c->outW == dw && c->outH == dh && c->bits == src.bits && c->pitch == src.pitch && c->srcW == src.w &&
+            c->srcH == src.h && c->key == key && EqualRect(&c->sr, &sr)) {
+            e = c;
+            break;
+        }
+    }
+    if (!e) {
+        e = new SmoothEntry();
+        e->bits = src.bits;
+        e->pitch = src.pitch;
+        e->srcW = src.w;
+        e->srcH = src.h;
+        e->sr = sr;
+        e->key = key;
+        e->scaled = true;
+        e->outW = dw;
+        e->outH = dh;
+        e->area = RECT{ (std::max)(0L, sr.left), (std::max)(0L, sr.top),
+                        (std::min)(static_cast<LONG>(src.w), sr.right), (std::min)(static_cast<LONG>(src.h), sr.bottom) };
+        g_smooth.push_back(e);
+    } else if (e->direct > 0) {
+        --e->direct;
+        e->lastUse = ++g_smoothUse;
+        Stretch16(dst, dr, src, sr, clip, keyed, static_cast<uint16_t>(key & 0xFFFFu), false, false);
+        return;
+    } else if (SameSource(*e, src)) {
+        e->changes = 0;
+        e->lastUse = ++g_smoothUse;
+        DrawEntry(*e, dst, dr, clip);
+        return;
+    } else if (++e->changes >= 4) {
+        e->changes = 0;
+        e->direct = 120;    // a picture that keeps changing: stretched directly for a while
+        e->lastUse = ++g_smoothUse;
+        Stretch16(dst, dr, src, sr, clip, keyed, static_cast<uint16_t>(key & 0xFFFFu), false, false);
+        return;
+    }
+    g_smoothBytes -= e->bytes;
+    try {
+        BuildScaled(*e, src);
+    } catch (const std::bad_alloc&) {
+        for (SmoothEntry* c : g_smooth) delete c;
+        g_smooth.clear();
+        g_smoothBytes = 0;
+        Stretch16(dst, dr, src, sr, clip, keyed, static_cast<uint16_t>(key & 0xFFFFu), false, false);
+        return;
+    }
+    e->bytes = EntryBytes(*e);
+    g_smoothBytes += e->bytes;
+    e->lastUse = ++g_smoothUse;
+    DrawEntry(*e, dst, dr, clip);
+    TrimCache();
+}
+
+void DropScaledPictures() {
+    for (auto it = g_smooth.begin(); it != g_smooth.end();) {
+        if ((*it)->scaled) {
+            g_smoothBytes -= (*it)->bytes;
+            delete *it;
+            it = g_smooth.erase(it);
+        } else {
+            ++it;
+        }
+    }
 }
 
 } // namespace DDM

@@ -842,7 +842,10 @@ HRESULT Surface::DoBlt(const RECT* dstRect, Surface* src, const RECT* srcRect, D
                                 s_cursorBgRect.right - s_cursorBgRect.left == sw && s_cursorBgRect.bottom - s_cursorBgRect.top == sh &&
                                 s_cursorBgRect.left >= 0 && s_cursorBgRect.top >= 0 &&
                                 s_cursorBgRect.right <= s_cursorBg->w && s_cursorBgRect.bottom <= s_cursorBg->h;
-            if (cursor && dw == sw * 2 && dh == sh * 2 && !mirrorX && !mirrorY) {
+            if (UiScale::LastScaledWasMap() && inside && !mirrorX && !mirrorY && Diag::IsMainThread()) {
+                // the opened map at its own size (MapScale): its HD picture (MinimapHD) scaled once and kept
+                ScaledPicture16(buf(), d, src->buf(), s, clip, keyed ? keyColor : kNoColor);
+            } else if (cursor && dw == sw * 2 && dh == sh * 2 && !mirrorX && !mirrorY) {
                 // only the cursor's own pixels: those that differ from the background copy
                 static std::vector<uint16_t> tmp;
                 tmp.resize(static_cast<size_t>(sw) * sh);

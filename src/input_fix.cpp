@@ -12,6 +12,7 @@
 #include <windows.h>
 #include <MinHook.h>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 
 namespace {
@@ -380,9 +381,156 @@ namespace {
     }
 }
 
+// ------------------------------------------------------------- quick save / quick load keys
+namespace {
+    // The game's key settings (Options -> Keyboard): 28 DirectInput scan codes (u16) in the object at
+    // [0x006C0B54] + 0x14C, in the order of that screen; the last two are "Szybki zapis" (quick save, F1)
+    // and "Szybki odczyt" (quick load, F5) - the game turns them into its commands 11 / 12 (0x00512840).
+    // The game's screen cannot leave an action without a key (user 2026-11-18: a quick load pressed by
+    // mistake). QuickSaveKey / QuickLoadKey put another key - or 0, a code no key has - into the two
+    // places while a level runs; in the game's own dialogs (its key screen too) and at the end the
+    // game's values are back, so its screen shows and saves its own.
+    constexpr uintptr_t kAddrKeyOwner = 0x006C0B54;
+    constexpr int kOffKeys = 0x14C;
+    constexpr int kKeyCount = 28;
+    constexpr int kQuickSave = 26, kQuickLoad = 27;
+
+    uint16_t* g_keys = nullptr;                // the array the values below belong to
+    uint16_t  g_gameKey[2] = {};               // the game's own keys there
+    uint16_t  g_ourKey[2] = {};                // what we wrote
+    bool      g_keysApplied = false;
+    bool      g_keysNoted = false;
+
+    bool KeysReadable(const void* p) {
+        MEMORY_BASIC_INFORMATION mbi{};
+        if (!p || !VirtualQuery(p, &mbi, sizeof(mbi)) || mbi.State != MEM_COMMIT ||
+            (mbi.Protect & (PAGE_GUARD | PAGE_NOACCESS)) || !(mbi.Protect & (PAGE_READWRITE | PAGE_EXECUTE_READWRITE))) {
+            return false;
+        }
+        const auto end = reinterpret_cast<uintptr_t>(mbi.BaseAddress) + mbi.RegionSize;
+        return reinterpret_cast<uintptr_t>(p) + kKeyCount * 2 <= end;
+    }
+
+    uint16_t* CurrentKeys() {
+        auto* owner = *reinterpret_cast<uint8_t* const*>(kAddrKeyOwner);
+        if (!owner) return nullptr;
+        auto* keys = reinterpret_cast<uint16_t*>(owner + kOffKeys);
+        if (!KeysReadable(keys)) return nullptr;
+        // plausible key settings: every code a real key's (1..0xED) or 0
+        for (int i = 0; i < kKeyCount; ++i) {
+            if (keys[i] > 0xED) return nullptr;
+        }
+        return keys;
+    }
+
+    // DirectInput scan code -> virtual key (the mod's own keys are virtual keys in the INI)
+    int VirtualKeyOf(int dik) {
+        if (dik >= 0x3B && dik <= 0x44) return VK_F1 + (dik - 0x3B);
+        switch (dik) {
+            case 0x57: return VK_F11;    case 0x58: return VK_F12;
+            case 0xD2: return VK_INSERT; case 0xD3: return VK_DELETE; case 0xC7: return VK_HOME;
+            case 0xCF: return VK_END;    case 0xC9: return VK_PRIOR;  case 0xD1: return VK_NEXT;
+            case 0xC5: return VK_PAUSE;  case 0xB5: return VK_DIVIDE; case 0x9C: return VK_RETURN;
+            default:   return static_cast<int>(MapVirtualKeyA(static_cast<UINT>(dik), MAPVK_VSC_TO_VK));
+        }
+    }
+
+    void RestoreGameKeys() {
+        if (g_keysApplied && g_keys && KeysReadable(g_keys)) {
+            // only where our value still lies (the game may have written its own meanwhile)
+            if (g_keys[kQuickSave] == g_ourKey[0]) g_keys[kQuickSave] = g_gameKey[0];
+            if (g_keys[kQuickLoad] == g_ourKey[1]) g_keys[kQuickLoad] = g_gameKey[1];
+        }
+        g_keysApplied = false;
+    }
+
+    void ApplyQuickKeys() {
+        const auto& cfg = SherwoodConfig::Get();
+        if (cfg.quickSaveKey < 0 && cfg.quickLoadKey < 0) {
+            RestoreGameKeys();
+            return;
+        }
+        uint16_t* keys = CurrentKeys();
+        if (!keys) return;
+        if (keys != g_keys) {                   // another object (a profile loaded): its own values
+            g_keys = keys;
+            g_keysApplied = false;
+        }
+        if (!g_keysApplied) {
+            g_gameKey[0] = keys[kQuickSave];
+            g_gameKey[1] = keys[kQuickLoad];
+        } else {
+            // the game changed one itself (its key screen): that is its value now
+            if (keys[kQuickSave] != g_ourKey[0]) g_gameKey[0] = keys[kQuickSave];
+            if (keys[kQuickLoad] != g_ourKey[1]) g_gameKey[1] = keys[kQuickLoad];
+        }
+        g_ourKey[0] = cfg.quickSaveKey >= 0 ? static_cast<uint16_t>(cfg.quickSaveKey) : g_gameKey[0];
+        g_ourKey[1] = cfg.quickLoadKey >= 0 ? static_cast<uint16_t>(cfg.quickLoadKey) : g_gameKey[1];
+        keys[kQuickSave] = g_ourKey[0];
+        keys[kQuickLoad] = g_ourKey[1];
+        g_keysApplied = true;
+        if (!g_keysNoted) {
+            g_keysNoted = true;
+            auto name = [](int v, uint16_t game, char* out, size_t n) {
+                const char* k = SherwoodConfig::KeyName(v >= 0 ? v : game);
+                if (v == 0) std::snprintf(out, n, "none");
+                else if (k) std::snprintf(out, n, "%s%s", k, v < 0 ? " (game)" : "");
+                else std::snprintf(out, n, "0x%02X%s", v >= 0 ? v : game, v < 0 ? " (game)" : "");
+            };
+            char a[32], b[32];
+            name(cfg.quickSaveKey, g_gameKey[0], a, sizeof(a));
+            name(cfg.quickLoadKey, g_gameKey[1], b, sizeof(b));
+            Logger::Info("InputFix: quick save key %s, quick load key %s (QuickSaveKey / QuickLoadKey).", a, b);
+            for (int load = 0; load < 2; ++load) {
+                const int v = load ? cfg.quickLoadKey : cfg.quickSaveKey;
+                const char* why = v > 0 ? InputFix::QuickKeyClash(v, load != 0) : nullptr;
+                if (why) {
+                    Logger::Warn("InputFix: %s %s is also %s - pressing it does both.",
+                                 load ? "QuickLoadKey" : "QuickSaveKey", load ? b : a, why);
+                }
+            }
+        }
+    }
+}
+
 namespace InputFix {
 
+void OnDialogLoop(bool entering) {
+    if (entering) RestoreGameKeys();            // the next tick of a level applies them again
+}
+
+int GameQuickKey(bool load) {
+    const uint16_t* keys = g_keys ? g_keys : CurrentKeys();
+    if (!keys) return -1;
+    if (g_keysApplied) return g_gameKey[load ? 1 : 0];
+    return keys[load ? kQuickLoad : kQuickSave];
+}
+
+const char* QuickKeyClash(int dik, bool load) {
+    if (dik <= 0) return nullptr;
+    const auto& cfg = SherwoodConfig::Get();
+    const int vk = VirtualKeyOf(dik);
+    if (vk > 0) {
+        if (vk == cfg.settingsKey)  return "the mod's settings panel key (SettingsKey)";
+        if (vk == cfg.hdKeyBetween) return "the mod's in-between frames key (HDKeyBetween)";
+        if (vk == cfg.hdKeyToggle)  return "the mod's HD background key (HDKeyToggle)";
+        if (vk == cfg.hdKeyNext)    return "the mod's next HD variant key (HDKeyNext)";
+        if (vk == cfg.hdKeyPrev)    return "the mod's previous HD variant key (HDKeyPrev)";
+    }
+    int other = load ? cfg.quickSaveKey : cfg.quickLoadKey;
+    if (other < 0) other = GameQuickKey(!load);
+    if (other > 0 && other == dik) return load ? "the quick save key" : "the quick load key";
+    if (const uint16_t* keys = CurrentKeys()) {
+        for (int i = 0; i < kQuickSave; ++i) {
+            if (keys[i] == dik) return "the key of another action in the game's key settings";
+        }
+    }
+    return nullptr;
+}
+
 void Poll() {
+    // while a level runs - not in the game's dialogs (Poll runs in their frames too)
+    if (*reinterpret_cast<void* const*>(0x006C0FA8) != nullptr && !UiScale::DialogLoopRunning()) ApplyQuickKeys();
     if (!g_retryPending) {
         return;
     }
@@ -509,6 +657,7 @@ void Initialize() {
 }
 
 void Shutdown() {
+    RestoreGameKeys();
 }
 
 } // namespace InputFix

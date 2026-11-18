@@ -24,6 +24,11 @@ TEGO UŻYWA GRA
   fonts\*.hdfont            Czcionki gry 2x większe (model SGI): napisy w misji, w menu i w oknach.
   menu_parts\*.hdp          Przyciski, pergamin odprawy, pieczęcie, portrety 2x większe (model SGI). Nowe obrazki mod
                             zbiera do work\menu_parts\, robi je:  python -I tools/hd/upscale_menu_parts.py
+  minimap\classic\          Obrazek mapy obozu Sherwood z gry (leśna ścieżka) powiększony 4x (model dat2) - MinimapCamp=0.
+  minimap\clean|parchment\  Otwarta minimapa zrobiona z obrazu HD poziomu (4x obrazka gry): clean = naturalne kolory,
+                            parchment = zabarwiona jak stara mapa na pergaminie (domyślna). Gotowe pliki - gra niczego
+                            nie generuje. F10 -> MINIMAPA - OBRAZ / WIELKOSC. Robi je:
+                            powershell -File tools\hd\make_all_minimaps.ps1   (wszystko od zera)
 
 REMAKE TEŁ MENU (gra tego nie czyta)
   remake\                   Tła do przerobienia przez AI do obrazów, zrzuty z układem przycisków, PROMPTY.txt (jak to
@@ -38,6 +43,7 @@ DO OGLĄDANIA I PORÓWNAŃ (gra tego nie czyta)
   maps_png\*.png            Oryginalne mapy gry (do porównań; także wejście dla modeli AI).
   menu_png\<wariant>\*.png  Podglądy teł menu HD (i _oryginal\ - tła z gry, remake\ - nowe tła).
   menu_parts_png\*.png      Podglądy przycisków, pergaminu, pieczęci i portretów HD (na szachownicy).
+  minimap_png\*.png         Podglądy minimap HD (clean_ / parchment_<poziom>_<pora>_<klucz>.png).
   compare\                  Arkusze i animacje porównawcze: przed/po, warianty, klatki pośrednie.
 
 DLA NARZĘDZI (gra tego nie czyta)

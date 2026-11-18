@@ -303,6 +303,23 @@ namespace {
         }
         Logger::Info("Config loaded: Target Resolution=%dx%d, Borderless=%d, MaxFPS=%d",
                      cfg.width, cfg.height, cfg.windowedBorderless ? 1 : 0, cfg.maxFPS);
+        {
+            // The GOG installer marks Game.exe "run as administrator" (compatibility flags RUNASADMIN): a
+            // recorder or overlay without those rights can neither capture the game nor see its hot keys while
+            // the game is in front (Windows keeps lower programs out of an elevated one) - OBS, 2026-11-18.
+            HANDLE token = nullptr;
+            TOKEN_ELEVATION elevation{};
+            DWORD got = 0;
+            if (OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) {
+                if (GetTokenInformation(token, TokenElevation, &elevation, sizeof(elevation), &got)) {
+                    Logger::Info(elevation.TokenIsElevated
+                                     ? "Process: runs as administrator (GOG sets this for Game.exe) - OBS and other recorders "
+                                       "must run as administrator too to capture the game and react to their hot keys."
+                                     : "Process: runs without administrator rights.");
+                }
+                CloseHandle(token);
+            }
+        }
         if (iniOverride[0]) {
             Logger::Warn("Settings file overridden by SHERWOODFIX_INI: %s", iniPath.c_str());
         }

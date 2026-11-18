@@ -19,6 +19,19 @@ namespace InputFix {
     void Initialize();
     void Shutdown();
 
-    // Main thread, called every tick / presented frame: retries a failed acquire.
+    // Main thread, called every tick / presented frame: retries a failed acquire; while a level runs,
+    // puts the keys of QuickSaveKey / QuickLoadKey into the game's key settings.
     void Poll();
+
+    // UiScale, main thread: a dialog loop of the game starts (its own key screen too) - the game's quick
+    // save / load keys are back until a level ticks again.
+    void OnDialogLoop(bool entering);
+
+    // The game's own key of quick save (false) / quick load (true), DirectInput code; -1 = not known yet.
+    int GameQuickKey(bool load);
+
+    // Why a DirectInput key should not be the quick save (false) / quick load (true) key - one of the mod's
+    // own keys (F6..F10), the other quick key, or a key of another action in the game's key settings;
+    // nullptr = free. The F10 panel skips such keys, a clash set in the INI is logged.
+    const char* QuickKeyClash(int dik, bool load);
 }

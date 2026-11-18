@@ -2,6 +2,7 @@
 #include "config.h"
 #include "logger.h"
 #include "ui_scale.h"
+#include "widescreen_patch.h"
 #include "ddm/ddm_hd.h"
 #include "ddm/ddm_present.h"
 
@@ -97,6 +98,7 @@ namespace {
     std::vector<uint16_t> g_backdropWorld;
     int      g_backdropWorldW = 0, g_backdropWorldH = 0;
     unsigned g_backdropWorldRender = 0;
+    Shown    g_backdropView;                // the magnification computed for that render
     unsigned g_switches = 0;
     float g_lastEngineZoom = 0.0f;         // the engine's zoom as this module left it
     bool  g_gameZooming = false;           // the game runs a zoom animation of its own
@@ -118,6 +120,17 @@ namespace {
 
     // the engine's level for a zoom: 2.0 (HD pictures) from 2.0 up, 1.0 below
     float EngineFor(float z, float zMin) { return (z >= 1.995f || zMin >= 1.995f) ? 2.0f : 1.0f; }
+
+    // the bottom rows of the shown picture the hedge covers (full-height view; 0 otherwise)
+    float HedgeBand() { return WidescreenPatch::CameraStrip(); }
+
+    // the shown part's centre row: within the level, but low enough that the level's last rows can come
+    // above the hedge (`bandFrame` = the hedge's rows in frame pixels), never below the frame's last row
+    float ClampShownY(float cy, float contentB, float halfH, float bandFrame, float frameH) {
+        const float cyMax = (std::min)(contentB + bandFrame, frameH) - halfH;
+        if (cyMax < halfH) return (std::min)(contentB + bandFrame, frameH) * 0.5f;
+        return (std::max)(halfH, (std::min)(cyMax, cy));
+    }
 
     bool Busy(uint8_t* e) {
         const uint8_t st = e[kCamState];
@@ -311,6 +324,12 @@ void OnGameTick(uint8_t* e) {
         g_anchor = false;
         g_shown.on = false;
         g_hudDirty = true;
+        // wheel turns from before the level (the question that started the mission, the loading) are not
+        // for it: one such notch took a level 64 ms after its start from 2.0 to 1.74, the first briefing
+        // was drawn at the engine's 1.0 with a black band beside the level (YouTuber's video, 2026-11-18)
+        if (const int dropped = g_wheel.exchange(0)) {
+            Logger::Info("ViewZoom: %d mouse wheel step(s) from before the level ignored.", dropped);
+        }
         Logger::Info("ViewZoom: level %.0fx%.0f - zoom %.2f (from %.2f to %.2f).", F(e, kLevelSize), F(e, kLevelSize + 4),
                      g_zTarget, zMin, zMax);
     }
@@ -446,9 +465,10 @@ void OnWorldDrawn() {
     // what of the frame holds the level (the camera never lies left of / above it)
     const float contentR = (std::min)(W, (lw - camX) * zr);
     const float contentB = (std::min)(H, (lh - camY) * zr);
+    const float band = HedgeBand();
     float m = g_zShown / zr;
-    if (contentR > 1.0f) m = (std::max)(m, W / contentR);       // never a black band
-    if (contentB > 1.0f) m = (std::max)(m, H / contentB);
+    if (contentR > 1.0f) m = (std::max)(m, W / contentR);       // never a black band (behind the hedge: no matter)
+    if (contentB > 1.0f) m = (std::max)(m, (H - band) / contentB);
     if (m < 1.0005f) {
         g_shown = Shown{ false, 1.0f, 0.0f, 0.0f, camX, camY, zr, W, H };
         return;
@@ -471,7 +491,7 @@ void OnWorldDrawn() {
     const float halfW = W / (2.0f * m), halfH = H / (2.0f * m);
     float cx = W * 0.5f + g_offX * zr, cy = H * 0.5f + g_offY * zr;
     cx = (contentR - halfW < halfW) ? contentR * 0.5f : (std::max)(halfW, (std::min)(contentR - halfW, cx));
-    cy = (contentB - halfH < halfH) ? contentB * 0.5f : (std::max)(halfH, (std::min)(contentB - halfH, cy));
+    cy = ClampShownY(cy, contentB, halfH, band / m, H);
     g_offX = (cx - W * 0.5f) / zr;
     g_offY = (cy - H * 0.5f) / zr;
     g_shown = Shown{ true, m, cx - halfW, cy - halfH, camX, camY, zr, W, H };
@@ -507,7 +527,31 @@ bool TakeView(View& out) {
 
 void OnBackdropWorldDrawn(unsigned render) {
     g_backdropWorldRender = 0;
-    if (!g_installed || !g_enabled || !g_shown.on) return;     // only when the world is shown magnified
+    uint8_t* e = Engine();
+    if (!g_installed || !g_enabled || !e || *reinterpret_cast<void* const*>(e + kMapSurface) != g_level) return;
+    // The magnification this render needs - computed for it: the last frame's may be of another zoom (a
+    // level started at 2.0 and switched to the engine's 1.0 in the same tick drew its first briefing
+    // before any frame of the new zoom - the briefing showed the level small with a black band beside it)
+    Shown view{};
+    {
+        const float zr = F(e, kRenderZoom) > 0.01f ? F(e, kRenderZoom) : F(e, kZoom);
+        const float camX = F(e, kRenderCam), camY = F(e, kRenderCam + 4);
+        const float W = F(e, kViewport), H = F(e, kViewport + 4) - Strip();
+        const float lw = F(e, kLevelSize), lh = F(e, kLevelSize + 4);
+        if (zr < 0.01f || W < 1.0f || H < 1.0f || lw < 1.0f || lh < 1.0f || e[kCamState] == 3 || e[kCamState] == 4) return;
+        const float contentR = (std::min)(W, (lw - camX) * zr);
+        const float contentB = (std::min)(H, (lh - camY) * zr);
+        const float band = HedgeBand();
+        float m = g_zShown / zr;
+        if (contentR > 1.0f) m = (std::max)(m, W / contentR);
+        if (contentB > 1.0f) m = (std::max)(m, (H - band) / contentB);
+        if (m < 1.0005f) return;                // shown as drawn: the level copied from the frame is right
+        const float halfW = W / (2.0f * m), halfH = H / (2.0f * m);
+        float cx = W * 0.5f + g_offX * zr, cy = H * 0.5f + g_offY * zr;
+        cx = (contentR - halfW < halfW) ? contentR * 0.5f : (std::max)(halfW, (std::min)(contentR - halfW, cx));
+        cy = ClampShownY(cy, contentB, halfH, band / m, H);
+        view = Shown{ true, m, cx - halfW, cy - halfH, camX, camY, zr, W, H };
+    }
     const uint8_t* bits = nullptr;
     int pitch = 0, bw = 0, bh = 0;
     if (!DDM::BackBits(bits, pitch, bw, bh) || bw <= 0 || bh <= 0) return;
@@ -518,15 +562,16 @@ void OnBackdropWorldDrawn(unsigned render) {
     }
     g_backdropWorldW = bw;
     g_backdropWorldH = bh;
+    g_backdropView = view;
     g_backdropWorldRender = render;
 }
 
 bool BackdropWorld(unsigned render, View& out) {
-    if (!g_enabled || !g_shown.on || render == 0 || g_backdropWorldRender != render) return false;
-    out.m = g_shown.m;
-    out.cropX = g_shown.cropX;
-    out.cropY = g_shown.cropY;
-    out.worldH = g_shown.worldH;
+    if (!g_enabled || render == 0 || g_backdropWorldRender != render || !g_backdropView.on) return false;
+    out.m = g_backdropView.m;
+    out.cropX = g_backdropView.cropX;
+    out.cropY = g_backdropView.cropY;
+    out.worldH = g_backdropView.worldH;
     out.snap = g_backdropWorld.data();
     out.w = g_backdropWorldW;
     out.h = g_backdropWorldH;

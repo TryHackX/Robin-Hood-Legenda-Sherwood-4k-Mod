@@ -1,9 +1,11 @@
 #include "settings_menu.h"
 #include "config.h"
+#include "input_fix.h"
 #include "logger.h"
 #include "ui_scale.h"
 #include "view_zoom.h"
 #include "window_manager.h"
+#include "ddm/ddm_blit.h"
 #include "ddm/ddm_hd.h"
 
 #include <MinHook.h>
@@ -36,8 +38,8 @@ namespace {
     // ---- the options --------------------------------------------------------------------
     enum Item {
         kHdBackground, kHdSprites, kBetween, kSmoothSprites, kWater,
-        kUiScale, kMap, kMapDrag, kSmoothZoom, kZoomStep, kZoomMax, kMenuZoom, kHdMenu,
-        kVSync, kFilter, kScroll, kFps, kMouse,
+        kUiScale, kMap, kMapDrag, kMapSize, kMapPicture, kSmoothZoom, kZoomStep, kZoomMax, kMenuZoom, kHdMenu,
+        kVSync, kFilter, kScroll, kFps, kMouse, kQuickSave, kQuickLoad,
         kItemCount
     };
 
@@ -51,6 +53,8 @@ namespace {
             case kUiScale:       return "INTERFEJS W MISJI";
             case kMap:           return "MINIMAPA";
             case kMapDrag:       return "MINIMAPA - PRZECIAGANIE LEWYM";
+            case kMapSize:       return "MINIMAPA - WIELKOSC";
+            case kMapPicture:    return "MINIMAPA - OBRAZ";
             case kSmoothZoom:    return "PLYNNY ZOOM (LUPA)";
             case kZoomStep:      return "KROK ZOOMU";
             case kZoomMax:       return "NAJWIEKSZE PRZYBLIZENIE";
@@ -61,6 +65,8 @@ namespace {
             case kScroll:        return "PLYNNE PRZEWIJANIE MAPY";
             case kFps:           return "LICZNIK FPS";
             case kMouse:         return "PREDKOSC KURSORA";
+            case kQuickSave:     return "KLAWISZ SZYBKIEGO ZAPISU";
+            case kQuickLoad:     return "KLAWISZ SZYBKIEGO ODCZYTU";
             default:             return "";
         }
     }
@@ -81,6 +87,10 @@ namespace {
                 return UiScale::InterfaceScaled() ? nullptr : "TYLKO Z INTERFEJSEM 2X";
             case kMapDrag:
                 return UiScale::MapDragAvailable() ? nullptr : "NIEZNANA WERSJA GRY";
+            case kMapSize:
+            case kMapPicture:
+                if (!UiScale::InterfaceScaleAvailable()) return "OD SZEROKOSCI OBRAZU 2048";
+                return UiScale::InterfaceScaled() ? nullptr : "TYLKO Z INTERFEJSEM 2X";
             case kSmoothZoom:
                 return ViewZoom::Installed() ? nullptr : "TYLKO W TRYBIE HD (SZEROKOSC OD 2048)";
             case kZoomStep:
@@ -94,6 +104,66 @@ namespace {
             default:
                 return nullptr;
         }
+    }
+
+    // quick save / load keys to choose from (-1 = as in the game's own key settings, 0 = none; DirectInput
+    // codes: F1..F12, Insert, Delete, Home, End, Page Up, Page Down, Pause) - any other key via the INI
+    constexpr int kQuickKeys[] = { -1, 0, 0x3B, 0x3C, 0x3D, 0x3E, 0x3F, 0x40, 0x41, 0x42, 0x43, 0x44, 0x57, 0x58,
+                                   0xD2, 0xD3, 0xC7, 0xCF, 0xC9, 0xD1, 0xC5 };
+    constexpr int kQuickKeyCount = static_cast<int>(sizeof(kQuickKeys) / sizeof(kQuickKeys[0]));
+
+    void QuickKeyText(int value, bool load, char* out, int n) {
+        if (value == 0) { std::snprintf(out, n, "BRAK"); return; }
+        if (value < 0) {
+            const int game = InputFix::GameQuickKey(load);
+            const char* name = game > 0 ? SherwoodConfig::KeyName(game) : nullptr;
+            if (name) std::snprintf(out, n, "JAK W OPCJACH GRY (%s)", name);
+            else if (game == 0) std::snprintf(out, n, "JAK W OPCJACH GRY (BRAK)");
+            else std::snprintf(out, n, "JAK W OPCJACH GRY");
+            return;
+        }
+        const char* name = SherwoodConfig::KeyName(value);
+        if (name) std::snprintf(out, n, "%s", name);
+        else std::snprintf(out, n, "KOD 0X%02X", value);
+    }
+
+    void WriteQuickKey(const char* key, int value) {
+        char text[24];
+        const char* name = value > 0 ? SherwoodConfig::KeyName(value) : nullptr;
+        if (value < 0) text[0] = 0;
+        else if (value == 0) std::snprintf(text, sizeof(text), "none");
+        else if (name) std::snprintf(text, sizeof(text), "%s", name);
+        else std::snprintf(text, sizeof(text), "0x%02X", value);
+        WritePrivateProfileStringA("Input", key, text, SherwoodConfig::Get().iniPath.c_str());
+    }
+
+    // the next key of the list that clashes with nothing (the mod's F6..F10, the other quick key, the game's
+    // other actions); "none" always fits
+    int NextQuickKey(int value, int dir, bool load) {
+        int index = -1;
+        for (int i = 0; i < kQuickKeyCount; ++i) {
+            if (kQuickKeys[i] == value) index = i;
+        }
+        if (index < 0) index = 0;
+        for (int tries = 0; tries < kQuickKeyCount; ++tries) {
+            index = ((index + dir) % kQuickKeyCount + kQuickKeyCount) % kQuickKeyCount;
+            const int key = kQuickKeys[index];
+            const int effective = key < 0 ? InputFix::GameQuickKey(load) : key;
+            if (effective <= 0 || !InputFix::QuickKeyClash(effective, load)) return key;
+        }
+        return 0;
+    }
+
+    // the opened map's sizes (MapScale, percent): the classic one (as the rest of the interface) and more
+    // (user 2026-11-18: "three sizes and the classic", then "and x5")
+    constexpr int kMapScales[] = { 200, 250, 300, 500, 150 };
+    constexpr int kMapScaleCount = static_cast<int>(sizeof(kMapScales) / sizeof(kMapScales[0]));
+
+    void MapSizeText(int percent, char* out, int n) {
+        const char* name = percent == 200 ? "KLASYCZNA" : percent == 150 ? "MNIEJSZA" : percent == 250 ? "WIEKSZA" :
+                           percent == 300 ? "DUZA" : percent == 500 ? "BARDZO DUZA" : "Z INI";
+        if (percent % 100 == 0) std::snprintf(out, n, "%s (%dX)", name, percent / 100);
+        else std::snprintf(out, n, "%s (%d.%dX)", name, percent / 100, (percent % 100) / 10);
     }
 
     constexpr int kMouseSteps[] = { 0, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150, 175, 200 };
@@ -123,6 +193,11 @@ namespace {
             case kUiScale:       std::snprintf(out, n, "%s", UiScale::InterfaceScaled() ? "2X WIEKSZY" : "ORYGINALNY"); break;
             case kMap:           std::snprintf(out, n, "%s", UiScale::MapInCorner() ? "PRAWY GORNY ROG" : "JAK W GRZE (U GORY)"); break;
             case kMapDrag:       std::snprintf(out, n, "%s", UiScale::MapDragCamera() ? "PRZESUWA KAMERE" : "PRZESUWA OKNO (JAK W GRZE)"); break;
+            case kMapSize:       MapSizeText(cfg.mapScale, out, n); break;
+            case kMapPicture:
+                std::snprintf(out, n, "%s", cfg.minimapHd >= 3 ? "NOWY NA PERGAMINIE" : cfg.minimapHd == 2 ? "NOWY (Z TLA HD)" :
+                                            cfg.minimapHd == 1 ? "KLASYCZNY POWIEKSZONY" : "KLASYCZNY");
+                break;
             case kSmoothZoom:    std::snprintf(out, n, "%s", ViewZoom::Enabled() ? "TAK" : "NIE (TYLKO 1X I 2X)"); break;
             case kZoomStep:      std::snprintf(out, n, "%d%%", ViewZoom::StepPercent()); break;
             case kZoomMax:       std::snprintf(out, n, "%.1fX", ViewZoom::MaxPercent() / 100.0); break;
@@ -140,6 +215,8 @@ namespace {
                 if (cfg.mouseSensitivity <= 0) std::snprintf(out, n, "AUTO");
                 else std::snprintf(out, n, "%d%%", cfg.mouseSensitivity);
                 break;
+            case kQuickSave:     QuickKeyText(cfg.quickSaveKey, false, out, n); break;
+            case kQuickLoad:     QuickKeyText(cfg.quickLoadKey, true, out, n); break;
             default: out[0] = 0; break;
         }
         for (char* p = out; *p; ++p) *p = static_cast<char>(std::toupper(static_cast<unsigned char>(*p)));
@@ -197,6 +274,23 @@ namespace {
                 UiScale::SetMapDragCamera(on);
                 cfg.mapDragCamera = on;
                 WriteIni("Display", "MapDragCamera", on ? 1 : 0);
+                break;
+            }
+            case kMapSize: {
+                int i = -1;
+                for (int k = 0; k < kMapScaleCount; ++k) if (kMapScales[k] == cfg.mapScale) i = k;
+                i = i < 0 ? 0 : ((i + (dir < 0 ? kMapScaleCount - 1 : 1)) % kMapScaleCount);
+                cfg.mapScale = kMapScales[i];
+                UiScale::SetMapScale(cfg.mapScale);
+                WriteIni("Display", "MapScale", cfg.mapScale);
+                break;
+            }
+            case kMapPicture: {
+                // new on parchment -> new -> classic upscaled -> classic
+                cfg.minimapHd = ((cfg.minimapHd + (dir < 0 ? 1 : 3)) % 4);
+                DDM::DropScaledPictures();      // the map's pictures made anew from the chosen kind
+                WriteIni("Display", "MinimapHD", cfg.minimapHd);
+                Logger::Info("Settings: map picture MinimapHD=%d (settings panel).", cfg.minimapHd);
                 break;
             }
             case kSmoothZoom: {
@@ -269,6 +363,14 @@ namespace {
                 WriteIni("Input", "MouseSensitivity", cfg.mouseSensitivity);
                 break;
             }
+            case kQuickSave:
+                cfg.quickSaveKey = NextQuickKey(cfg.quickSaveKey, dir, false);
+                WriteQuickKey("QuickSaveKey", cfg.quickSaveKey);
+                break;
+            case kQuickLoad:
+                cfg.quickLoadKey = NextQuickKey(cfg.quickLoadKey, dir, true);
+                WriteQuickKey("QuickLoadKey", cfg.quickLoadKey);
+                break;
             default: break;
         }
         char value[64];
@@ -467,11 +569,12 @@ namespace {
         if (!g_open.load() || !dst || !src || w < 320 || h < 240) return;
         const int s = h >= 1080 ? 4 : (h >= 600 ? 2 : 1);
         const int ch = 6 * s;                   // letter advance
-        const int rowH = 12 * s;
         const int cols = 62;
         const int pad = 3 * ch;
         const bool running = InMission() && !UiScale::DialogShown();
         const int lines = kItemCount + 6 + (running ? 1 : 0);
+        // rows of 12 letter pixels - closer together when they would not fit (22 options at 1440 lines)
+        const int rowH = (std::max)(9 * s, (std::min)(12 * s, (h - 2 * pad) / lines));
         const int pw = (std::min)(cols * ch + 2 * pad, w);
         const int ph = (std::min)(lines * rowH + 2 * pad, h);
         const int x0 = (w - pw) / 2, y0 = (h - ph) / 2;

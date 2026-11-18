@@ -88,6 +88,14 @@ namespace DDM::HD::Patch {
     // Main thread only, HDMenu=1; false = none.
     bool InterfacePicture(const Buf& src, const RECT& r, int& w2, int& h2, const uint32_t*& bgra, const uint8_t*& shade);
 
+    // A picture of the opened map at its own size (DDM::ScaledPicture16): by [Display] MinimapHD - 3 the one made
+    // from the level's HD background and tinted like the game's parchment (hd\minimap\parchment\<key>.hdp), 2 the
+    // same without the tint (hd\minimap\clean\), each 2..4 times the game's picture (the other kind, then the
+    // upscaled game's picture when one is missing); 1 the game's picture upscaled (InterfacePicture); 0 none.
+    // The Sherwood camp's own picture shows another place (a forest path); with MinimapCamp=0 (MinimapHD >= 1) it is
+    // kept, upscaled 4x (hd\minimap\classic\). wk x hk BGRA (alpha = coverage) and the shadow coverage. Main thread.
+    bool MapPicture(const Buf& src, const RECT& r, int& wk, int& hk, const uint32_t*& bgra, const uint8_t*& shade);
+
     // Test harness
     int Describe(char* out, int size);
 }

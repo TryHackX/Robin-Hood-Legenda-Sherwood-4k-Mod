@@ -1,5 +1,6 @@
 #include "ui_scale.h"
 #include "config.h"
+#include "input_fix.h"
 #include "logger.h"
 #include "test_harness.h"
 #include "timing.h"
@@ -12,6 +13,7 @@
 #include <MinHook.h>
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -83,9 +85,17 @@ namespace {
     // What was drawn where in the last frame (enlarged rectangle and its anchor): the mouse is
     // mapped back with the anchor of the picture it is over - an enlarged picture may reach into
     // the next grid cell.
-    struct Piece { float l, t, r, b, ax, ay; };
+    struct Piece { float l, t, r, b, ax, ay, f; };     // f: the factor it was enlarged with (the map has its own)
     std::vector<Piece> g_pieces[2];
     int g_piecesCur = 0;            // being filled now; the other one is the last complete frame
+
+    // The opened map's own size ([Display] MapScale, 2026-11-18, user: "an option to choose the minimap's size"):
+    // its window is enlarged by this factor instead of the interface's 2 (main thread).
+    float g_mapFactor = 2.0f;
+    float g_mapFactorUsed = 2.0f;   // what the opened map got last (a tall map at 5x: what fits above the hedge)
+    bool  g_lastWasMap = false;     // Transform: the last rectangle was the opened map's
+    float g_lastF = 1.0f;           // ... and the factor it got
+    float MapF() { return g_factor > 1 ? g_mapFactor : static_cast<float>(g_factor); }
 
     struct Box { float l = 1e9f, t = 1e9f, r = -1e9f, b = -1e9f; bool any = false; };
 
@@ -164,12 +174,14 @@ namespace {
         // Over the world (no enlarged picture under the mouse) the windows see the real position:
         // edge scrolling, the selection frame and the like work as without the scale.
         float ax = x, ay = y;
+        float f = static_cast<float>(g_factor);
         bool found = false;
         if ((g_camDragMap || g_winDragMap) && g_mapAnchorValid) {
             // the map is being dragged: the pointer belongs to it wherever the cursor is (next to
             // the window the mapping changed, and the dragged window jumped back and forth)
             ax = g_mapAx;
             ay = g_mapAy;
+            f = g_mapFactorUsed;
             found = true;
         }
         const auto& last = g_pieces[g_piecesCur ^ 1];
@@ -177,6 +189,7 @@ namespace {
             if (x >= it->l && x < it->r && y >= it->t && y < it->b) {
                 ax = it->ax;
                 ay = it->ay;
+                f = it->f;
                 found = true;
                 break;
             }
@@ -185,11 +198,18 @@ namespace {
             ax = w * 0.5f;      // where the moved map would be for the game: away from it, about the centre
             ay = h * 0.5f;
         }
+        ox = ax + (x - ax) / f;
+        oy = ay + (y - ay) / f;
+        const float g = static_cast<float>(g_factor);
+        if (f != g && g > 1.0f) {
+            // over the map at its own size: a tooltip drawn after the windows (at the interface's factor) must
+            // still appear at the cursor - the anchor that maps the pointer's point there with that factor
+            ax = (ox * g - x) / (g - 1.0f);
+            ay = (oy * g - y) / (g - 1.0f);
+        }
         g_pointerAx = ax;
         g_pointerAy = ay;
         g_pointerAnchor = true;
-        ox = ax + (x - ax) / static_cast<float>(g_factor);
-        oy = ay + (y - ay) / static_cast<float>(g_factor);
     }
 
     // ---- menu zoom (see ui_scale.h)
@@ -540,8 +560,10 @@ namespace {
         Transform(rc[0], rc[1], rc[2], rc[3]);
         if (rc[2] <= rc[0] || rc[3] <= rc[1]) return 1;     // left out (a dialog's backdrop render)
         const uint32_t r = o_DrawRect(mgr, edx, id, rc, colour, flags);
-        // lines as thick as the rest of the enlarged picture (the routine clips to the surface)
-        for (int i = 1; i < g_factor; ++i) {
+        // lines as thick as the rest of the enlarged picture (the routine clips to the surface; the map at
+        // its own size: its factor, rounded)
+        const int thick = (std::max)(1, static_cast<int>(g_lastF + 0.5f));
+        for (int i = 1; i < thick; ++i) {
             const float in[4] = { rc[0] + i, rc[1] + i, rc[2] - i, rc[3] - i };
             if (in[2] > in[0] && in[3] > in[1]) o_DrawRect(mgr, edx, id, in, colour, flags);
         }
@@ -671,7 +693,35 @@ namespace {
 
     uint32_t __fastcall Hook_SwingRecognise(void* mgr, void* edx, void* a, void* b) {
         TrailInFrame inFrame(mgr);
-        return o_SwingRecognise(mgr, edx, a, b);
+        const uint32_t r = o_SwingRecognise(mgr, edx, a, b);
+        // The log part (2026-11-18, YouTuber: "the character does not react to what I draw, normal strikes take
+        // a lot of waving, the spin attack works"): what the game recognised, from which stroke - the first
+        // 60 swings of a session. Result 0 = no attack; the shapes the game knows (Manual.pdf p. 27): lines
+        // forward / back / left / right, half circles, circles, the infinity sign.
+        static int s_logged = 0;
+        if (s_logged < 60 && mgr) {
+            ++s_logged;
+            auto* list = static_cast<uint8_t*>(mgr) + 0x5C;
+            const int count = *reinterpret_cast<const int*>(list + 8);
+            float x0 = 1e9f, y0 = 1e9f, x1 = -1e9f, y1 = -1e9f, length = 0.0f, px = 0.0f, py = 0.0f;
+            for (int i = 0; i < count && i < 512; ++i) {
+                const float* v = g_fnListAt(list, nullptr, static_cast<uint32_t>(i));
+                if (!v) continue;
+                x0 = (std::min)(x0, v[0]);
+                y0 = (std::min)(y0, v[1]);
+                x1 = (std::max)(x1, v[0]);
+                y1 = (std::max)(y1, v[1]);
+                if (i > 0) length += std::sqrt((v[0] - px) * (v[0] - px) + (v[1] - py) * (v[1] - py));
+                px = v[0];
+                py = v[1];
+            }
+            const float* who = static_cast<const float*>(a);      // the fighter on the screen (WorldToScreen)
+            Logger::Info("Swing: %d points, %.0fx%.0f px, drawn %.0f px (frame pixels; %d of them mapped from the screen), "
+                         "fighter at (%.0f,%.0f) -> result %u%s.",
+                         count, count > 0 ? x1 - x0 : 0.0f, count > 0 ? y1 - y0 : 0.0f, length, inFrame.n,
+                         who ? who[0] : 0.0f, who ? who[1] : 0.0f, r, r == 0 ? " (no attack)" : "");
+        }
+        return r;
     }
 
     // The game's dialog loop (0x0053C390, thiscall, ret): main menu screens, briefing, in-game
@@ -726,6 +776,7 @@ namespace {
         // the level taken at the first page stays; taken from the screen, the next page's
         // parchment would count as the level and stay small)
         if (g_dialogLoopDepth == 0 && g_missionFramed) DDM::HD::Menu::NoteDialogStart();
+        if (g_dialogLoopDepth == 0) InputFix::OnDialogLoop(true);  // the game's own quick save / load keys
         g_missionFramed = false;
         ++g_dialogLoopDepth;
         o_DialogLoop(dlg, edx);
@@ -960,7 +1011,7 @@ namespace {
         }
         float p[2] = { *reinterpret_cast<const float*>(kAddrCursor), *reinterpret_cast<const float*>(kAddrCursor + 4) };
         if (g_factor > 1 && g_mapAnchorValid) {     // as MapBack maps it for the pointer
-            const float f = static_cast<float>(g_factor);
+            const float f = g_mapFactorUsed;
             p[0] = g_mapAx + (p[0] - g_mapAx) / f;
             p[1] = g_mapAy + (p[1] - g_mapAy) / f;
         }
@@ -1096,7 +1147,7 @@ namespace {
     // A window keeps the anchor it got when it appeared (at this size): the game lets the player
     // drag some windows (the map) - computed anew from the moving rectangle every frame, the
     // enlarged window would not follow the mouse and only shake in place.
-    struct KeptAnchor { const void* win; float w, h, ax, ay; };
+    struct KeptAnchor { const void* win; float w, h, ax, ay, f; };
     std::vector<KeptAnchor> g_kept;
 
     KeptAnchor* FindKept(const void* win) {
@@ -1184,6 +1235,10 @@ namespace {
         ScreenSize(w, h);
         const void* win = g_curWindow;
         float rc[4];
+        float fw = static_cast<float>(g_factor);    // this rectangle's factor (the opened map: its own size)
+        bool isMap = false;
+        g_lastWasMap = false;
+        g_lastF = fw;
         // A dialog's backdrop render (Timing::InBackdropRender): the windows in the middle of the
         // screen are left out (an empty rectangle: the callers draw nothing). The dialog lies there,
         // and the window that opened it had drawn the same parchment 2x there, which stuck out
@@ -1215,15 +1270,25 @@ namespace {
             ax = g_groupAx;
             ay = g_groupAy;
         } else if (WindowRect(win, w, h, rc)) {
-            const float f = static_cast<float>(g_factor);
             const bool openMap = IsOpenMap(win, rc);
+            float f = openMap ? MapF() : static_cast<float>(g_factor);
+            if (openMap) {
+                // a large map stays above the hedge along the bottom edge (the tall maps - Nottingham, Derby,
+                // 246 px - at 5x: about 4.4x)
+                const float g = static_cast<float>(g_factor);
+                const float fit = (h - 80.0f * g - kMapTop * g) / (std::max)(1.0f, rc[3] - rc[1]);
+                if (f > fit) f = (std::max)(1.5f, std::floor(fit * 100.0f) / 100.0f);
+                g_mapFactorUsed = f;
+            }
+            fw = f;
+            isMap = openMap;
             // Only the map keeps the anchor it got when it appeared (the player drags it). Windows
             // the game itself moves - the skills tooltip next to the pointer in the camp, the
             // portraits of a new selection - took the old anchor along and were drawn away from
             // their place or not at all on the screen (YouTuber's report 2026-11-17).
             const uint32_t vt = WindowVt(win);
             KeptAnchor* kept = vt == kMapVtable ? FindKept(win) : nullptr;
-            if (kept && kept->w == rc[2] - rc[0] && kept->h == rc[3] - rc[1]) {
+            if (kept && kept->w == rc[2] - rc[0] && kept->h == rc[3] - rc[1] && kept->f == f) {
                 ax = kept->ax;      // the anchor it got when it appeared (it may have been dragged since)
                 ay = kept->ay;
             } else if (vt == kTooltipVtable) {
@@ -1236,10 +1301,11 @@ namespace {
                 ax = static_cast<float>(static_cast<int>((f * rc[0] - left) / (f - 1.0f)));
                 ay = static_cast<float>(static_cast<int>((f * rc[1] - top) / (f - 1.0f)));
             } else if (g_mapCorner && openMap) {
-                // the opened map in the top-right corner, below the corner's pictures: the anchor
-                // that puts its enlarged top-right corner there
-                const float x0 = w - kMapMargin * f - f * (rc[2] - rc[0]);
-                const float y0 = kMapTop * f;
+                // the opened map in the top-right corner, below the corner's pictures (those keep the
+                // interface's factor): the anchor that puts its enlarged top-right corner there (f >= 1.5)
+                const float g = static_cast<float>(g_factor);
+                const float x0 = std::floor(w - kMapMargin * g - f * (rc[2] - rc[0]));
+                const float y0 = kMapTop * g;
                 ax = (f * rc[0] - x0) / (f - 1.0f);
                 ay = (f * rc[1] - y0) / (f - 1.0f);
             } else {
@@ -1273,12 +1339,12 @@ namespace {
                     if (ax + (rc[0] - ax) * f < 0.0f) ax = 0.0f;
                 }
             }
-            if (vt == kMapVtable && (!kept || kept->w != rc[2] - rc[0] || kept->h != rc[3] - rc[1])) {
+            if (vt == kMapVtable && (!kept || kept->w != rc[2] - rc[0] || kept->h != rc[3] - rc[1] || kept->f != f)) {
                 if (!kept && g_kept.size() < 64) {
-                    g_kept.push_back(KeptAnchor{ win, 0.0f, 0.0f, 0.0f, 0.0f });
+                    g_kept.push_back(KeptAnchor{ win, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f });
                     kept = &g_kept.back();
                 }
-                if (kept) *kept = KeptAnchor{ win, rc[2] - rc[0], rc[3] - rc[1], ax, ay };
+                if (kept) *kept = KeptAnchor{ win, rc[2] - rc[0], rc[3] - rc[1], ax, ay, f };
             }
             if (openMap) {
                 // where the enlarged map lies (input thread: its rolled-up ends close it, its
@@ -1296,13 +1362,14 @@ namespace {
         } else {
             Anchor((l + r) * 0.5f, (t + b) * 0.5f, w, h, ax, ay);
         }
-        const float f = static_cast<float>(g_factor);
-        l = ax + (l - ax) * f;
-        r = ax + (r - ax) * f;
-        t = ay + (t - ay) * f;
-        b = ay + (b - ay) * f;
+        l = ax + (l - ax) * fw;
+        r = ax + (r - ax) * fw;
+        t = ay + (t - ay) * fw;
+        b = ay + (b - ay) * fw;
         auto& cur = g_pieces[g_piecesCur];
-        if (cur.size() < 4096) cur.push_back(Piece{ l, t, r, b, ax, ay });
+        if (cur.size() < 4096) cur.push_back(Piece{ l, t, r, b, ax, ay, fw });
+        g_lastWasMap = isMap;
+        g_lastF = fw;
     }
 
     // The mission's drawing state while a dialog's backdrop render runs (BeginBackdropRender).
@@ -1528,11 +1595,35 @@ void ScaleRect(RECT& rc) {
     float l = static_cast<float>(rc.left), t = static_cast<float>(rc.top);
     float r = static_cast<float>(rc.right), b = static_cast<float>(rc.bottom);
     Transform(l, t, r, b);
-    // anchors are whole pixels (0, W/2, W) and the factor is 2: the results are whole too
-    rc.left = static_cast<LONG>(l);
-    rc.top = static_cast<LONG>(t);
-    rc.right = static_cast<LONG>(r);
-    rc.bottom = static_cast<LONG>(b);
+    if (!g_lastWasMap) {
+        // anchors are whole pixels (0, W/2, W) and the factor is 2: the results are whole too
+        rc.left = static_cast<LONG>(l);
+        rc.top = static_cast<LONG>(t);
+        rc.right = static_cast<LONG>(r);
+        rc.bottom = static_cast<LONG>(b);
+        return;
+    }
+    // the map at its own size (2.5x ...): rounded corner, rounded size - the same picture keeps one size
+    // wherever the window is dragged (DDM::ScaledPicture16 keeps a scaled copy per size)
+    rc.left = static_cast<LONG>(std::lround(l));
+    rc.top = static_cast<LONG>(std::lround(t));
+    rc.right = rc.left + static_cast<LONG>(std::lround(r - l));
+    rc.bottom = rc.top + static_cast<LONG>(std::lround(b - t));
+}
+
+bool LastScaledWasMap() {
+    return g_lastWasMap;
+}
+
+float MapFactor() {
+    return MapF();
+}
+
+void SetMapScale(int percent) {
+    const float f = static_cast<float>((std::max)(150, (std::min)(500, percent))) / 100.0f;
+    if (f == g_mapFactor) return;
+    g_mapFactor = f;
+    Logger::Info("UiScale: opened map x%.2f (settings panel).", f);
 }
 
 void ScaleRectF(float* ltrb) {
@@ -1705,9 +1796,15 @@ void Install() {
     }
     g_uiInstalled = true;
     g_factor = cfg.uiScale >= 2 ? 2 : 1;
-    Logger::Info("UiScale: mission interface %s (each window grows from its screen corner, middle windows about their centre; mouse mapped back); map %s.",
+    g_mapFactor = static_cast<float>((std::max)(150, (std::min)(500, cfg.mapScale))) / 100.0f;
+    g_mapFactorUsed = g_mapFactor;
+    Logger::Info("UiScale: mission interface %s (each window grows from its screen corner, middle windows about their centre; mouse mapped back); "
+                 "map %s, opened map x%.2f (MapScale), its picture: %s (MinimapHD=%d).",
                  g_factor > 1 ? "x2" : "at its size (UIScale=0, can be switched in the settings panel)",
-                 g_mapCorner ? "in the top-right corner" : "where the game opens it");
+                 g_mapCorner ? "in the top-right corner" : "where the game opens it", g_mapFactor,
+                 cfg.minimapHd >= 3 ? "made from the level's HD picture, tinted like parchment" :
+                 cfg.minimapHd == 2 ? "made from the level's HD picture" :
+                 cfg.minimapHd == 1 ? "the game's, upscaled" : "the game's own", cfg.minimapHd);
 }
 
 } // namespace UiScale

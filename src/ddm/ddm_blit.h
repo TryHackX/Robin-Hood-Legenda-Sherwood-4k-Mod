@@ -43,4 +43,11 @@ namespace DDM {
     // thread only: the filtered picture is kept and drawn again while its source pixels stay the
     // same - the HUD is not filtered anew in every frame. Same pixels as SmoothSprite2x16.
     void SmoothPicture2x16(const Buf& dst, const RECT& dr, const Buf& src, const RECT& sr, const RECT& clip, uint32_t key);
+
+    // The opened map at its own size (UiScale::LastScaledWasMap, [Display] MapScale): picture `sr` scaled onto
+    // `dr` of any size - from its HD version (HD::Patch::MapPicture) when there is one, else the game's pixels -
+    // with a tent filter in premultiplied colour (the colour key stays transparent, soft edge). Kept like
+    // SmoothPicture2x16 (one copy per picture and size). Main thread only.
+    void ScaledPicture16(const Buf& dst, const RECT& dr, const Buf& src, const RECT& sr, const RECT& clip, uint32_t key);
+    void DropScaledPictures();      // the choice of map pictures changed (settings panel): made anew
 }

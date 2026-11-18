@@ -949,6 +949,81 @@ bool InterfacePicture(const Buf& src, const RECT& r, int& w2, int& h2, const uin
     return true;
 }
 
+namespace {
+    // the opened map's pictures (tools\hd\make_all_minimaps.ps1): 0 = clean, 1 = parchment (made from the levels'
+    // HD backgrounds), 2 = classic (a game picture kept as it is, upscaled - the Sherwood camp's); by content key,
+    // null = no file
+    std::unordered_map<uint64_t, std::unique_ptr<Picture>> g_minimaps[3];
+    const char* const kMinimapKind[3] = { "clean", "parchment", "classic" };
+
+    const Picture* LoadMinimap(int kind, uint64_t key, int w, int h) {
+        auto& cache = g_minimaps[kind];
+        auto it = cache.find(key);
+        if (it != cache.end()) return it->second.get();
+        char name[64];
+        std::snprintf(name, sizeof(name), "%016llx.hdp", static_cast<unsigned long long>(key));
+        const std::string path = GameDir() + "hd\\minimap\\" + kMinimapKind[kind] + "\\" + name;
+        std::unique_ptr<Picture> p;
+        HANDLE f = CreateFileA(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (f != INVALID_HANDLE_VALUE) {
+            struct { char magic[4]; uint32_t version, w, h; } hdr{};
+            DWORD got = 0;
+            if (ReadFile(f, &hdr, sizeof(hdr), &got, nullptr) && got == sizeof(hdr) && std::memcmp(hdr.magic, "HDMP", 4) == 0 &&
+                hdr.version == 1 && hdr.w % w == 0 && hdr.h % h == 0 && hdr.w / w == hdr.h / h && hdr.w / w >= 2 && hdr.w / w <= 4) {
+                p = std::make_unique<Picture>();
+                p->w2 = static_cast<int>(hdr.w);
+                p->h2 = static_cast<int>(hdr.h);
+                const size_t n = static_cast<size_t>(p->w2) * p->h2;
+                p->bgra.resize(n);
+                p->shade.resize(n);
+                DWORD a = 0, b = 0;
+                if (!ReadFile(f, p->bgra.data(), static_cast<DWORD>(n * 4), &a, nullptr) || a != n * 4 ||
+                    !ReadFile(f, p->shade.data(), static_cast<DWORD>(n), &b, nullptr) || b != n) {
+                    p.reset();
+                }
+            }
+            CloseHandle(f);
+            if (p) {
+                Logger::Info("HD minimap: %s\\%s (%dx%d) for a map picture of %dx%d.", kMinimapKind[kind], name, p->w2, p->h2, w, h);
+            } else {
+                Logger::Warn("HD minimap: %s could not be read.", path.c_str());
+            }
+        }
+        return (cache[key] = std::move(p)).get();
+    }
+}
+
+bool MapPicture(const Buf& src, const RECT& r, int& wk, int& hk, const uint32_t*& bgra, const uint8_t*& shade) {
+    const int mode = SherwoodConfig::Get().minimapHd;
+    if (mode <= 0 || !Diag::IsMainThread()) return false;
+    const int w = r.right - r.left, h = r.bottom - r.top;
+    if (w < 4 || h < 4 || static_cast<int64_t>(w) * h > 640 * 480 || r.left < 0 || r.top < 0 || r.right > src.w || r.bottom > src.h) {
+        return false;
+    }
+    const uint64_t key = Fnv(src, r);
+    auto use = [&](const Picture* p) {
+        wk = p->w2;
+        hk = p->h2;
+        bgra = p->bgra.data();
+        shade = p->shade.data();
+        return true;
+    };
+    // a picture the game's own is kept for (the Sherwood camp's forest path, MinimapCamp=0): that one, upscaled
+    if (SherwoodConfig::Get().minimapCamp == 0) {
+        if (const Picture* p = LoadMinimap(2, key, w, h)) return use(p);
+    }
+    if (mode >= 2) {
+        const int first = mode >= 3 ? 1 : 0;
+        for (int i = 0; i < 2; ++i) {
+            if (const Picture* p = LoadMinimap(i == 0 ? first : 1 - first, key, w, h)) return use(p);
+        }
+    }
+    if (mode == 1) {
+        if (const Picture* p = LoadMinimap(2, key, w, h)) return use(p);     // 4x where there is one
+    }
+    return InterfacePicture(src, r, wk, hk, bgra, shade);
+}
+
 int Describe(char* out, int size) {
     return std::snprintf(out, size,
                          "shadows=%u created=%u resets=%u copies=%u glyphs=%u glyphsNoHd=%u pictures=%u picturesNoHd=%u "

@@ -35,6 +35,12 @@ struct SherwoodConfig {
     int uiScale = 2;             // internal width >= 2048: 2 = the game's windows (HUD, map, dialogs) drawn x2 from their screen corners
     int mapPosition = 1;         // with uiScale: where the opened map lies - 0 where the game puts it (top, middle), 1 top-right corner
     bool mapDragCamera = true;   // dragging on the opened map's picture moves the camera (the window is moved by its edges)
+    int mapScale = 200;          // with uiScale: the opened map's size in percent (150..500; 200 = as the rest of the interface)
+    int minimapHd = 3;           // the opened map's picture: 0 = the game's, 1 = the game's upscaled (hd\menu_parts),
+                                 // 2 = made from the level's HD picture (hd\minimap\clean), 3 = ... tinted like old
+                                 // parchment, as the game's (hd\minimap\parchment)
+    int minimapCamp = 0;         // the Sherwood camp, whose own map picture is another (a forest path, maybe on
+                                 // purpose): 0 = that picture, upscaled (hd\minimap\classic), 1 = as the other levels
     bool smoothZoom = true;      // HD view: any zoom from "the level fills the screen" to zoomMax (view_zoom.h)
     int zoomStep = 115;          // one zoom step, percent
     int zoomMax = 400;           // largest zoom, percent (200 = the engine's 2.0)
@@ -62,6 +68,10 @@ struct SherwoodConfig {
     int edgeScrollSpeed = 0; // map scroll speed in percent; 0 = scale with the internal width (width / 1024)
     int mouseReportRateHz = 125; // max mouse movement reports/s handed to the game (0 = unlimited/original)
     int mouseSensitivity = 0;    // cursor speed in percent; 0 = internal width / window width (same speed on screen)
+    // keys of the game's quick save / quick load (DirectInput scan code): -1 = as in the game's own key
+    // settings, 0 = none (the action has no key), else that key (QuickSaveKey= / QuickLoadKey= in the INI)
+    int quickSaveKey = -1;
+    int quickLoadKey = -1;
 
     // [Audio]
     int audioBufferMs = 0; // minimum FMOD mixing buffer in ms (0 = leave the game's own setting)
@@ -77,4 +87,9 @@ struct SherwoodConfig {
     std::string iniPath;      // the file these settings came from (a few of them are written back)
     static SherwoodConfig& Get();
     void Load(const std::string& iniPath);
+
+    // key names of QuickSaveKey / QuickLoadKey (F1..F12, letters, digits, Insert, Num0 ...): the DirectInput
+    // scan code of a name or "0x3F" (0 = unknown) and the name of a code (nullptr = none in the list)
+    static int KeyFromName(const char* name);
+    static const char* KeyName(int code);
 };

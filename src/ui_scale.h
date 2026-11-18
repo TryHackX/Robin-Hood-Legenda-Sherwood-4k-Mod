@@ -19,6 +19,11 @@ namespace UiScale {
     // While Drawing(): a rectangle in window coordinates -> screen pixels.
     void ScaleRect(RECT& r);
     void ScaleRectF(float* ltrb);
+    // ... the last of them belonged to the opened map: drawn at the map's own size ([Display] MapScale,
+    // 150..500 %, a tall map no larger than fits above the hedge), its pictures through DDM::ScaledPicture16
+    bool LastScaledWasMap();
+    float MapFactor();                  // the opened map's factor (MapScale / 100 with the interface x2, else 1)
+    void SetMapScale(int percent);      // settings panel, main thread
 
     // The game is drawing its mouse cursor (enlarged about its hot spot); the serial changes with
     // every cursor drawing.

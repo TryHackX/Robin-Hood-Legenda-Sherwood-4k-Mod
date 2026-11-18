@@ -46,6 +46,14 @@ if ($parts.Count -gt 0) {
     New-Item -ItemType Directory -Force $pdir | Out-Null
     $parts | Copy-Item -Destination $pdir
 }
+# the opened map's pictures made from the levels' HD backgrounds (tools\hd\make_all_minimaps.ps1, 1.2.5): clean, parchment and the camp's classic
+foreach ($kind in @('clean', 'parchment', 'classic')) {
+    $mm = @(Get-ChildItem (Join-Path $root "hd\minimap\$kind\*.hdp") -ErrorAction SilentlyContinue)
+    if ($mm.Count -eq 0) { continue }
+    $mdir = Join-Path $pkg "hd\minimap\$kind"
+    New-Item -ItemType Directory -Force $mdir | Out-Null
+    $mm | Copy-Item -Destination $mdir
+}
 # aliases of the HD menu backgrounds of the HD pack (menus opened in a mission find them by these)
 foreach ($d in @(Get-ChildItem (Join-Path $root 'hd\menu') -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -ne 'remake' })) {
     $al = @(Get-ChildItem (Join-Path $d.FullName '*.alias') -ErrorAction SilentlyContinue)

@@ -337,6 +337,15 @@ Do sprawdzenia przy okazji: czy miganie ikon akcji ma teraz właściwe tempo; po
      `Default.res` o bokach ≥ 4 w HD (939 plików, 89 MB w `hd\menu_parts\`), interfejs misji ×2 bierze je zamiast
      filtra (`BuildFromHd` w `ddm_blit.cpp`). Sprawdzone pasy przy wczytywaniu zapisów na kolejnych poziomach
      (`tools\check_level_bands.ps1`).
+   - ✔ **v1.2.5 — czwarte zgłoszenie youtubera** (2026-11-18; film z 1.2.4, log, zapisy — `tools\out\zgloszenie_yt_2026-11-18\`):
+     czarny pas przy pierwszej odprawie po kółku myszy w menu (kroki kółka sprzed poziomu wyrzucane), dół poziomu
+     schowany pod żywopłotem przy `FullHeightView` (kamera i lupa dochodzą do dołu poziomu nad żywopłotem — 6 miejsc
+     ograniczenia kamery czyta `g_cameraStrip`), log zamachów w walce (`Swing:`; mod nie jest udowodnioną przyczyną
+     nierozpoznanych gestów — czekam na jego log i porównanie bez moda), log uprawnień procesu (OBS musi działać jako
+     administrator — skróty i przechwytywanie), klawisze szybkiego zapisu / odczytu (`QuickSaveKey` / `QuickLoadKey`,
+     panel F10, także „brak”; prośba użytkownika), minimapa: wielkość 1,5× / 2× (klasyczna) / 2,5× / 3× / 5×
+     (`MapScale`) i obraz klasyczny / klasyczny powiększony / nowy z tła HD poziomu / nowy na pergaminie — domyślny
+     (`MinimapHD`; gotowe pliki `hd\minimap\`, `tools\hd\make_minimaps.py`). Opis: `docs\HD_MODE.md` §7.
    - ✔ **Wydanie na GitHubie** (2026-11-14): v1.0.0 (README po angielsku), paczki grafiki HD jako osobne wydanie
      (7 plików ZIP < 2 GB; magazyn postaci w dwóch częściach — mod czyta `sprites.dat` + `sprites.dat.2`).
 5. ◐ Klatki pośrednie animacji postaci (prośba użytkownika; „jak się nie uda, trudno"): eksperyment zakończony

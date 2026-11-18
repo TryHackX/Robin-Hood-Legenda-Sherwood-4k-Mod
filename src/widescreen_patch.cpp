@@ -1,5 +1,6 @@
 #include "widescreen_patch.h"
 #include "config.h"
+#include "ui_scale.h"
 #include "view_zoom.h"
 #include "logger.h"
 #include "pattern.h"
@@ -39,6 +40,13 @@ namespace {
 
     wchar_t g_btn3Label[32] = L"3840 * 2160";
 
+    // Full-height view: the rows the hedge along the bottom covers (80 at the interface's 1x, 160 at 2x).
+    // The world is drawn down to the screen edge, but the camera may go so far that the level's bottom
+    // edge lies just above the hedge (before 1.2.5 it lay at the screen edge, its last rows behind the
+    // hedge - "the bottom of the screen is cut off", YouTuber's video 2026-11-18). The six camera limits
+    // of the engine read this value (fsub [g_cameraStrip], see PatchFullHeightView).
+    float g_cameraStrip = 0.0f;
+
     // Safely clamp camera coordinates to [0.0f, max(0.0f, mapSize - viewportSize / zoom)]
     // Prevents negative camera coordinates when playing in 1080p/1440p/4K on smaller maps (e.g. Sherwood Hideout).
     void EnforceSafeCameraBounds(uint8_t* engPtr, float* pos) {
@@ -65,9 +73,9 @@ namespace {
         }
 
         if (mapH > 0.0f && viewportH > 0.0f) {
-            // Game HUD bottom bar occupies 80px in logical space (0x00677598 = 80.0f), unless the
-            // full-height view patch removed it
-            const float hudStrip = SherwoodConfig::Get().fullHeightView ? 0.0f : 80.0f;
+            // Game HUD bottom bar occupies 80px in logical space (0x00677598 = 80.0f); with the
+            // full-height view the hedge's own rows (g_cameraStrip): the level's bottom may come above it
+            const float hudStrip = SherwoodConfig::Get().fullHeightView ? g_cameraStrip : 80.0f;
             const float effViewH = std::max(0.0f, viewportH - hudStrip) / zoom;
             const float maxCamY = std::max(0.0f, mapH - effViewH);
             pos[1] = std::clamp(pos[1], 0.0f, maxCamY);
@@ -301,6 +309,14 @@ namespace {
         bool ok = true;
         for (uintptr_t a : kFsubSites) ok = Memory::PatchBytes(a, kFsub0, sizeof(kFsub0)) && ok;
         for (uintptr_t a : kPushSites) ok = Memory::PatchBytes(a, kPush0, sizeof(kPush0)) && ok;
+        // the camera's limits (not the drawn view): the hedge's rows, so the level's last rows can be
+        // scrolled above the hedge - CenterCameraOn 0x4C7F60, ClampScrollDelta 0x4CEC60, the camera
+        // clamp 0x5758D0 (docs\HUD_STRIP.md, class "camera clamp")
+        static const uintptr_t kCameraSites[] = { 0x4C808C, 0x4C80B5, 0x4CED05, 0x4CED62, 0x575A11, 0x575A58 };
+        uint8_t fsubStrip[6] = { 0xD8, 0x25 };
+        const uint32_t stripAddr = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&g_cameraStrip));
+        std::memcpy(fsubStrip + 2, &stripAddr, 4);
+        for (uintptr_t a : kCameraSites) ok = Memory::PatchBytes(a, fsubStrip, sizeof(fsubStrip)) && ok;
         const bool hit = MH_CreateHook(reinterpret_cast<LPVOID>(0x0061A6E0), reinterpret_cast<LPVOID>(&Hook_HudHitTest),
                                        reinterpret_cast<LPVOID*>(&g_OrigHudHitTest)) == MH_OK &&
                          MH_EnableHook(reinterpret_cast<LPVOID>(0x0061A6E0)) == MH_OK;
@@ -485,8 +501,14 @@ namespace {
 // stay native, and the background can come from the HD pictures (ddm_hd). So: start every
 // level at 2.0, and never stay at a zoom whose view is larger than the level. Zooming out with
 // the game's own keys still works where the level is large enough.
+float CameraStrip() {
+    return g_cameraStrip;
+}
+
 void OnGameTick(unsigned char* engine) {
     const auto& cfg = SherwoodConfig::Get();
+    // the hedge's rows at the interface's scale now (F10 may switch it)
+    g_cameraStrip = cfg.fullHeightView ? 80.0f * static_cast<float>(UiScale::Factor()) : 0.0f;
     if (!engine || !cfg.hdView || ViewZoom::HandlesZoom()) {
         return;     // with the smooth zoom, view_zoom.cpp starts the levels at 2.0
     }

@@ -49,16 +49,39 @@ def rgb_from_565(px):
     return np.stack([(r << 3) | (r >> 2), (g << 2) | (g >> 4), (b << 3) | (b >> 2)], -1).astype(np.uint8)
 
 
-def contour(mask, sigma=0.6, half=0.05):
-    """A 0/1 mask twice the size with a smooth contour (blurred a little, 4x bicubic, a narrow soft step at 0.5,
-    area-reduced to 2x). sigma 0.6 keeps lines one pixel wide (0.8, as for the fonts, would lose them)."""
+def contour(mask, sigma=0.6, half=0.05, scale=2):
+    """A 0/1 mask `scale` times the size (2 or 4) with a smooth contour (blurred a little, 4x bicubic, a narrow soft
+    step at 0.5, area-reduced to 2x). sigma 0.6 keeps lines one pixel wide (0.8, as for the fonts, would lose them)."""
     import cv2
     m = mask.astype(np.float32)
     b = cv2.GaussianBlur(m, (0, 0), sigma) if sigma > 0 else m
     up = cv2.resize(b, (m.shape[1] * 4, m.shape[0] * 4), interpolation=cv2.INTER_CUBIC)
     t = np.clip((up - (0.5 - half)) / (2 * half), 0, 1)
     t = t * t * (3 - 2 * t)
-    return np.clip(cv2.resize(t, (m.shape[1] * 2, m.shape[0] * 2), interpolation=cv2.INTER_AREA), 0, 1)
+    if scale == 4:
+        return np.clip(t, 0, 1)
+    return np.clip(cv2.resize(t, (m.shape[1] * scale, m.shape[0] * scale), interpolation=cv2.INTER_AREA), 0, 1)
+
+
+def color_fix_any(hd, orig, sigma, s):
+    """upscale_variants.color_fix for a picture `s` times the size (that one is made for 2x)."""
+    import torch
+    import torch.nn.functional as F
+    dev = 'cuda'
+    out = np.empty(hd.shape, dtype=np.float32)
+    radius = max(1, int(sigma * 3 + 0.5))
+    xs = torch.arange(-radius, radius + 1, dtype=torch.float32, device=dev)
+    kernel = torch.exp(-(xs * xs) / (2 * sigma * sigma))
+    kernel = (kernel / kernel.sum())[None, None, :]
+    for c in range(3):
+        h = torch.from_numpy(np.ascontiguousarray(hd[..., c])).to(dev).float()[None, None]
+        o = torch.from_numpy(np.ascontiguousarray(orig[..., c])).to(dev).float()[None, None]
+        diff = o - F.avg_pool2d(h, s)
+        diff = F.conv2d(F.pad(diff, (radius, radius, 0, 0), mode='reflect'), kernel[:, :, None, :])
+        diff = F.conv2d(F.pad(diff, (0, 0, radius, radius), mode='reflect'), kernel[:, :, :, None])
+        h = (h + F.interpolate(diff, scale_factor=s, mode='bilinear', align_corners=False)).clamp_(0, 255)
+        out[..., c] = h[0, 0].cpu().numpy()
+    return out
 
 
 def preview(rgb2, a2, s2, path):
@@ -78,10 +101,19 @@ def main():
     ap.add_argument('--tile', type=int, default=192)
     ap.add_argument('--overlap', type=int, default=16)
     ap.add_argument('--colorfix', type=float, default=1.5)
+    ap.add_argument('--only', default='', help='only these keys (comma-separated), e.g. the maps of minimap_pictures.py')
+    ap.add_argument('--scale', type=int, default=2, choices=[2, 4],
+                    help='4: four times the size (the opened map\'s scroll for make_minimaps.py; the mod reads 2x here)')
+    ap.add_argument('--out', default='', help='output folder (default hd/menu_parts)')
     args = ap.parse_args()
 
+    S = args.scale
+    out_dir = Path(args.out) if args.out else OUT
+    only = {k.strip().lower() for k in args.only.split(',') if k.strip()}
     parts = sorted(WORK.glob('part_*.raw'))
-    todo = [p for p in parts if args.redo or not (OUT / (p.stem[5:] + '.hdp')).exists()]
+    if only:
+        parts = [p for p in parts if p.stem[5:].lower() in only]
+    todo = [p for p in parts if args.redo or not (out_dir / (p.stem[5:] + '.hdp')).exists()]
     log(f'{len(parts)} pictures in {WORK}, {len(todo)} to do')
     if not todo:
         return
@@ -96,7 +128,7 @@ def main():
     sample[::2, ::3] = 180
     dtype, how = pick_precision(desc, sample, args.tile, args.overlap)
     log(f'{args.model}: {VARIANTS[args.model][0]} (x{desc.scale}, {how})')
-    OUT.mkdir(parents=True, exist_ok=True)
+    out_dir.mkdir(parents=True, exist_ok=True)
     PNG.mkdir(parents=True, exist_ok=True)
     pad = 8
     for p in todo:
@@ -118,27 +150,28 @@ def main():
         t0 = time.time()
         padded = np.pad(filled, ((pad, pad), (pad, pad), (0, 0)), mode='edge')
         res = upscale(desc, padded, args.tile, args.overlap, dtype)
-        if desc.scale != 2:
-            res = cv2.resize(res, (padded.shape[1] * 2, padded.shape[0] * 2), interpolation=cv2.INTER_AREA)
+        if desc.scale != S:
+            res = cv2.resize(res, (padded.shape[1] * S, padded.shape[0] * S), interpolation=cv2.INTER_AREA)
         small = min(h, w) < 16      # the colour fix's blur needs more pixels than a tiny picture has
+        fix = color_fix if S == 2 else (lambda a, b, sg: color_fix_any(a, b, sg, S))
         if args.colorfix > 0 and small:
-            res = (color_fix(res, padded, args.colorfix) + 0.5).clip(0, 255).astype(np.uint8)
-        res = res[pad * 2:pad * 2 + h * 2, pad * 2:pad * 2 + w * 2]
+            res = (fix(res, padded, args.colorfix) + 0.5).clip(0, 255).astype(np.uint8)
+        res = res[pad * S:pad * S + h * S, pad * S:pad * S + w * S]
         if args.colorfix > 0 and not small:
-            res = (color_fix(res, filled, args.colorfix) + 0.5).clip(0, 255).astype(np.uint8)
-        a2 = np.ones((h * 2, w * 2), np.float32) if colour.all() else contour(colour)
-        s2 = contour(shade) if shade.any() else np.zeros((h * 2, w * 2), np.float32)
-        bgra = np.empty((h * 2, w * 2, 4), np.uint8)
+            res = (fix(res, filled, args.colorfix) + 0.5).clip(0, 255).astype(np.uint8)
+        a2 = np.ones((h * S, w * S), np.float32) if colour.all() else contour(colour, scale=S)
+        s2 = contour(shade, scale=S) if shade.any() else np.zeros((h * S, w * S), np.float32)
+        bgra = np.empty((h * S, w * S, 4), np.uint8)
         bgra[..., 0] = res[..., 2]
         bgra[..., 1] = res[..., 1]
         bgra[..., 2] = res[..., 0]
         bgra[..., 3] = (a2 * 255 + 0.5).astype(np.uint8)
-        with open(OUT / f'{key}.hdp', 'wb') as f:
-            f.write(struct.pack('<4sIII', b'HDMP', 1, w * 2, h * 2))
+        with open(out_dir / f'{key}.hdp', 'wb') as f:
+            f.write(struct.pack('<4sIII', b'HDMP', 1, w * S, h * S))
             f.write(bgra.tobytes())
             f.write((s2 * 255 + 0.5).astype(np.uint8).tobytes())
-        preview(res, a2, s2, PNG / f'{key}.png')
-        log(f'  {key}: {w}x{h} -> {w * 2}x{h * 2} (transparent {int(trans.sum())}, shadow {int(shade.sum())}) '
+        preview(res, a2, s2, PNG / (f'{key}.png' if S == 2 else f'{key}_x{S}.png'))
+        log(f'  {key}: {w}x{h} -> {w * S}x{h * S} (transparent {int(trans.sum())}, shadow {int(shade.sum())}) '
             f'in {time.time() - t0:.1f} s')
     del desc
     torch.cuda.empty_cache()

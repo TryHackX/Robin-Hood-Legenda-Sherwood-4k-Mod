@@ -655,7 +655,8 @@ w górę), resztę powiększa prezenter — **tylko świat**:
   - OBS: flagi zgodności GOG dla `game.exe` (HKLM/HKCU `AppCompatFlags\Layers`: `DWM8And16BitMitigation
     8And16BitAggregateBlts RUNASADMIN HIGHDPIAWARE`) — gra działa jako administrator, OBS bez uprawnień nie wstrzykuje
     przechwytywania gry. Rozwiązanie po stronie gracza (README): przechwytywanie okna „Windows 10 (1903+)” albo OBS
-    jako administrator.
+    jako administrator. (1.2.5: u youtubera przechwytywanie okna też nie działało, a skróty OBS tylko po Alt+Tab —
+    README zaleca już tylko OBS jako administrator, niżej.)
 - **Tło pytań w obozie, pierwsza odprawa, portrety, mapa kampanii** (2026-11-17, v1.2.3; trzecie zgłoszenie youtubera,
   zrzuty 2.1–2.5 z 1.2.1, sprawdzone w tle na jego zapisach — kopia w `tools\out\yt_savegame_2026-11-17\`, profil po
   teście w `backups\yt_profile_004_after_test_2026-11-17\`; w jego obozie V „Wyślij wybranych bohaterów na misję” jest
@@ -710,6 +711,85 @@ w górę), resztę powiększa prezenter — **tylko świat**:
   Nottingham 2304×3520, rozstaje 1408×960 i 1792×1152 (Leicester, Lincoln i York zawsze wypełniają ekran; rozmiary z
   nagłówków `.map`). `tools\check_level_bands.ps1` wczytuje po kolei zapisy z listy (`-Scroll N` = starsze) i mierzy
   czarny pasek przy prawej krawędzi i nad żywopłotem: na zapisach youtubera (cała kampania) bez pasa po wczytaniu.
+- **Czwarte zgłoszenie youtubera** (2026-11-18, v1.2.5; film z 1.2.4, jego log i zapisy w
+  `tools\out\zgloszenie_yt_2026-11-18\`, automatyczne napisy `transcript.txt` do szukania miejsc w filmie):
+  - Czarny pas z prawej przy pierwszej odprawie (5:04): krok kółka myszy sprzed poziomu (`g_wheel`, zebrany w menu albo
+    przy wczytywaniu) wykonywał się na starcie poziomu i lupa oddalała poziom 1792×1152 poniżej „poziom wypełnia
+    ekran”. `ViewZoom::PrepareLevel()` wyrzuca kroki kółka sprzed poziomu (log „mouse wheel step(s) from before the
+    level ignored”).
+  - Ucięty dół przy oddaleniu (7:40, „dolny krzaczek”): z `FullHeightView=1` kamera gry kończyła się na dole poziomu
+    (`0x677488` = 0 w sześciu miejscach ograniczenia kamery: `CenterCameraOn` `0x4C808C`/`0x4C80B5`, `ClampScrollDelta`
+    `0x4CED05`/`0x4CED62`, ograniczenie `0x5758D0` w `0x575A11`/`0x575A58`), więc ostatnie 160 px poziomu (interfejs ×2)
+    leżało pod żywopłotem. Teraz te miejsca czytają `g_cameraStrip` = 80 · współczynnik interfejsu
+    (`WidescreenPatch::CameraStrip()`, ustawiany w `OnGameTick`; bez `FullHeightView` zostaje 80 gry) — dół poziomu
+    kończy się na górze żywopłotu; lupa (`OnWorldDrawn`, `OnBackdropWorldDrawn`) liczy `m ≥ (H − pas) / dół treści` i
+    `ClampShownY` z tym samym pasem. Sprawdzone w tle: zoom 2 — kamera y do 512 (było 432); oddalenie — wycinek (0,256),
+    dół poziomu na górze żywopłotu. Ciemne drzewo „w kratkę” przy dole poziomu rysuje sama gra (tak samo z F8).
+  - Walka (18:44, 20:25: gesty nie działają, zwykłe ciosy wymagają dużo machania, obszarowy działa): rozpoznawanie
+    `0x00547600` (z `0x004E1A40`; pozycja walczącego `0x004DEEB0`, kierunek `0x004135B0`) sprawdza kształt — koło
+    `0x00547F00`, krzywizna 0,3 `0x00548050`, kąty ±π/4 i ±3π/4 `0x00548100`, `0x00548280` — bez progów w pikselach poza
+    10 px dla ≤ 2 punktów, więc skala nie zmienia wyniku, a punkty idą przez `ScreenToFrame` (v1.2.0). Mod nie jest
+    udowodnioną przyczyną. Log „Swing: N points, WxH px, drawn L px … fighter at (x,y) -> result R” (pierwsze 60
+    zamachów sesji, `Hook_SwingRecognise` w `ui_scale.cpp`) pozwoli porównać z grą bez moda. Instrukcja s. 27: linie
+    względem walczącego (przód / tył / lewo / prawo), półkola, koło (obrót), ∞ (cios kończący).
+  - OBS (21:55: skróty OBS dopiero po Alt+Tab; przechwytywanie gry i okna czarne, działa tylko ekran): gra działa jako
+    administrator (`RUNASADMIN` od instalatora GOG), a Windows (UIPI) nie pozwala programowi bez uprawnień czytać
+    klawiszy, gdy na wierzchu jest okno z wyższymi uprawnieniami, ani wstrzyknąć przechwytywania. Rozwiązanie: OBS jako
+    administrator. Log mówi na starcie „Process: runs as administrator …” (`dllmain.cpp`, `TokenElevation`).
+  - Klawisze szybkiego zapisu i odczytu (prośba użytkownika, „z możliwością usunięcia przycisku”): `QuickSaveKey` /
+    `QuickLoadKey` w `[Input]` (puste = jak w opcjach gry, `none` = brak, nazwa klawisza albo kod DirectInput `0x..`)
+    i panel F10. Ustawienia klawiszy gry: 28 kodów DirectInput (u16) w obiekcie `[0x006C0B54] + 0x14C` w kolejności
+    ekranu Opcje → Klawiatura; 26 = szybki zapis (F1), 27 = szybki odczyt (F5) → komendy 11 / 12 (`0x00512840` →
+    `0x00512CB0` / `0x00512EB0`). `InputFix::Poll` wpisuje klawisze moda w czasie poziomu; pętla okna gry
+    (`Hook_DialogLoop` → `InputFix::OnDialogLoop`) i zamknięcie przywracają wartości gry, więc jej ekran klawiatury
+    pokazuje i zapisuje własne. Plik `DATA\Savegame\Profiles` (dwa zestawy po 76 B, klawisze od 0x4E i 0x9A) ma po
+    szybkim zapisie i odczycie dalej F1/F5 gry. Panel pomija klawisze moda (F6–F10), drugi klawisz szybki i klawisze
+    innych akcji gry; kolizję wpisaną w INI log ostrzega (`InputFix::QuickKeyClash`). Sprawdzone w tle: F9 = zapis, F1 i
+    F5 nic; w menu Esc F1/F5 gry, po zamknięciu znowu F9/brak; F11 zapis, F1 odczyt (obraz wraca do stanu z zapisu).
+  - Minimapa — wielkość i obraz (prośby użytkownika: „wybór wielkości minimapy i upscale”, „3 wielkości i klasyk”,
+    „x5”, „klasyczna / klasyczna upscalowana / nowa / nowa z efektem pergaminu, domyślnie pergamin”, „gotowe pliki, bez
+    generowania w grze”):
+    - Obraz otwartej mapy NIE powstaje w grze: każdy poziom ma gotowy obrazek całego zwoju w
+      `DATA\Levels\<Day|Night|Fog|Custom1>\<poziom>.min` (u16 w, u16 h, u32 format 2 = bzip2, u32 rozmiar, RGB565;
+      158×246, 168×246 albo 225×165..195; 20 różnych, mgła rozstajów = dzień, `Custom1\Nottingham` = dzień). To tło
+      poziomu zmniejszone w prostokąt okna minus marginesy (14, 24) — ten sam, w który gra rzutuje kamerę i znaczniki
+      (w obrazku poziom leży 1 px w lewo i w dół) — przyciemnione „na pergamin” i wtopione w papier na brzegach. Wyjątki:
+      mgła = bezbarwny szkic, obóz Sherwood = inny obraz (las ze ścieżką, nie obóz). `tools\hd\minimap_pictures.py`
+      (klucze `Fnv` jak w interfejsie, `--write` → `part_*.raw`, `--png`).
+    - Pliki: `hd\menu_parts\<klucz>.hdp` — obrazek gry ×2 z AI (sgi); `hd\minimap\clean|parchment\<klucz>.hdp` ×4 z
+      `tools\hd\make_minimaps.py`: tło HD poziomu (`hd\maps_hd\dat2\`) zmniejszone w prostokąt mapy, zwój i brzegi z
+      obrazka gry ×4 z AI (`upscale_menu_parts.py --scale 4 --out hd\work\minimap_x4`), wtopienie na 5 px obrazka;
+      `parchment` = kolory obrazka gry (przekształcenie Monge-Kantorovicha średniej i kowariancji, potem kwantyle
+      kanałów — najmniejsze kwadraty spłaszczały kontrast mgły), lekko „malowany” (`edgePreservingFilter`) i z fakturą
+      papieru; mgła: kolory szkicu z samej jasności tła (sepia, bez kolorowych plam), obóz: kolory rozstajów / Leicester
+      nocą. 40 plików, 125 MB (69 MB w ZIP-ie). Obrazy gry powiększa model dat2, nie sgi interfejsu (mapy to malowane
+      obrazy — sgi robił z liści „robaczki”, `tools\out\minimap_sgi_vs_dat2_x2.png`); całość od zera:
+      `tools\hd\make_all_minimaps.ps1`.
+    - Obóz Sherwood (prośba użytkownika: „inne tło mogło być celowo — niech obóz dostaje klasyczny widok”): jego obrazek
+      gry (`Day|Night\SHERWOOD.MIN`, klucze `26c1a218aa02cd8f` / `5b3ced48c047e7f4`) to leśna ścieżka, nie obóz.
+      `MinimapCamp=0` (domyślnie, tylko INI): ten obrazek ×4 z dat2 z `hd\minimap\classic\` (`MapPicture` sprawdza ten
+      folder najpierw — trzyma tylko obrazki, dla których zostaje obraz gry), 1 = jak inne poziomy (prawdziwy obóz z tła
+      HD). Sprawdzone w tle (stan „Kontynuuj w obozie”): w obozie gra minimapy nie pokazuje — w rogu jest mapa kampanii,
+      klik w miejsce przycisku zwoju nic nie otwiera; mapę obozu używają tylko `DATA\Levels\Sherwood.rhm` (obóz) i
+      `SherwoodOutro.rhm` (zakończenie), więc obrazek leśnej ścieżki jest pewnie nieużywany — dlatego opcja nie ma
+      miejsca w panelu F10. GPT / remake obrazu możliwy później jak tła menu.
+    - Wielkość (`MapScale`, 150..500 %, panel: 2×, 2,5×, 3×, 5×, 1,5×): w `UiScale::Transform` otwarta mapa ma własny
+      współczynnik (`g_mapFactor`; wysoka mapa przy 5× tyle, ile mieści się nad żywopłotem: ~4,36×, `g_mapFactorUsed`),
+      kotwica w rogu z ×2 marginesu przycisków (`x0 = floor(W − 8·2 − f·w)`, `y0 = 104·2`), `Piece` z czynnikiem
+      (mysz cofana czynnikiem obrazka pod nią; dymek po mapie dostaje kotwicę równoważną dla ×2), zapamiętana kotwica
+      z czynnikiem, przeciąganie okna (`FollowMapDrag`) i obramowanie kamery (`DrawRect`, grubość = czynnik) — tym samym.
+      `ScaleRect` dla mapy zaokrągla róg i rozmiar osobno (ten sam rozmiar przy przeciąganiu).
+    - Rysowanie: blity okna mapy (`UiScale::LastScaledWasMap`) idą przez `DDM::ScaledPicture16` (`ddm_blit.cpp`) —
+      skalowanie do dowolnego rozmiaru filtrem namiotowym o szerokości zmniejszenia, w kolorze mnożonym przez pokrycie,
+      z pamięcią jak `SmoothPicture2x16` (wpis na obrazek i rozmiar: przebiegi pełnych kolorów i miękkiego brzegu).
+      Źródło: `HD::Patch::MapPicture` (`MinimapHD`: 3 parchment → clean → AI ×2; 2 clean → parchment → AI; 1 AI ×2
+      (`InterfacePicture`, gdy `HDMenu=1`); 0 piksele gry). Zmiana w panelu → `DDM::DropScaledPictures()`. Koszt: plik
+      czytany raz przy pierwszym otwarciu mapy na poziomie, skalowanie raz na rozmiar (~20 ms przy 5×), potem kopiowanie
+      jak reszta interfejsu.
+    - Sprawdzone w tle (rozstaje 1792×1152, zapisy youtubera): wszystkie 5 wielkości i 4 obrazy, znaczniki i obramowanie
+      kamery na miejscach; przy zoomie lupy 3 obramowanie = widoczna część nad żywopłotem (47 % × 37 %); klik w rogi mapy
+      przy 3× i 5× przesuwa widok do rogów (crop 0,0 / 853,427), przeciąganie po mapie przy 5× też. Porównania:
+      `tools\out\minimapa_obrazy.png`, `minimapa_wielkosci.png`, `minimapa_inne_mapy.png`.
 - **Wydajność sprite'ów HD** (2026-11-17, v1.2.1): `Sprites::TryShadowBlit` (główna ścieżka sprite'ów HD przez procedury
   gry `0x0062261C/0x006220EC`) liczona po 8 pikseli SSE2 (przezroczyste/ukryte zostają, cień przyciemnia pojedynczo, reszta
   = piksel HD). Las misji z obozu: klatka pośrednia 11,2 → 7,1 ms, 86 → 140 kl./s. Do diagnozy: plik mapy linkera

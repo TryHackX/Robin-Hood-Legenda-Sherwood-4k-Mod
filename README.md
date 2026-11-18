@@ -182,15 +182,26 @@ F10 panel.
 
 ## Recording and streaming (OBS)
 
-The GOG installer marks `game.exe` to **run as administrator** (a Windows compatibility setting — that is why Windows
-asks for permission when the game starts). Windows keeps programs without administrator rights away from such a
-program: OBS started normally records **a black picture with Game Capture and Window Capture**, and **its hotkeys do
-not work while the game is in front** (they work again after Alt+Tab). Display Capture works, but records the whole
-screen.
+Tested with OBS 33: **Game Capture records the mod's picture.** Four things get in the way:
 
-**Start OBS as administrator** as well (right-click its shortcut → *Run as administrator*; for good: *Properties →
-Compatibility → Run this program as an administrator*). Then Game Capture, Window Capture and the hotkeys work.
-`SherwoodFix.log` says at the start whether the game runs as administrator (`Process: runs as administrator`).
+1. **The game runs as administrator** — the GOG installer marks `game.exe` so (that is why Windows asks for
+   permission when the game starts). OBS without administrator rights cannot hook into it, and its hotkeys do not
+   react while the game is in front (only after Alt+Tab). → **Start OBS as administrator** (right-click its shortcut →
+   *Run as administrator*; for good: *Properties → Compatibility → Run this program as an administrator*).
+   `SherwoodFix.log` says at the start whether the game runs as administrator.
+2. **The game pauses whenever its window is not in front** (as it always did): while you click around in OBS, the
+   game draws nothing and the capture's preview stays black or frozen. Back in the game, the picture is there — start
+   and stop the recording with OBS's hotkeys.
+3. In the Game Capture's properties, **untick "Use anti-cheat compatibility hook"**. That hook waits for a message to
+   the game's thread, and the game only reads its own window's messages, so it hooks late or not at all; without it,
+   OBS hooked at once in every test.
+4. **Two graphics units** (a processor with graphics of its own, e.g. AMD Ryzen 7000/9000, or a laptop): since 1.2.6 the
+   mod draws on the most powerful card (`SherwoodFix.log`: `Present: Direct3D 11 on …`; `GPU=1` in the INI = Windows'
+   choice as before). If the game and OBS still run on different cards, tick *SLI/Crossfire Capture Mode (Slow)* in the
+   Game Capture's properties.
+
+Window Capture with the capture method *Windows 10 (1903 and up)* records only the game's window too. Display Capture
+always works, but records the whole screen.
 
 ## Mod keys
 

@@ -165,6 +165,7 @@ void SherwoodConfig::Load(const std::string& iniPath) {
     fixAspectRatio     = ReadBool("Display", "FixAspectRatio", fixAspectRatio, p);
     renderer           = ReadInt("Display", "Renderer", renderer, p);
     presenter          = ReadInt("Display", "Presenter", presenter, p);
+    gpu                = ReadInt("Display", "GPU", gpu, p) == 1 ? 1 : 0;
     allowTearing       = ReadBool("Display", "AllowTearing", allowTearing, p);
     fullHeightView     = ReadBool("Display", "FullHeightView", fullHeightView, p);
     hdBackgrounds      = ReadBool("Display", "HDBackgrounds", hdBackgrounds, p);

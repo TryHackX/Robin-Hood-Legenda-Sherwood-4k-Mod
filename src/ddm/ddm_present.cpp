@@ -12,7 +12,7 @@
 #include "ddm_hd_patch.h"
 
 #include <d3d11.h>
-#include <dxgi1_5.h>
+#include <dxgi1_6.h>
 #include <d3dcompiler.h>
 #include <cstdio>
 #include <cstring>
@@ -568,11 +568,126 @@ namespace {
         return SUCCEEDED(hr);
     }
 
+    std::string CardName(const DXGI_ADAPTER_DESC1& d) {
+        char name[160]{};
+        WideCharToMultiByte(CP_UTF8, 0, d.Description, -1, name, sizeof(name) - 1, nullptr, nullptr);
+        return name;
+    }
+
+    // The graphics card to render on (2026-11-18, a YouTuber's OBS game capture stayed black also with OBS as
+    // administrator; his AMD Ryzen 7 9800X3D has a small graphics unit of its own next to the graphics card, and
+    // D3D11CreateDevice(nullptr) takes the adapter Windows lists first - on Windows 11 often the power-saving one
+    // for a program it does not know. The game then renders on the processor's graphics, OBS on the card: game
+    // capture black, display capture fine). [Display] GPU=0: the most powerful card - DXGI 1.6's high-performance
+    // order, without it the hardware card with the most memory of its own; GPU=1: Windows' choice (up to 1.2.5).
+    // Every card is logged once, with its memory and whether the game's monitor is connected to it.
+    IDXGIAdapter1* PickAdapter() {
+        static bool s_listed = false;
+        IDXGIFactory1* f1 = nullptr;
+        if (FAILED(CreateDXGIFactory1(__uuidof(IDXGIFactory1), reinterpret_cast<void**>(&f1)))) return nullptr;
+        const HMONITOR gameMonitor = g_hwnd ? MonitorFromWindow(g_hwnd, MONITOR_DEFAULTTONEAREST) : nullptr;
+        // every hardware card; the one the game's monitor is connected to
+        IDXGIAdapter1* best = nullptr;          // the most powerful: high-performance order, else the most memory
+        SIZE_T bestMemory = 0;
+        IDXGIAdapter1* monitorCard = nullptr;
+        UINT monitorIndex = 0;
+        for (UINT i = 0;; ++i) {
+            IDXGIAdapter1* a = nullptr;
+            if (f1->EnumAdapters1(i, &a) == DXGI_ERROR_NOT_FOUND || !a) break;
+            DXGI_ADAPTER_DESC1 d{};
+            a->GetDesc1(&d);
+            const bool software = (d.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) != 0;
+            int monitors = 0;
+            bool game = false;
+            for (UINT o = 0;; ++o) {
+                IDXGIOutput* out = nullptr;
+                if (a->EnumOutputs(o, &out) == DXGI_ERROR_NOT_FOUND || !out) break;
+                DXGI_OUTPUT_DESC od{};
+                if (SUCCEEDED(out->GetDesc(&od))) {
+                    ++monitors;
+                    if (od.Monitor == gameMonitor) game = true;
+                }
+                out->Release();
+            }
+            if (!s_listed) {
+                // (a 32-bit program sees at most about 3-4 GB of a card's memory)
+                Logger::Info("Present: graphics card %u: %s, %u MB of its own, %d monitor(s)%s%s.", i, CardName(d).c_str(),
+                             static_cast<unsigned>(d.DedicatedVideoMemory >> 20), monitors, game ? " - the game's monitor" : "",
+                             software ? " [software]" : "");
+            }
+            if (software) {
+                a->Release();
+                continue;
+            }
+            if (game && !monitorCard) {
+                monitorCard = a;
+                monitorCard->AddRef();
+                monitorIndex = i;
+            }
+            if (!best || d.DedicatedVideoMemory > bestMemory) {
+                if (best) best->Release();
+                best = a;
+                bestMemory = d.DedicatedVideoMemory;
+            } else {
+                a->Release();
+            }
+        }
+        s_listed = true;
+        IDXGIFactory6* f6 = nullptr;
+        if (SUCCEEDED(f1->QueryInterface(__uuidof(IDXGIFactory6), reinterpret_cast<void**>(&f6)))) {
+            for (UINT i = 0;; ++i) {
+                IDXGIAdapter1* hp = nullptr;
+                if (FAILED(f6->EnumAdapterByGpuPreference(i, DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE, __uuidof(IDXGIAdapter1),
+                                                          reinterpret_cast<void**>(&hp))) || !hp) {
+                    break;
+                }
+                DXGI_ADAPTER_DESC1 d{};
+                hp->GetDesc1(&d);
+                if (!(d.Flags & DXGI_ADAPTER_FLAG_SOFTWARE)) {
+                    if (best) best->Release();
+                    best = hp;
+                    break;
+                }
+                hp->Release();
+            }
+            f6->Release();
+        }
+        f1->Release();
+        // The card the game's monitor hangs on, when it is that same card (or the same model listed twice - a remote
+        // desktop shows one card twice): the picture then goes straight to the monitor.
+        if (monitorCard && best) {
+            DXGI_ADAPTER_DESC1 m{}, b{};
+            monitorCard->GetDesc1(&m);
+            best->GetDesc1(&b);
+            const bool same = (m.AdapterLuid.LowPart == b.AdapterLuid.LowPart && m.AdapterLuid.HighPart == b.AdapterLuid.HighPart) ||
+                              (m.VendorId == b.VendorId && m.DeviceId == b.DeviceId);
+            if (same) {
+                best->Release();
+                best = monitorCard;
+                monitorCard = nullptr;
+                Logger::Info("Present: card %u - the most powerful one, the game's monitor is connected to it.", monitorIndex);
+            } else {
+                Logger::Info("Present: the game's monitor is on card %u, a weaker one - the picture is made on the most powerful card.",
+                             monitorIndex);
+            }
+        }
+        if (monitorCard) monitorCard->Release();
+        return best;
+    }
+
     bool InitD3D11() {
         const D3D_FEATURE_LEVEL levels[] = { D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_10_1, D3D_FEATURE_LEVEL_10_0 };
         D3D_FEATURE_LEVEL got{};
-        HRESULT hr = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, 0, levels, 3,
-                                       D3D11_SDK_VERSION, &g_dev, &got, &g_ctx);
+        IDXGIAdapter1* card = SherwoodConfig::Get().gpu == 1 ? nullptr : PickAdapter();
+        HRESULT hr = E_FAIL;
+        if (card) {
+            hr = D3D11CreateDevice(card, D3D_DRIVER_TYPE_UNKNOWN, nullptr, 0, levels, 3, D3D11_SDK_VERSION, &g_dev, &got, &g_ctx);
+            if (FAILED(hr)) Logger::Warn("Present: Direct3D 11 on the chosen card failed (0x%08X) - Windows' choice.", static_cast<unsigned>(hr));
+            card->Release();
+        }
+        if (FAILED(hr)) {
+            hr = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, 0, levels, 3, D3D11_SDK_VERSION, &g_dev, &got, &g_ctx);
+        }
         if (FAILED(hr)) {
             Logger::Warn("Present: D3D11CreateDevice failed (0x%08X).", static_cast<unsigned>(hr));
             return false;
@@ -596,6 +711,16 @@ namespace {
             SafeRelease(dxgiDev);
             Logger::Warn("Present: DXGI 1.2 factory not available.");
             return false;
+        }
+        {
+            DXGI_ADAPTER_DESC d{};
+            if (SUCCEEDED(adapter->GetDesc(&d))) {
+                char name[160]{};
+                WideCharToMultiByte(CP_UTF8, 0, d.Description, -1, name, sizeof(name) - 1, nullptr, nullptr);
+                Logger::Info("Present: Direct3D 11 on %s (%u MB of its own; GPU=%d: %s).", name,
+                             static_cast<unsigned>(d.DedicatedVideoMemory >> 20), SherwoodConfig::Get().gpu,
+                             SherwoodConfig::Get().gpu == 1 ? "Windows' choice" : "the most powerful card");
+            }
         }
 
         const auto& cfg = SherwoodConfig::Get();

@@ -17,6 +17,7 @@ struct SherwoodConfig {
     bool fixAspectRatio = true;
     int renderer = 1;     // 1 = own in-memory DirectDraw + Direct3D 11, 0 = GOG wrapper (ddraw.dll)
     int presenter = 0;    // 0 = Direct3D 11 (GDI if it fails), 1 = force GDI
+    int gpu = 0;          // graphics card: 0 = the most powerful one, 1 = Windows' choice (up to 1.2.5)
     bool allowTearing = false; // with VSync=0: present immediately even if that tears
     bool fullHeightView = true;  // draw the world in the bottom 80 rows too (HUD corners on top of it)
     bool hdBackgrounds = true;   // at zoom 2.0 take the background from hd\maps\<variant>\*.hdmap when present

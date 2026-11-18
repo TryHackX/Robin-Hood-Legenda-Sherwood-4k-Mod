@@ -732,6 +732,19 @@ w górę), resztę powiększa prezenter — **tylko świat**:
     udowodnioną przyczyną. Log „Swing: N points, WxH px, drawn L px … fighter at (x,y) -> result R” (pierwsze 60
     zamachów sesji, `Hook_SwingRecognise` w `ui_scale.cpp`) pozwoli porównać z grą bez moda. Instrukcja s. 27: linie
     względem walczącego (przód / tył / lewo / prawo), półkola, koło (obrót), ∞ (cios kończący).
+  - OBS — ciąg dalszy (v1.2.6, test na OBS 33 u użytkownika; gra i OBS bez uprawnień administratora, gra w oknie 1280×720
+    przez `gamectl.ps1 -Start -Quiet`, tymczasowa kolekcja scen z „Przechwytywaniem gry” na `Robin Hood - Legend Of
+    Sherwood:SBDRAW:Game.exe`, wynik z dziennika OBS i nagrania): przechwytywanie gry działa („d3d11 shared texture capture
+    successful”, nagranie z obrazem intro). Przeszkody: (1) gra pauzuje, gdy jej okno traci fokus (`WindowManager: game
+    window deactivated`, pętla gry staje w `GetMessage`) — gdy OBS jest na wierzchu, podgląd/nagranie są czarne;
+    (2) „hak zgodności z anty-cheatem” (domyślny) wstrzykuje przez `SetWindowsHookEx(WH_GETMESSAGE)` i budzi wątek
+    `PostThreadMessage` — pętla gry (`0x005E1380`: `PeekMessageA(&msg, okno gry, 0, 0, PM_REMOVE)`, jeden komunikat na
+    obieg; `0x005E1400` `GetMessageA(…, okno gry, …)`) nie odbiera komunikatów wątku, więc hak łapie dopiero przy
+    komunikacie okna (w testach: raz po 2 s, raz wcale przez 25 s intra); bez niego (wstrzyknięcie bezpośrednie) — od razu
+    w każdej próbie; (3) tryb SLI/Crossfire („memory capture”) działa — na różne karty. Prezenter: karta z DXGI 1.6
+    `EnumAdapterByGpuPreference(HIGH_PERFORMANCE)`, karta monitora gry, gdy to ta sama / ten sam model (u użytkownika
+    RTX 3080 Ti widziany dwa razy — zdalny pulpit), log kart. Ustawienia OBS użytkownika przywrócone z
+    `backups\obs_config_before_test_2026-11-18\`.
   - OBS (21:55: skróty OBS dopiero po Alt+Tab; przechwytywanie gry i okna czarne, działa tylko ekran): gra działa jako
     administrator (`RUNASADMIN` od instalatora GOG), a Windows (UIPI) nie pozwala programowi bez uprawnień czytać
     klawiszy, gdy na wierzchu jest okno z wyższymi uprawnieniami, ani wstrzyknąć przechwytywania. Rozwiązanie: OBS jako

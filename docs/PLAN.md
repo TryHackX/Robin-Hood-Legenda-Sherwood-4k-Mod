@@ -346,6 +346,13 @@ Do sprawdzenia przy okazji: czy miganie ikon akcji ma teraz właściwe tempo; po
      panel F10, także „brak”; prośba użytkownika), minimapa: wielkość 1,5× / 2× (klasyczna) / 2,5× / 3× / 5×
      (`MapScale`) i obraz klasyczny / klasyczny powiększony / nowy z tła HD poziomu / nowy na pergaminie — domyślny
      (`MinimapHD`; gotowe pliki `hd\minimap\`, `tools\hd\make_minimaps.py`). Opis: `docs\HD_MODE.md` §7.
+   - ✔ **v1.2.6 — karta graficzna i OBS** (2026-11-18; youtuber: „OBS jako administrator działa, ale przechwytywanie gry
+     dalej tylko jako ekran”, jego Ryzen 7 9800X3D ma własną grafikę): prezenter tworzy Direct3D 11 na najmocniejszej
+     karcie (DXGI 1.6 „high performance”, bez tego największa pamięć; karta monitora gry, gdy to ta sama / ten sam model),
+     wszystkie karty w logu, `GPU=1` = wybór Windows. Test OBS 33 u użytkownika: przechwytywanie gry działa (nagranie z
+     obrazem); przeszkody opisane w README (OBS jako administrator, gra pauzuje bez fokusu, hak zgodności z anty-cheatem
+     czeka na komunikat wątku, którego gra nie odbiera — pętla `0x005E1380` czyta tylko komunikaty swojego okna, tryb
+     SLI/Crossfire przy dwóch kartach).
    - ✔ **Wydanie na GitHubie** (2026-11-14): v1.0.0 (README po angielsku), paczki grafiki HD jako osobne wydanie
      (7 plików ZIP < 2 GB; magazyn postaci w dwóch częściach — mod czyta `sprites.dat` + `sprites.dat.2`).
 5. ◐ Klatki pośrednie animacji postaci (prośba użytkownika; „jak się nie uda, trudno"): eksperyment zakończony

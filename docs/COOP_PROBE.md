@@ -1,7 +1,69 @@
 # Co-op (lockstep) — wynik rozpoznania, 2026-11-19 (sesja poboczna)
 
-Tylko badanie. Nic nie wydane, nic nie zacommitowane. Zwykła gra bez zmian zachowania: sonda działa wyłącznie przy
-`SHERWOODFIX_TEST=1` (test w tle). Wgrany `winmm.dll` zawiera sondę, ale bez tej zmiennej nie zakłada żadnego haka.
+Stan: **temat odłożony przez użytkownika 2026-11-19** („na razie zostawiamy, zachowaj wszystkie informacje i plan”).
+Sonda i narzędzia są w repozytorium (commit e4cd553), działają tylko w teście w tle (`SHERWOODFIX_TEST=1`); zwykła gra
+nie ma żadnych haków sondy.
+
+## Ustalenia z rozmowy z użytkownikiem (2026-11-18/19)
+
+**Czego chce użytkownik (wzór: Noita Entangled Worlds, mod kooperacji do jednoosobowej Noity):**
+- każdy gracz ma własną kamerę i własne zaznaczenie postaci;
+- gospodarz wybiera drużynę (w obozie);
+- postaci, którą steruje jeden gracz, drugi nie może zaznaczyć — każdy gra swoimi, bez wchodzenia sobie w drogę;
+- świat (wrogowie, skrypty misji) liczy gospodarz.
+
+**Fakty o grze:**
+- `Game.exe` nie ma żadnego kodu sieciowego (brak importów Winsock / DirectPlay; w pliku są tylko nazwy błędów
+  DirectPlay z ogólnej tabeli błędów DirectX) — sieć trzeba dopisać w DLL od zera.
+- Noita ma oficjalne API modów w Lua (Entangled Worlds na nim stoi); Robin Hood nie ma żadnego API — wszystko przez
+  inżynierię wsteczną kodu maszynowego, jak grafika moda.
+- Kamera nie wpływa na symulację (każdy gracz może mieć swoją), ALE „co jest pod kursorem” gra liczy przy rysowaniu
+  (`0x004DDD50`), więc cel kliknięcia musi rozstrzygać komputer wydający polecenie i wysyłać jego identyfikator.
+- Jedna lista zaznaczonych (`E+0x49F8`) i jeden stan tłumacza wejścia na grę → w co-op podstawiane na czas polecenia
+  danego gracza; filtr „postać ma właściciela” przy zaznaczaniu (`SelectPC 0x004DBF20`).
+- Okna dialogowe (odprawy, pytania, menu Esc) mają własną pętlę (`0x0053C390`) i zatrzymują grę; gra pauzuje, gdy jej
+  okno traci fokus (pętla komunikatów `0x005E1380` / `GetMessage` przy fladze nieaktywności) — w co-op okno u jednego
+  gracza nie może zamrażać drugiego.
+- Dwie kopie gry na jednym komputerze: pierwszy `Game.exe` trzyma `Data\RobinHood.bks` na wyłączność, druga kopia pada
+  przy starcie misji — do lokalnych testów trzeba to obejść (np. hak na tryb udostępniania pliku).
+- Gesty mieczem to dane wejściowe jak każde inne — w lockstepie wysyłany jest wynik rozpoznania albo całe zdarzenie.
+
+**Dwie drogi:**
+1. Lockstep — oba komputery liczą tę samą grę, wymieniane są tylko polecenia graczy (z opóźnieniem wejścia, w
+   ustalonym ticku). Wymaga powtarzalnej symulacji — sonda potwierdziła, że jest (warunki niżej). Zalecana.
+2. Stan od gospodarza (host-authoritative, jak wrogowie w Entangled Worlds) — klient jako „marionetka” bez własnej
+   logiki, gospodarz wysyła stan wszystkich elementów (~15 klas, SI, sekwencje, skrypty, pociski, HUD). Kilka razy
+   większa i bardziej ryzykowna.
+
+**Ocena w naszych warunkach (nie „miesiące programisty”):** raport niżej podaje lockstep ~2–4 mies. jako czas
+programisty-człowieka na etat. U nas wąskim gardłem jest tygodniowy limit zużycia i testy we dwóch, nie godziny:
+sonda w świeżej sesji (ponad tysiąc kroków) zużyła ok. 2–3% limitu tygodniowego; bardzo długa sesja jest droga (każdy
+krok czyta cały kontekst). Lockstep to z grubsza kilkanaście–kilkadziesiąt świeżych sesji roboczych, czyli ok. 1–2
+pełne tygodniowe limity; w kalendarzu kilka tygodni do ~2 miesięcy, zależnie od tego, jak często da się testować we
+dwóch. Wersja z gospodarzem — kilka razy więcej, odradzana.
+
+**Alternatywa bez pracy:** Parsec (darmowy) — jedna osoba uruchamia grę, druga łączy się i może sterować myszą i
+klawiaturą (wspólne sterowanie, nie osobne kamery).
+
+**Plan, gdyby temat wrócił (kolejne kamienie milowe):**
+1. Dwie kopie gry na jednym komputerze (obejście blokady `RobinHood.bks`), połączone przez localhost; ta sama misja,
+   ten sam ziarno losowania, osobny generator dla dźwięku.
+2. Wymiana poleceń z opóźnieniem wejścia i harmonogram ticków; obie kopie ruszają się identycznie (kontrola haszu stanu
+   co N ticków, narzędzia `tools\coop_run.ps1` / `tools\coop_compare.py`).
+3. Zaznaczanie i tłumacz wejścia na gracza, filtr właściciela postaci, własna kamera.
+4. Wspólne pauzy, okna dialogowe, odprawy i koniec misji; brak pauzy przy utracie fokusu w trybie co-op.
+5. Obóz i kampania: drużynę wybiera gospodarz, start misji u wszystkich; zapisy.
+6. Rozjazd → ponowna synchronizacja wczytaniem zapisu gospodarza (gra umie zapisać i wczytać stan, odczyt ustawia ziarno).
+7. Sieć przez internet (NAT): pośrednik / przekierowanie portu; panel F10 lub menu: gospodarz / dołącz.
+8. Testy we dwóch: logi, rundy poprawek.
+
+---
+
+Raport sondy (sesja poboczna, 2026-11-19):
+
+Tylko badanie. Nic nie wydane, nic nie zacommitowane (stan z chwili raportu; potem zatwierdzone jako e4cd553).
+Zwykła gra bez zmian zachowania: sonda działa wyłącznie przy `SHERWOODFIX_TEST=1` (test w tle). Wgrany `winmm.dll`
+zawiera sondę, ale bez tej zmiennej nie zakłada żadnego haka.
 
 ## Gdzie co jest
 - Sonda: `src\coop_probe.cpp/.h` (+ punkty zaczepienia: `view_zoom.cpp` ScreenToWorld, `ui_scale.cpp` gest miecza,

@@ -1,5 +1,6 @@
 #include "view_zoom.h"
 #include "config.h"
+#include "coop_probe.h"
 #include "logger.h"
 #include "ui_scale.h"
 #include "widescreen_patch.h"
@@ -248,8 +249,15 @@ namespace {
         return CanZoomInNow(e) ? 1u : 0u;
     }
 
+    void ScreenToWorldShown(uint8_t* e, float* out);
+
     void __fastcall Hook_ScreenToWorld(uint8_t* e, void* edx, float* out) {
         o_ScreenToWorld(e, edx, out);
+        ScreenToWorldShown(e, out);
+        CoopProbe::OnScreenToWorld(out);   // background test only (co-op probe); returns at once otherwise
+    }
+
+    void ScreenToWorldShown(uint8_t* e, float* out) {
         if (!out || !e || !g_enabled || !g_shown.on) return;
         const float zoom = F(e, kZoom);
         if (zoom < 0.01f) return;

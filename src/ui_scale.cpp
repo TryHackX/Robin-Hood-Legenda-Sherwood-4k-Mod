@@ -1,5 +1,6 @@
 #include "ui_scale.h"
 #include "config.h"
+#include "coop_probe.h"
 #include "input_fix.h"
 #include "logger.h"
 #include "test_harness.h"
@@ -721,7 +722,7 @@ namespace {
                          count, count > 0 ? x1 - x0 : 0.0f, count > 0 ? y1 - y0 : 0.0f, length, inFrame.n,
                          who ? who[0] : 0.0f, who ? who[1] : 0.0f, r, r == 0 ? " (no attack)" : "");
         }
-        return r;
+        return CoopProbe::OnSwingRecognised(r);   // background test only (co-op probe); r unchanged otherwise
     }
 
     // The game's dialog loop (0x0053C390, thiscall, ret): main menu screens, briefing, in-game

@@ -9,6 +9,10 @@ namespace Timing {
     // True while the pacer is drawing an extra frame between two game ticks (main thread).
     bool InExtraFrame();
 
+    // True while any RHGame::RenderFrame runs: the tick's own frame, an extra frame or a dialog's
+    // backdrop (main thread; used by the co-op probe to tell drawing from game logic).
+    bool InRenderFrame();
+
     // True while a dialog renders the mission once for its backdrop (0x0053B6B0 calls
     // RHGame::RenderFrame(0, 0) at 0x0053B6CD: world and windows into the back buffer, nothing
     // presented) - not a frame of the mission the player sees (main thread).

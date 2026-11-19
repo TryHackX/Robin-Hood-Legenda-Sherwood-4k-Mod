@@ -353,6 +353,12 @@ Do sprawdzenia przy okazji: czy miganie ikon akcji ma teraz właściwe tempo; po
      obrazem); przeszkody opisane w README (OBS jako administrator, gra pauzuje bez fokusu, hak zgodności z anty-cheatem
      czeka na komunikat wątku, którego gra nie odbiera — pętla `0x005E1380` czyta tylko komunikaty swojego okna, tryb
      SLI/Crossfire przy dwóch kartach).
+   - ◐ **Kooperacja — rozpoznanie** (2026-11-19, pytanie użytkownika o multiplayer w stylu Noita Entangled Worlds: każdy
+     swoja kamera i zaznaczenie, gospodarz wybiera drużynę, bez podbierania postaci): sonda tylko w teście w tle
+     (`src\coop_probe.cpp`, `tools\coop_run.ps1`, `tools\coop_compare.py`). Warstwa rozkazów znaleziona (tłumacz wejścia
+     `0x005460C0`), symulacja powtarzalna przy osobnym generatorze losowym dla dźwięku i celu kliknięcia rozstrzyganym
+     przez wydającego polecenie. Ocena: lockstep ~2–4 mies., stan od gospodarza ~6–12 mies. Raport:
+     `docs\COOP_PROBE.md`, adresy: `docs\RE_NOTES.md` („Co-op”). ☐ Decyzja użytkownika, czy robić.
    - ✔ **Wydanie na GitHubie** (2026-11-14): v1.0.0 (README po angielsku), paczki grafiki HD jako osobne wydanie
      (7 plików ZIP < 2 GB; magazyn postaci w dwóch częściach — mod czyta `sprites.dat` + `sprites.dat.2`).
 5. ◐ Klatki pośrednie animacji postaci (prośba użytkownika; „jak się nie uda, trudno"): eksperyment zakończony

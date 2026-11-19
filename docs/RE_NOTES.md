@@ -219,3 +219,151 @@ zasłoniętych części sprite'a `0x5BBF20/0x5BC3C0`, stan kamery 5 = pełne odr
 `0x50F98E`) oraz `docs\SPRITE_BANK.md` (format `.dic/.bks/.rhs`). Klawisze gry z instrukcji: Num+/Num− zoom, strzałki
 przewijanie, F1 szybki zapis, F5 szybki odczyt, Alt pole widzenia, 1–5 bohaterowie — mod używa F6/F7/F8.
 
+## Co-op: warstwa rozkazów, losowość, powtarzalność (rozpoznanie 2026-11-19, tylko badanie)
+Sonda: `src\coop_probe.cpp` (działa WYŁĄCZNIE w trybie testowym `SHERWOODFIX_TEST=1`; w zwykłej grze nie zakłada
+żadnego haka), polecenie harnessu `coop …`, skrypty `tools\coop_run.ps1` (nagranie / powtórka w tle),
+`tools\coop_compare.py` (porównanie haszy), pomocnicze `tools\fninfo.py` (prolog i `ret N`), `tools\serfields.py`
+(pola zapisywane przez metodę Serialize), `tools\asmctx.py` (wycinek listingu). Prologi poniżej czytane z pliku.
+
+### Droga wejścia gracza do symulacji (zdarzenia)
+- `RHGame::Run` (pętla zdarzeń `0x0050F9B1..`) buduje obiekty zdarzeń i wysyła je do **tłumacza wejścia**
+  `RHGameInputTranslator` (singleton `[0x006C0C4C]`, getter `0x00546050`, konstruktor `0x00545BD0`, 0xAC bajtów; ten
+  sam wskaźnik w `RHEngine+0x68`). `HandleEvent 0x005460C0` — `thiscall(tr, Event*)`, `ret 4`, prolog
+  `6A FF 68 D8 7F 66 00 64 A1`. Tłumacz sam obsługuje część (ślad gestu miecza, klawisze → akcje, pauza `+0x1B`),
+  potem **rozsyła zdarzenie do słuchaczy** `[tr+8]..[tr+0xC]` (`vtbl[0]`, pętla `0x00546C3D`); zdarzenia pochodne
+  wysyła rekurencyjnie do siebie.
+- Klasy zdarzeń: baza vtable `0x00679B60` (`+4` kategoria, `+8` parametr). Kat. 0 (`0x00679B64`, konstr.
+  `0x005490F0(kod)`): `+0xC` kod. Kat. 1 — wskaźnik (`0x00679B68`, `0x00549120(pod, Vec2*)`,
+  `0x005491A0(pod, Vec2*, flagi)`): `+0xC` podtyp (1 ruch, 3 przyciski), `+8` flagi przycisków (0x01 klik lewym
+  puszczony, 0x08 dwuklik, 0x40 lewy trzymany, 0x02 klik prawym, 0x80 prawy trzymany), `+0x10` Vec2 ekranu.
+  Kat. 2 — zdarzenie gry (`0x00679B6C`, `0x00549250(kod, arg)`, `0x005492A0(kod, arg, param)`): `+0xC` kod,
+  `+0x10` argument — **dla kodów zaznaczania to wskaźnik postaci** (przy przesyłaniu trzeba go zamienić na id
+  elementu `[el+0xC]`).
+- **Słuchacz silnika** = obiekt `RHEngine+0x60` (vtable `0x00678B34`), `HandleEvent 0x004DC2C0` — `thiscall(E+0x60,
+  Event*)`, `ret 4`, prolog `64 A1 00 00 00 00 6A FF 68 63 E4 65 00`. To najwęższe miejsce: każde polecenie gracza
+  dla świata przechodzi tędy. Kat. 1, flagi `&0x49`: 1 → `RHEngine::OnWorldClick 0x004DE290` (`thiscall(E)`, `ret`),
+  8 → dwuklik `0x004DE5E0` (`thiscall(E)`, `ret`), 0x40 → przeciąganie `0x004DDFB0`. Kat. 2 — tablica kodów 1..0x28
+  (`0x004DCD84` indeksy, `0x004DCD2C` adresy): 13/14/15/16 → **`RHEngine::SelectPC 0x004DBF20`** (`thiscall(E, pc,
+  dodaj, kod14lub16)`, `ret 0xC`), 17/19 → `0x004C8120`, 18 → odznaczenie `0x004DC190` (`thiscall(E, pc)`,
+  `ret 4`; pc = 0 → wszystkie), 8 → `0x004DBED0`, 22 → `0x004DCFD0`,
+  23 → `0x004DCE20`, 20 → `pc->vtbl[0xF8]` + `[E+0x49E0]=arg`, 32/33 → `0x0049D6C0/0x0049D780`, 35/36 → nowa
+  sekwencja (`0x005866A0`) wysłana do menedżera, 37 → `0x004D21B0`, 38 → `ScreenToWorld` + `0x004CDAB0`, 39 → dźwięk
+  `0x005A88E0`, 40 → `0x004E2390`, 10 → `0x005C77F0`; kody > 0x28 (np. 42) silnik ignoruje.
+- `OnWorldClick 0x004DE290`: pozycja = `ScreenToWorld 0x004DEE70` (`thiscall(E, Vec2* out)`, `ret 4`: kamera
+  `E+0x4738` + wskaźnik tłumacza `+0x84` / zoom; mod przechwytuje ją w `view_zoom.cpp`), najpierw
+  `ApplySwordGesture`, potem tryb kursora `u16 [tr+0xA2]` (0..20, tablica `0x004DE58C`) i bajt `[tr+0x20]` →
+  funkcja akcji `thiscall(E, Vec2* pozycja, u8 flaga[, 0[, 0]])`: tryb 0 `0x004CCAD0` (zwykły klik; `ret 8`), 1
+  `0x004DF070`, 2/3 `0x004E0550` (`ret 0xC`), 4 `0x004DF950`, 5 `0x004DFB50`, 6/7 `0x004E0FB0` (`ret 0x10`), 8
+  `0x004DF330` (`ret 0xC`), 9 `0x004E0770`, 10 `0x004E0D80`, 11 `0x004DF7B0`, 12 `0x004E0030`, 13/14 `0x004E14A0`
+  (`ret 0xC`), 15 `0x004E0BF0`, 16 `0x004DF550` (`ret 0x10`), 17 `0x004DFE70`, 18 `0x004E09D0`, 19 `0x004DFCF0`,
+  20 `0x004E1630` (2 argumenty = `ret 8`, 3 = `ret 0xC`). Tryby 0/10/15/18 przy trwającym zaznaczaniu ramką
+  (`[E+0x72]` i `[E+0x74]`) wołają `0x004CDCC0`.
+- Dwuklik `0x004DE5E0`: gdy czeka pojedynczy klik (`[E+0x8A]`) → `OnWorldClick`; inaczej ta sama pozycja i bajt
+  `[tr+0x20]`, ale własna tablica trybów `0x004DE828`/`0x004DE7FC` (warianty „biegiem”; tryb 0 sprawdza też
+  `[tr+0x15/+0x19/+0x1A]`).
+- Przedmiot z klawisza: tłumacz (`0x005461F0`) wysyła kat. 2 kod 22 (`0x005492A0(0x16, arg, param)`) → silnik
+  `0x004DCFD0`. Argument bywa wskaźnikiem na obiekt, który nie jest elementem świata (ekwipunek) — sonda takie
+  zdarzenie zapisuje jako `foreign` i przy powtórce pomija; w co-op potrzebny osobny identyfikator.
+- Zwykły klik `0x004CCAD0`: test trafienia po liście rysowania `E+0x48FC..0x4900` od góry (`el->vtbl[0x18](pos, 0,
+  1)`); klik w postać gracza = zdarzenia kat. 2 kod 6 i 14/16 (zaznaczenie); klik w ziemię z zaznaczoną postacią
+  zwraca 1 i **nie tworzy jeszcze rozkazu** — rozkazy (typ 2, 6) powstają w następnym ticku w kodzie postaci gracza
+  (`0x00495DF8`, `0x00496503`, `0x0049BEA5`), czyli w logice.
+- **Gest miecza**: `ApplySwordGesture 0x004E1A40` — `thiscall(E, Vec2* pozycja, int)`, `ret 8`, wynik `al` = dano
+  akcję. Dla każdej zaznaczonej postaci z bronią (`[pc+0x268]`) woła rozpoznawanie `0x00547600` (`thiscall(tr, a, b)`,
+  `ret 8`, wynik 0..10, ślad punktów `tr+0x5C`; mod przechwytuje je w `ui_scale.cpp`), potem przełącznik `0x004E1F24`
+  buduje `RHSequence` (`0x00585EA0`, 0x68 B) + `RHSequenceElement` (`0x00588530`, 0x9C B, `ret 0x1C`) i wysyła do
+  menedżera sekwencji `E+0x43F8` przez `0x0058A940` (`thiscall(mgr, 0x6C0560, 0, element)`, `ret 0xC`).
+- **Zaznaczenie**: `std::list` wskaźników PC w `E+0x49F8` (głowa `[E+0x49FC]`, węzeł `{next, prev, wartość}`,
+  liczba `[E+0x4A00]`). Jedno na grę, tak jak jeden tłumacz (tryb kursora, ślad gestu) — w co-op trzeba je
+  podmieniać na czas polecenia danego gracza.
+- **Rozkaz** `RHOrder` (0x3C B, vtable `0x00679BC8`, konstr. `0x0054E510`, kopia `0x0054E5E0`, destr. `0x0054E6D0`,
+  `Serialize 0x0054E750` `thiscall(order, archive, ?)` `ret 8`): `+0x24` typ (0x123 = brak), `+0x28..+0x2D` flagi,
+  `+0x30` cel, `+0x34` numer z licznika `[0x006C0C6C]`, `+0x38` sekwencja-właściciel. Kolejkowanie:
+  `RHSequence::AddOrder 0x00585970` — `thiscall(seq, RHOrder*)`, `ret 4`, prolog `53 55 8B 6C 24 0C 8B D9`
+  (typ 0x123 = usunięcie; lista `[seq+0x1C]`, licznik `+0x20`). ~300 miejsc tworzy rozkazy, prawie wszystkie w AI.
+- **Tick symulacji** `RHEngine::Tick 0x004C6EF0` — `thiscall(E)`, wynik = stan gry do `[pGame+0x3550]`, prolog
+  `6A FF 68 10 C4 65 00 64 A1`; jedyne miejsce wołania `0x0050FEE6`, pomijane przy pauzie (`[tr+0x1B]`, okno
+  `[pGame+0x29A8]+0xC8`, stan 4/7). Kolejność w obiegu: zdarzenia → … → `Tick` → `0x00513E60` → `RenderFrame` →
+  dźwięk `0x005A9420`.
+
+### Losowość
+- Jedyny generator to `rand()` biblioteki C: `0x00642A7D` (stan na wątek `[_getptd()+0x14]`, `_getptd 0x00645933`,
+  indeks TLS `[0x006BFAA0]`), `srand 0x00642A70`, `time() 0x00642A9F`. Innych stałych LCG/MT w kodzie brak. 160 miejsc
+  wołania `rand`.
+- `srand` woła tylko start gry (`0x0040A2A1`, `time()`) i statyczny zapis AI `0x004148B0` (`cdecl(archive)`): przy
+  **zapisie** ziarno = `time(0)` → `[0x006C0784]` → plik → `srand`, przy **odczycie** ziarno z pliku → `srand`. Każdy
+  zapis (także `Restart` przy starcie misji) przestawia więc generator na zegar.
+- **Losowanie wariantu dźwięku** `0x005AE380` (z `0x005A7080`; `rand` też w `0x005A7220`, `0x005A8220`,
+  `0x005A9578`, `0x005AE6A0`) korzysta z tego samego generatora — także w trakcie rysowania (pozycyjne dźwięki
+  zwracane przez metody rysujące), a to, co gra, zależy od odległości od środka widoku (`0x005B2FF0`).
+- Zegar w logice: `GetTickCount` czytają tylko statystyka czasu misji (`0x0050E7B0/0x0050E7D0/0x0050E800`, pole
+  `[pGame+0x3560]`), licznik FPS `0x00511C1B`, pętle menu/okien i animacja kursora. Sonda: 0 odczytów zegara
+  w ticku silnika we wszystkich przebiegach.
+- `rand` w modułu dźwięku `0x005A8220` (wołany z logiki postaci `0x0047347C`, `0x00476D71`) losuje tylko przy
+  włączonym dźwięku (`[snd+0x20B]`), a `Update 0x005A9420` też się wtedy pomija — gracz bez dźwięku zużywa mniej losowań.
+
+### Rysowanie, które dotyka stanu (zmierzone sondą 2026-11-19)
+- Słuchacze tłumacza w misji (polecenie `coop listeners`): tylko dwa — silnik (`0x004DC2C0`) i RHGame (vtable
+  `0x00678CA0`, `HandleEvent 0x00512580`, tablica kodów kat. 2 `0x00512B34`/`0x00512AD8`).
+- W trakcie rysowania (także w klatkach pośrednich moda, ~6 na tick przy 144 Hz) do słuchaczy trafiają zdarzenia
+  kat. 2 kod 42 (i 41). Silnik ich nie obsługuje; RHGame: 41 → `0x00512BE0` (panel przy postaci, `WorldToScreen
+  0x004DEEB0`), 42 → `0x00512C90` → `0x0051DF00(game+0x29B4, 0)` (zamknięcie panelu) — to interfejs.
+- **Zanik podświetlenia postaci** (`+0x480` licznik, `+0x484` długość = 20, `+0x488` krycie 40..100, `+0x48A`,
+  `+0x48C` = 1.0, `+0x604`): krok `0x0047A8A0` robi logika, ale też każde rysowanie — PC `0x00491603..0x004916EA`,
+  NPC `0x00486AEF/0x00486BCC/0x00486C8A`. Mod nie chroni go w klatkach pośrednich, więc tempo zależy od liczby
+  klatek na tick. Pola są w zapisie gry (Serialize), ale to tylko wygląd; w haszu stanu trzeba je pominąć
+  (pomiar: jedyna różnica między przebiegami poza rzadkimi rozjazdami opisanymi niżej).
+- Inne zapisy w rysowaniu: NPC `0x00486AE9` zeruje flagi ruchu `+0x70/+0x71`, gdy `[el+0x12]==0`; PC `0x004917E9`
+  zeruje je też; `[npc+0x6E5]` (podświetlenie, ustawiane m.in. przez kursor `0x004DD76A`) → pasek zdrowia
+  `0x004D5A90` i zerowanie. `rand` z rysowania: tylko wariant dźwięku `0x005AE413` (pozycyjne dźwięki zwracane przez
+  metody rysujące); w klatkach pośrednich moda 0 wywołań we wszystkich przebiegach.
+
+### Pomiar powtarzalności (2026-11-19, test w tle, punkt „Kontynuuj” gracza w Lincoln)
+Metoda: nagranie = scenariusz `coop_run.ps1` (kamera, zaznaczenie portretem, chodzenie po wieży, klik w strażnika →
+skok i walka, dwa gesty miecza) z ziarnem `0x5EED1234` ustawionym na początku ticku 0; powtórka = te same zdarzenia
+wstrzyknięte do słuchacza silnika przed tym samym tickiem (żywe wejście do silnika odrzucane), kamera i pola tłumacza
+z chwili zdarzenia, pozycja w świecie i wynik gestu z logu, argument kat. 2 przez id elementu. Hasz na tick: pola
+zapisywane przez Serialize (bez wskaźników `+0x134`, `+0x1D8`), pozycja, kierunek, animacja wszystkich elementów;
+plus stan generatora, dziennik każdego `rand()` (tick, kontekst, wołający, wartość) i liczniki tworzenia obiektów
+(`[0x006C081C]` elementy, `[0x006C0C6C]` rozkazy, `[0x006C1034]` elementy sekwencji).
+- Losowanie dźwięku na osobnym generatorze (bit 64): w kolejnych przebiegach liczba losowań w aktualizacji dźwięku
+  różni się już od ticku ~20 (stan FMOD zależy od czasu rzeczywistego) — bez tej izolacji lockstep nie ma szans.
+- Zapis/odczyt `srand` w trakcie sesji: 0 wywołań (brak autozapisu w tym fragmencie misji).
+
+| Seria | Klatki pośrednie | Przebiegi | Wynik |
+|---|---|---|---|
+| s4 | wyłączone (25 kl./s) | nagranie + 2 powtórki | **identyczne w 100 %**: 1504 ticki, pełny hasz w każdym ticku, 2794 losowania (miejsce, wartość, tick), liczniki obiektów, koniec misji (`Tick` → 1) w ticku 1503 we wszystkich |
+| s3 | włączone (144 Hz) | nagranie + 2 powtórki | identyczne poza polami zaniku; 3131 losowań, koniec misji w ticku 1641 we wszystkich |
+| s2 | włączone | nagranie + 3 powtórki | nagranie = p1 = p2 (losowania 1:1); **p3 rozjazd**: pole `+0x114` strażników o 1 od ticku 665 (wartość z globalnego licznika), losowania od ticku 685 (dodatkowa gałąź AI wrogów `0x0043E2EC`/`0x00485255`) |
+| s1 | włączone | nagranie + 2 powtórki | nagranie = p1 do ticku 1678; **p2 rozjazd** w ticku 611 (4 losowania mniej w logice) |
+| s5 | nagranie z klatkami | p1 z klatkami | identyczne 1655 ticków: 3141 losowań, 2591 utworzeń `RHOrder` (ta sama kolejność i wołający), pełny hasz |
+| s5 | nagranie z klatkami | nx **bez** klatek | logika identyczna (3171 losowań, 2613 rozkazów, stan w każdym ticku) — różni się tylko zanik podświetlenia → liczba klatek na tick nie wpływa na symulację |
+| s6 | z klatkami, **bez** osobnego generatora dla dźwięku | nagranie + powtórka | rozjazd po ~2 s gry: stan generatora od ticku 53 (aktualizacja dźwięku wylosowała 5 zamiast 3 razy), stan postaci od 55, liczba losowań w logice od 85 |
+| s5 | nagranie z klatkami | cam: **kamera trzymana daleko** (200,1600) | rozjazd w ticku 679, w chwili rozpoczęcia gestu miecza: jeden rozkaz więcej (licznik `[0x006C0C6C]`), inna gałąź walki (`0x00472F7F` zamiast `0x00468109`), zamienione flagi walki `+0x288/+0x289` Robina i strażnika; losowania od 699 |
+- **Symulacja zależy od kamery przez „co jest pod kursorem”**: `0x004DDD50` (z `RenderFrame`, przez `0x004C7D80`) i
+  `0x004DD410`/`0x004DD7BE` ustawiają elementowi pod kursorem `+0x92=1`, `+0xA0=0` (te same pola co ikona nad głową:
+  `+0xA4` typ, np. `0x00470FF2`, `0x004A51F5`), a obsługa myszy korzysta z tego stanu. W co-op cel akcji trzeba
+  rozstrzygać na maszynie wydającej polecenie i wysyłać jako id elementu; u innych graczy najechanie liczone z ich
+  kamery nie może wpływać na cudze polecenia. Rzadkie rozjazdy s1/s2 (w tej samej fazie: kursor nad walczącymi)
+  pasują do tego mechanizmu (między zdarzeniami żywy wskaźnik tłumacza i kamera nie są odtwarzane).
+- Nagranie s2 stanęło w ticku 962 na modalnym oknie otwartym W TRAKCIE obsługi zdarzenia (puszczenie przycisku po
+  geście), a zdarzenie zapisywało się dopiero po powrocie — powtórki go nie miały (stanęły w 1638). Poprawione:
+  `coop stop` dopisuje takie „wiszące” zdarzenie. W co-op to osobny przypadek: polecenie, które otwiera okno.
+- Rzadkie rozjazdy (2 z 8 powtórek z kamerą odtwarzaną z logu, 0 z 3 bez klatek pośrednich) zaczynają się w walce,
+  przy kursorze nad walczącymi; najbardziej prawdopodobna przyczyna — stan najechania kursorem (wyżej). Klatki
+  pośrednie same w sobie logiki nie zmieniają (s5 nx).
+
+### Co z tego wynika dla co-op (lockstep: wymiana samych poleceń)
+- Polecenie = zdarzenie dla słuchacza silnika + kontekst gracza: tick, kat./kod/parametr, argument jako id elementu
+  (albo id przedmiotu), pozycja w świecie, tryb kursora i bajty tłumacza (`+0x14..+0x2B`, `+0x84..+0xAB`), wyniki
+  rozpoznania gestu, zaznaczenie gracza i **rozstrzygnięty cel pod kursorem**. Wstrzyknięcie przed `RHEngine::Tick`
+  tego ticku (sonda tak robi i to wystarcza).
+- Do podmiany na czas polecenia danego gracza: zaznaczenie (`SelectPC 0x004DBF20` / lista `E+0x49F8`), stan
+  tłumacza, stan najechania; filtr własności postaci w `SelectPC` i kodach 13–16.
+- Ziarno `rand()` od hosta na starcie misji; `srand(time)` w zapisie (`0x004148B0`) zastąpić ziarnem z sesji;
+  osobny generator dla kodu dźwięku `0x005A6000..0x005B5800`; hasz synchronizacji bez wskaźników i bez pól zaniku.
+- Okna modalne otwierane z ticku albo z obsługi zdarzenia (koniec misji, dialogi, odprawy, menu Esc) zatrzymują
+  pętlę gry u jednego gracza — muszą być wspólne (pauza całej sesji).
+- Kamera, kursor, HUD, dźwięk i klatki pośrednie są lokalne i mogą się różnić (zmierzone), pod warunkiem że cel
+  akcji jest wysyłany, a nie liczony z widoku odbiorcy.
+

@@ -1,4 +1,5 @@
 #include "test_harness.h"
+#include "coop_probe.h"
 #include "diag.h"
 #include "logger.h"
 #include "settings_menu.h"
@@ -417,6 +418,11 @@ namespace {
             const bool done = !DDM::TraceActive();
             DDM::TraceCalls(nullptr, 0); // closes the file if the count was not reached
             Ack(seq, "%s %s", done ? "ok" : "ok (fewer calls than asked for in 8 s)", path.c_str());
+        } else if (!std::strcmp(cmd, "coop")) {
+            // co-op probe (coop_probe.h): sessions of recorded / replayed input with a state hash per tick
+            static char text[1200];
+            CoopProbe::Command(args, text, sizeof(text));
+            Ack(seq, "%s", text);
         } else if (!std::strcmp(cmd, "quit")) {
             const HWND hwnd = WindowManager::GetGameWindow();
             Ack(seq, hwnd && PostMessageA(hwnd, WM_SYSCOMMAND, SC_CLOSE, 0) ? "ok" : "err no window");

@@ -10,6 +10,7 @@
 #include "motion_smooth.h"
 #include "input_fix.h"
 #include "test_harness.h"
+#include "coop_probe.h"
 #include "watchdog.h"
 #include "ddm/ddm.h"
 #include "ddm/ddm_hd.h"
@@ -273,6 +274,7 @@ namespace Timing {
         constexpr uintptr_t kAddrBackdropRenderRet = 0x0053B6D2; // 0x0053B6B0 (a dialog's backdrop), after RenderFrame(0, 0)
         volatile bool     g_backdropRender = false;
         volatile bool     g_lastRenderBackdrop = false;
+        int               g_renderDepth = 0;    // RenderFrame calls in progress (see Timing::InRenderFrame)
         volatile unsigned g_backdropRenders = 0;
         unsigned g_dialogInExtraFrames = 0;     // dialogs opened by a window during an extra frame
         bool g_extraActive  = false; // the previous tick was drawn with extra frames
@@ -313,7 +315,9 @@ namespace Timing {
                 ++g_backdropRenders;
                 g_renderPhase = -1.0f;
                 if (DDM::TraceActive()) DDM::TraceMark("--- RenderFrame (a dialog's backdrop)");
+                ++g_renderDepth;
                 o_RenderFrame(pGame, edx, showCursor, doPresent);
+                --g_renderDepth;
                 g_backdropRender = false;
                 UiScale::EndBackdropRender();
                 return;
@@ -341,7 +345,9 @@ namespace Timing {
             if (DDM::TraceActive()) {
                 DDM::TraceMark(g_inExtraFrame ? "--- RenderFrame (extra frame)" : (fromTick ? "--- RenderFrame (tick)" : "--- RenderFrame (other caller)"));
             }
+            ++g_renderDepth;
             o_RenderFrame(pGame, edx, showCursor, doPresent);
+            --g_renderDepth;
             if (DDM::TraceActive()) {
                 DDM::TraceMark("--- RenderFrame end");
             }
@@ -481,6 +487,7 @@ namespace Timing {
             Watchdog::Beat();
             InputFix::Poll();
             TestHarness::OnGameTick();
+            CoopProbe::OnLoopEnd(pGame);   // co-op probe (background test only): why the engine did not tick
 
             double mainWorkUs = 0.0;
             if (g_prevTickExitQpc != 0 && entryQpc > g_prevTickExitQpc) {
@@ -872,6 +879,10 @@ namespace Timing {
 
     bool InExtraFrame() {
         return g_inExtraFrame;
+    }
+
+    bool InRenderFrame() {
+        return g_renderDepth > 0;
     }
 
     bool InBackdropRender() {

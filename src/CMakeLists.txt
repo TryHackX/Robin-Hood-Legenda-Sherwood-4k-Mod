@@ -44,6 +44,7 @@ add_library(winmm SHARED
     motion_smooth.cpp
     watchdog.cpp
     test_harness.cpp
+    coop_probe.cpp
     ui_scale.cpp
     settings_menu.cpp
     view_zoom.cpp

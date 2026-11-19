@@ -19,6 +19,7 @@
 #include "diag.h"
 #include "input_fix.h"
 #include "test_harness.h"
+#include "coop_probe.h"
 #include "settings_menu.h"
 #include "ui_scale.h"
 #include "view_zoom.h"
@@ -368,6 +369,7 @@ namespace {
         CpuOptimizer::Initialize();
         MemoryOpt::Initialize();
         InputFix::Initialize();
+        CoopProbe::Install();       // co-op research probe: background test mode only (SHERWOODFIX_TEST=1)
         g_vehHandle = AddVectoredExceptionHandler(1, CrashVectoredHandler);
         if (g_vehHandle) {
             Logger::Info("CrashVectoredHandler registered.");

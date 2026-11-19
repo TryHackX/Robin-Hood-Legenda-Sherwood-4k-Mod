@@ -5,7 +5,8 @@
 # tools\out\harness\swing_<Name>.txt. Ends the instance and puts the player's saves back.
 #   -Name n     output name
 #   -Ini file   settings (default tools\testcfg\user_copy.ini)
-param([string]$Name = 's1', [string]$Ini = '')
+#   -Wheel n    mouse wheel notches over the fighter before the strokes (+ in, - out; the smooth zoom)
+param([string]$Name = 's1', [string]$Ini = '', [int]$Wheel = 0)
 
 $root = Split-Path $PSScriptRoot -Parent
 if (-not $Ini) { $Ini = Join-Path $PSScriptRoot 'testcfg\user_copy.ini' }
@@ -60,6 +61,12 @@ try {
     Start-Sleep -Milliseconds 5000
     [void](powershell -NoProfile -ExecutionPolicy Bypass -File $hctl -Cmd 'stat' -Shot "swing_${Name}_fight")
 
+    if ($Wheel) {
+        [void](Send-H 'moveto 1904 728')
+        foreach ($i in 1..[math]::Abs($Wheel)) { [void](Send-H "wheel $([math]::Sign($Wheel))"); Start-Sleep -Milliseconds 400 }   # one step per notch
+        Start-Sleep -Milliseconds 2500
+        Write-Output "zoom: $(Send-H 'stat')"
+    }
     Stroke 1500 760 600 0 "swing_${Name}_trail"     # right
     Stroke 2150 760 -600 0      # left
     Stroke 1850 1000 0 -450     # up
@@ -76,7 +83,7 @@ try {
     Write-Output "saves: $(powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'save_backup.ps1') -Check)"
     $out = Join-Path $root "tools\out\harness\swing_$Name.txt"
     if (Test-Path $log) {
-        Get-Content $log | Select-Object -Skip $startLine | Where-Object { $_ -match 'Swing' } | Set-Content -Path $out -Encoding ascii
+        Get-Content $log | Select-Object -Skip $startLine | Where-Object { $_ -match 'Swing|ViewZoom|Perf\(5s\)' } | Set-Content -Path $out -Encoding ascii
         Write-Output "swing lines: $((Get-Content $out).Count) -> $out"
     }
 }

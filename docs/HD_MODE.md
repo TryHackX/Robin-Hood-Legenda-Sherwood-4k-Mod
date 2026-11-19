@@ -820,7 +820,10 @@ w górę), resztę powiększa prezenter — **tylko świat**:
   - Sprawdzone w tle (`tools\swing_test.ps1`: Lincoln, walka ze strażnikiem, kreski w prawo / lewo / górę / dół):
     przed — 55 punktów, 38 powtórzeń, przecięcie 1, wynik 1 dla każdej kreski; po — 14–17 punktów, 0 powtórzeń,
     przecięcie 0, wyniki 2 / 3 / 5 / 6 (kierunek liczony względem tego, gdzie patrzy walczący); smuga widoczna za
-    kursorem w trakcie kreski (`moveshot` w harnessie).
+    kursorem w trakcie kreski (`moveshot` w harnessie). Także przy zoomie (`-Wheel n`, krok kółka po kroku): 2,3× i
+    maksymalne 4× (wszystkie punkty przez `ScreenToFrame`, wyniki 2 / 3 / 5), maksymalne oddalenie (zoom gry 1,0,
+    wyniki 5 / 5) — smuga zawsze tuż za kursorem (`tools\out\gesty_zoom_1.2.7.png`). Obraz w walce: `Present=143.9Hz`
+    przy 25 tickach/s, jak w 1.2.6 u youtubera (144 Hz) — poprawka zmienia tylko listę punktów gestu.
 - **Wydajność sprite'ów HD** (2026-11-17, v1.2.1): `Sprites::TryShadowBlit` (główna ścieżka sprite'ów HD przez procedury
   gry `0x0062261C/0x006220EC`) liczona po 8 pikseli SSE2 (przezroczyste/ukryte zostają, cień przyciemnia pojedynczo, reszta
   = piksel HD). Las misji z obozu: klatka pośrednia 11,2 → 7,1 ms, 86 → 140 kl./s. Do diagnozy: plik mapy linkera

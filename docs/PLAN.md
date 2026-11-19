@@ -353,6 +353,12 @@ Do sprawdzenia przy okazji: czy miganie ikon akcji ma teraz właściwe tempo; po
      obrazem); przeszkody opisane w README (OBS jako administrator, gra pauzuje bez fokusu, hak zgodności z anty-cheatem
      czeka na komunikat wątku, którego gra nie odbiera — pętla `0x005E1380` czyta tylko komunikaty swojego okna, tryb
      SLI/Crossfire przy dwóch kartach).
+   - ✔ **v1.2.7 — gesty miecza** (2026-11-19; youtuber: nagrania z modem i bez na manekinie, log — prawie każdy zamach
+     to zwykły cios): z klatkami pośrednimi pętla gry dawała kilka zdarzeń ruchu na tick z tą samą pozycją, ślad gestu
+     dostawał po 4–5 identycznych punktów, a test przecięcia gry (`0x006107E0`, styk końców = przecięcie) brał każdą
+     kreskę za pętlę → wynik 1. Punkt równy ostatniemu nie jest już dopisywany (ostatni dostaje świeżą jasność, smuga
+     bez zmian). Sprawdzone w tle (`tools\swing_test.ps1`): kreski dają ciosy kierunkowe (2/3/5/6). Opis:
+     `docs\HD_MODE.md` („Gesty miecza — przyczyna i poprawka”), adresy: `docs\RE_NOTES.md` („Ślad gestu”).
    - ◐ **Kooperacja — rozpoznanie** (2026-11-19, pytanie użytkownika o multiplayer w stylu Noita Entangled Worlds: każdy
      swoja kamera i zaznaczenie, gospodarz wybiera drużynę, bez podbierania postaci): sonda tylko w teście w tle
      (`src\coop_probe.cpp`, `tools\coop_run.ps1`, `tools\coop_compare.py`). Warstwa rozkazów znaleziona (tłumacz wejścia

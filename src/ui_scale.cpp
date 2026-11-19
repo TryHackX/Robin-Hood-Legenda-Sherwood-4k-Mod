@@ -3,6 +3,7 @@
 #include "coop_probe.h"
 #include "input_fix.h"
 #include "logger.h"
+#include "pattern.h"
 #include "test_harness.h"
 #include "timing.h"
 #include "window_manager.h"
@@ -692,19 +693,47 @@ namespace {
         return o_TrailDraw(mgr, edx, colour);
     }
 
+    using PFN_TrailCrosses = uint32_t(__fastcall*)(void* list, void* edx);
+    const auto g_fnTrailCrosses = reinterpret_cast<PFN_TrailCrosses>(0x006107E0);  // al: two segments that are not neighbours meet
+    std::atomic<int> g_trailRepeatsLeftOut{ 0 };
+
     uint32_t __fastcall Hook_SwingRecognise(void* mgr, void* edx, void* a, void* b) {
         TrailInFrame inFrame(mgr);
-        const uint32_t r = o_SwingRecognise(mgr, edx, a, b);
         // The log part (2026-11-18, YouTuber: "the character does not react to what I draw, normal strikes take
         // a lot of waving, the spin attack works"): what the game recognised, from which stroke - the first
-        // 60 swings of a session. Result 0 = no attack; the shapes the game knows (Manual.pdf p. 27): lines
-        // forward / back / left / right, half circles, circles, the infinity sign.
+        // 60 swings of a session, and the points themselves of the first 10 (2026-11-19: a stroke from a
+        // player's log can be replayed against the game's code). Result 0 = no attack, 1 = a normal strike;
+        // the shapes the game knows (Manual.pdf p. 27): lines forward / back / left / right, half circles,
+        // circles, the infinity sign. "crossing" = the game's own test whether the stroke crosses itself
+        // (0x006107E0); a crossing stroke is never taken for a line.
         static int s_logged = 0;
-        if (s_logged < 60 && mgr) {
+        const bool log = s_logged < 60 && mgr;
+        uint32_t crosses = 0;
+        if (log) {
+            auto* list = static_cast<uint8_t*>(mgr) + 0x5C;
+            const int count = *reinterpret_cast<const int*>(list + 8);
+            crosses = g_fnTrailCrosses(list, nullptr) & 0xFF;
+            if (s_logged < 10 && count >= 2) {
+                char line[1900];
+                int len = 0, inLine = 0, part = 0;
+                for (int i = 0; i < count && i < 512; ++i) {
+                    const float* v = g_fnListAt(list, nullptr, static_cast<uint32_t>(i));
+                    if (v) len += std::snprintf(line + len, sizeof(line) - len, " %.0f,%.0f", v[0], v[1]);
+                    if (++inLine == 120 || i + 1 == count || i + 1 == 512) {
+                        if (len > 0) Logger::Info("Swing %d points %d:%s", s_logged + 1, ++part, line);
+                        len = 0;
+                        inLine = 0;
+                    }
+                }
+            }
+        }
+        const uint32_t r = o_SwingRecognise(mgr, edx, a, b);
+        if (log) {
             ++s_logged;
             auto* list = static_cast<uint8_t*>(mgr) + 0x5C;
             const int count = *reinterpret_cast<const int*>(list + 8);
             float x0 = 1e9f, y0 = 1e9f, x1 = -1e9f, y1 = -1e9f, length = 0.0f, px = 0.0f, py = 0.0f;
+            int repeats = 0;
             for (int i = 0; i < count && i < 512; ++i) {
                 const float* v = g_fnListAt(list, nullptr, static_cast<uint32_t>(i));
                 if (!v) continue;
@@ -712,17 +741,69 @@ namespace {
                 y0 = (std::min)(y0, v[1]);
                 x1 = (std::max)(x1, v[0]);
                 y1 = (std::max)(y1, v[1]);
-                if (i > 0) length += std::sqrt((v[0] - px) * (v[0] - px) + (v[1] - py) * (v[1] - py));
+                if (i > 0) {
+                    length += std::sqrt((v[0] - px) * (v[0] - px) + (v[1] - py) * (v[1] - py));
+                    if (v[0] == px && v[1] == py) ++repeats;
+                }
                 px = v[0];
                 py = v[1];
             }
             const float* who = static_cast<const float*>(a);      // the fighter on the screen (WorldToScreen)
-            Logger::Info("Swing: %d points, %.0fx%.0f px, drawn %.0f px (frame pixels; %d of them mapped from the screen), "
-                         "fighter at (%.0f,%.0f) -> result %u%s.",
-                         count, count > 0 ? x1 - x0 : 0.0f, count > 0 ? y1 - y0 : 0.0f, length, inFrame.n,
-                         who ? who[0] : 0.0f, who ? who[1] : 0.0f, r, r == 0 ? " (no attack)" : "");
+            Logger::Info("Swing: %d points (%d repeated in a row), %.0fx%.0f px, drawn %.0f px (frame pixels; %d of them "
+                         "mapped from the screen), crossing %u, fighter at (%.0f,%.0f) -> result %u%s. Repeats left out so far: %d.",
+                         count, repeats, count > 0 ? x1 - x0 : 0.0f, count > 0 ? y1 - y0 : 0.0f, length, inFrame.n, crosses,
+                         who ? who[0] : 0.0f, who ? who[1] : 0.0f, r, r == 0 ? " (no attack)" : "", g_trailRepeatsLeftOut.load());
         }
         return CoopProbe::OnSwingRecognised(r);   // background test only (co-op probe); r unchanged otherwise
+    }
+
+    // Repeated points (2026-11-19, the YouTuber's recordings with and without the mod, and the hidden test: a
+    // perfectly straight 600 px stroke had 55 points, 38 of them repeats of the one before -> result 1, a
+    // normal strike, for every line). The main loop (0x0050FB33) hands the translator one pointer-move event
+    // per pass; with the mod's frames between ticks there are several passes per tick, and the position the
+    // event carries moves only with the tick, so the move branch (0x00546A3D) appended the same point 4-5 times
+    // in a row. The game's crossing test (0x006107E0: do two segments that are not neighbours meet - touching
+    // ends count) then saw the neighbours of each zero-length segment touch, took the stroke for a loop, and
+    // the recognition (0x00547600) gave every line a normal strike. Without the mod there is one pass per tick
+    // and no repeats. A point equal to the trail's last one is no longer appended, nor its intensity (+0x2C):
+    // the list is the one the game has without the mod. The trail is drawn with the intensity running from
+    // point to point (0x00548800), so the last point gets the fresh intensity a repeat brought (112.5) - the
+    // drawn trail and its fading stay exactly as before.
+    constexpr uintptr_t kAddrTrailAppend = 0x00546A68;    // lea ebx,[esi+5Ch] / lea edx,[esi+84h]
+    uintptr_t g_trailAppendGo   = 0x00546A71;             // push edx / mov ecx,ebx / call list::push_back (0x00610A60)
+    uintptr_t g_trailAppendSkip = 0x00546AC8;             // previous / current pointer position update
+
+    int __stdcall TrailPointRepeats(uint8_t* tr) {
+        auto* list = tr + 0x5C;
+        const int count = *reinterpret_cast<const int*>(list + 8);
+        if (count <= 0) return 0;
+        const float* last = g_fnListAt(list, nullptr, static_cast<uint32_t>(count - 1));
+        const float* pos = reinterpret_cast<const float*>(tr + 0x84);   // the point the branch would append
+        if (!last || last[0] != pos[0] || last[1] != pos[1]) return 0;
+        // the intensities: std::list<float> at +0x2C (head node +0x30, size +0x34; node = next, prev, value)
+        uint8_t* head = *reinterpret_cast<uint8_t**>(tr + 0x30);
+        if (head && *reinterpret_cast<const uint32_t*>(tr + 0x34) == static_cast<uint32_t>(count)) {
+            uint8_t* lastNode = *reinterpret_cast<uint8_t**>(head + 4);
+            if (lastNode && lastNode != head) *reinterpret_cast<float*>(lastNode + 8) = 112.5f;
+        }
+        g_trailRepeatsLeftOut.fetch_add(1, std::memory_order_relaxed);
+        return 1;
+    }
+
+    __declspec(naked) void TrailAppendStub() {
+        __asm {
+            pushad
+            push esi
+            call TrailPointRepeats
+            test eax, eax
+            popad                       // flags stay
+            lea ebx, [esi + 0x5C]       // the two instructions the jump replaced
+            lea edx, [esi + 0x84]
+            jnz skip
+            jmp dword ptr [g_trailAppendGo]
+        skip:
+            jmp dword ptr [g_trailAppendSkip]
+        }
     }
 
     // The game's dialog loop (0x0053C390, thiscall, ret): main menu screens, briefing, in-game
@@ -1789,6 +1870,17 @@ void Install() {
         const bool swing = Hook(0x00547600, kSwing, sizeof(kSwing), reinterpret_cast<void*>(&Hook_SwingRecognise),
                                 reinterpret_cast<void**>(&o_SwingRecognise));
         Logger::Info("UiScale: sword swing under the smooth zoom - trail %d, recognition %d.", trail ? 1 : 0, swing ? 1 : 0);
+        // the same point is not appended to a swing again (see TrailAppendStub)
+        static const uint8_t kAppend[] = { 0x8D, 0x5E, 0x5C, 0x8D, 0x96, 0x84, 0x00, 0x00, 0x00, 0x52, 0x8B, 0xCB };
+        bool noRepeats = false;
+        if (std::memcmp(reinterpret_cast<const void*>(kAddrTrailAppend), kAppend, sizeof(kAppend)) == 0) {
+            uint8_t jmp[9] = { 0xE9, 0, 0, 0, 0, 0x90, 0x90, 0x90, 0x90 };
+            const int32_t rel = static_cast<int32_t>(reinterpret_cast<uintptr_t>(&TrailAppendStub) - (kAddrTrailAppend + 5));
+            std::memcpy(&jmp[1], &rel, 4);
+            noRepeats = Memory::PatchBytes(kAddrTrailAppend, jmp, sizeof(jmp));
+        }
+        Logger::Info("UiScale: a swing's trail gets no repeated points (one per tick, as without the mod's frames between ticks): %s.",
+                     noRepeats ? "on" : "NOT installed (bytes differ)");
     }
     if (!ok) {
         g_factor = 1;

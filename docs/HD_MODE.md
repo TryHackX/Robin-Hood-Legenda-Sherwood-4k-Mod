@@ -803,6 +803,24 @@ w górę), resztę powiększa prezenter — **tylko świat**:
       kamery na miejscach; przy zoomie lupy 3 obramowanie = widoczna część nad żywopłotem (47 % × 37 %); klik w rogi mapy
       przy 3× i 5× przesuwa widok do rogów (crop 0,0 / 853,427), przeciąganie po mapie przy 5× też. Porównania:
       `tools\out\minimapa_obrazy.png`, `minimapa_wielkosci.png`, `minimapa_inne_mapy.png`.
+- **Gesty miecza — przyczyna i poprawka** (2026-11-19, v1.2.7; piąte zgłoszenie youtubera: nagrania z modem i bez, na
+  manekinie treningowym, log 1.2.6 — prawie każdy zamach `-> result 1`, także proste kreski 1129×49 px czy 29×481 px).
+  - Przyczyna: pętla główna (`0x0050FB33`) daje tłumaczowi jedno zdarzenie ruchu wskaźnika na obieg, a z klatkami
+    pośrednimi moda obiegów jest kilka na tick, pozycja w zdarzeniu zmienia się tylko z tickiem. Gałąź ruchu
+    (`0x00546A3D`) dopisuje do śladu (`tr+0x5C`) poprzednią pozycję `[tr+0x84]` i jasność 112,5 (`tr+0x2C`), więc ten
+    sam punkt trafiał tam 4–5 razy z rzędu. Test przecięcia gry (`0x006107E0`: czy dwa niesąsiednie odcinki się
+    spotykają; `0x0060A990` liczy styk końców jako przecięcie) widział, że sąsiedzi odcinka zerowej długości się
+    stykają, uznawał kreskę za pętlę i rozpoznawanie (`0x00547600`) dawało zwykły cios (1) każdej linii. Bez moda jest
+    jeden obieg na tick i powtórzeń nie ma.
+  - Poprawka (`ui_scale.cpp` `TrailAppendStub` na `0x00546A68`): punkt równy ostatniemu w śladzie nie jest dopisywany
+    (ani jego jasność) — lista jak w grze bez moda; ostatni punkt dostaje świeżą jasność, którą przyniosłoby powtórzenie
+    (smuga rysowana z jasnością przechodzącą od punktu do punktu, `0x00548800`), więc smuga i jej płynne wygasanie są
+    jak wcześniej. Log: `Swing: N points (R repeated in a row) … crossing C … -> result X. Repeats left out so far: K`,
+    punkty pierwszych 10 zamachów (`Swing n points:`), żeby kreskę z logu gracza dało się odtworzyć.
+  - Sprawdzone w tle (`tools\swing_test.ps1`: Lincoln, walka ze strażnikiem, kreski w prawo / lewo / górę / dół):
+    przed — 55 punktów, 38 powtórzeń, przecięcie 1, wynik 1 dla każdej kreski; po — 14–17 punktów, 0 powtórzeń,
+    przecięcie 0, wyniki 2 / 3 / 5 / 6 (kierunek liczony względem tego, gdzie patrzy walczący); smuga widoczna za
+    kursorem w trakcie kreski (`moveshot` w harnessie).
 - **Wydajność sprite'ów HD** (2026-11-17, v1.2.1): `Sprites::TryShadowBlit` (główna ścieżka sprite'ów HD przez procedury
   gry `0x0062261C/0x006220EC`) liczona po 8 pikseli SSE2 (przezroczyste/ukryte zostają, cień przyciemnia pojedynczo, reszta
   = piksel HD). Las misji z obozu: klatka pośrednia 11,2 → 7,1 ms, 86 → 140 kl./s. Do diagnozy: plik mapy linkera

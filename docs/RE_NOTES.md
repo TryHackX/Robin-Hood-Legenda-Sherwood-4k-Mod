@@ -273,6 +273,15 @@ Sonda: `src\coop_probe.cpp` (działa WYŁĄCZNIE w trybie testowym `SHERWOODFIX_
   `ret 8`, wynik 0..10, ślad punktów `tr+0x5C`; mod przechwytuje je w `ui_scale.cpp`), potem przełącznik `0x004E1F24`
   buduje `RHSequence` (`0x00585EA0`, 0x68 B) + `RHSequenceElement` (`0x00588530`, 0x9C B, `ret 0x1C`) i wysyła do
   menedżera sekwencji `E+0x43F8` przez `0x0058A940` (`thiscall(mgr, 0x6C0560, 0, element)`, `ret 0xC`).
+- **Ślad gestu** (2026-11-19, poprawka v1.2.7): zdarzenie ruchu wskaźnika powstaje w pętli głównej raz na obieg
+  (`0x0050FB33`, flagi `[ebx]` / `[ebp+0x1962]`, pozycja `[E+0x1758]+0x80`, zmienia się z tickiem). W tłumaczu
+  (`HandleEvent`, podtyp `[ev+0xC]` = 1) gałąź `0x00546A3D`: gdy nagrywa (`[tr+0x1F]`, `[tr+0x15]` == 0, tryb kursora
+  `[tr+0xA2]` == 0, `0x004E1890` = postać walczy) — `0x00546A68` dopisuje poprzednią pozycję `[tr+0x84]` do śladu
+  `tr+0x5C` (lista gry: `push_back 0x00610A60`, `at 0x00610CB0`, liczba `[+8]`) i jasność 112,5 do `std::list<float>`
+  `tr+0x2C` (głowa `+0x30`, liczba `+0x34`; `insert 0x00424410`), ponad 350 punktów zdejmuje najstarszy; potem
+  `0x00546AC8`: `[tr+0x8C]` = `[tr+0x84]`, `[tr+0x84]` = pozycja ze zdarzenia (`ev+0x10`). Test przecięcia
+  `0x006107E0` (`thiscall(lista)`, `al`; ≥ 4 punkty; każdy odcinek z każdym co najmniej dwa wcześniej) przez
+  `0x0060A990` — styk końców liczy się jako przecięcie, więc powtórzony punkt (odcinek zerowy) = „pętla”.
 - **Zaznaczenie**: `std::list` wskaźników PC w `E+0x49F8` (głowa `[E+0x49FC]`, węzeł `{next, prev, wartość}`,
   liczba `[E+0x4A00]`). Jedno na grę, tak jak jeden tłumacz (tryb kursora, ślad gestu) — w co-op trzeba je
   podmieniać na czas polecenia danego gracza.

@@ -171,15 +171,27 @@ namespace {
             Enqueue(1, dik, 0x00, static_cast<double>(hold));
             Enqueue(0, 0, 0, 60.0);
             Ack(seq, WaitQueueEmpty(static_cast<DWORD>(hold) + 5000) ? "ok" : "err timeout");
-        } else if (!std::strcmp(cmd, "shot") || !std::strcmp(cmd, "shotout")) {
+        } else if (!std::strcmp(cmd, "shot") || !std::strcmp(cmd, "shotout") || !std::strcmp(cmd, "moveshot")) {
+            // moveshot DX DY NAME: the output frame while that movement is still going on (a sword
+            // swing's trail fades within a fraction of a second)
             char name[128]{};
-            if (std::sscanf(args, "%127s", name) != 1) { Ack(seq, "err usage: shot NAME"); return; }
+            const bool moving = cmd[0] == 'm';
+            int dx = 0, dy = 0;
+            if (moving ? std::sscanf(args, "%d %d %127s", &dx, &dy, name) != 3 : std::sscanf(args, "%127s", name) != 1) {
+                Ack(seq, moving ? "err usage: moveshot DX DY NAME" : "err usage: shot NAME");
+                return;
+            }
+            if (moving) {
+                QueueMove(dx, dy);
+                Sleep(40);
+            }
             g_shotPath = g_dir + name + ".bmp";
-            g_shotScaled = (cmd[4] == 'o');
+            g_shotScaled = moving || (cmd[4] == 'o');
             g_shotState.store(1);
             const DWORD t0 = GetTickCount();
             while (g_shotState.load() == 1 && GetTickCount() - t0 < 5000) Sleep(5);
             const int st = g_shotState.exchange(0);
+            if (moving) WaitQueueEmpty(8000);
             if (st == 2) Ack(seq, "ok %s %dx%d", g_shotPath.c_str(), g_shotW, g_shotH);
             else Ack(seq, st == 1 ? "err no frame was presented in 5 s" : "err the frame could not be saved");
         } else if (!std::strcmp(cmd, "mem")) {

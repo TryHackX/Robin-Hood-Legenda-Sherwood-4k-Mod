@@ -842,6 +842,16 @@ w górę), resztę powiększa prezenter — **tylko świat**:
     dojść — płaskie wierzchołki skał, pnie). Sprawdzone w tle na zapisie youtubera `z110` (= `Savegame_104`, las z
     tarczami): Shift rysuje te pola, na grafice oryginalnej (F8) w tych samych miejscach i kształtach; w HD wnętrze
     to tekstura HD zabarwiona na zielono. Nie błąd moda.
+    Ciąg dalszy (2026-11-22, użytkownik: „nad kamieniem przesunięte, obwódka wokół pni za duża; mapa youtubera to inna
+    mapa”): jego mapa to Rozdroża 01 (`croisement01`, misje FoA: Emb01/04/08, Tac01/04/18; FoB = 02, FoC = 03 — nazwy
+    map w `.rhm`). Żaden jego zapis z 17.11 nie jest na niej, a mapa kampanii z jego obozu nie daje teraz misji FoA.
+    Sprawdzone: (1) obraz HD Rozdroży 01 leży na obrazie gry co do piksela (`tools\hd\map_alignment.py croisement01 day`:
+    korelacja fazowa całości i kafli 256×256 — wszędzie +0,+0); (2) na jego zrzutach (oddalenie / przybliżenie) pola
+    i pnie rosną razem ze światem (×1,63–1,67 przy ×1,65) i stoją w tym samym miejscu względem pni; (3) na Rozdrożach
+    03 pola są te same przy interfejsie ×2 i ×1 (`UIScale=0`) i na grafice oryginalnej (F8) — rysuje je świat gry, nie
+    interfejs. Kształty (ośmiokąty wokół pni, wierzchołki skał, kawałki trawy przy drodze) to dane gry. Lewy Shift to
+    też zaznaczanie kilku postaci (instrukcja s. 15), stąd pola widać „tylko czasem”. Do potwierdzenia na Rozdrożach 01:
+    jego zapis z tej mapy albo Shift + F8 u niego.
   - „Zmiana typu upscale działa tylko na postacie, a nie na mapę” (pytanie użytkownika): F7/F6 przełącza tło i
     postacie razem (`HD: background variant switched to 'ultrasharp'`, plik `hd\maps\ultrasharp\…hdmap`); na zrzutach
     dat2 → sgi → ultrasharp zmienia się ~40 % pikseli świata (różnica > 12/255), głównie faktura ziemi i dróg — budynki

@@ -273,6 +273,11 @@ Sonda: `src\coop_probe.cpp` (działa WYŁĄCZNIE w trybie testowym `SHERWOODFIX_
   `ret 8`, wynik 0..10, ślad punktów `tr+0x5C`; mod przechwytuje je w `ui_scale.cpp`), potem przełącznik `0x004E1F24`
   buduje `RHSequence` (`0x00585EA0`, 0x68 B) + `RHSequenceElement` (`0x00588530`, 0x9C B, `ret 0x1C`) i wysyła do
   menedżera sekwencji `E+0x43F8` przez `0x0058A940` (`thiscall(mgr, 0x6C0560, 0, element)`, `ret 0xC`).
+- **Zapisy** (2026-11-21): `DATA\Savegame\Profiles` — wpisy profilu: nazwa pliku (u16 długość + ASCII), nazwa
+  pliku `_t`, nazwa wyświetlana w menu „Wczytaj” (u16 długość + UTF-16, np. `Savegame_104` = „z110”). `<zapis>_t` =
+  miniatura 160×120: u16 szer., u16 wys., u32 bajty na piksel (2 = RGB565), u32 rozmiar strumienia bzip2, strumień
+  (`tools\save_thumbs.py`). „Graj!” kontynuuje kampanię profilu; obcy plik podłożony jako `Continue` nie jest
+  wczytywany — gra startuje misję z `Restart`. Szybki odczyt (F5) w obozie nie działa.
 - **Ślad gestu** (2026-11-19, poprawka v1.2.7): zdarzenie ruchu wskaźnika powstaje w pętli głównej raz na obieg
   (`0x0050FB33`, flagi `[ebx]` / `[ebp+0x1962]`, pozycja `[E+0x1758]+0x80`, zmienia się z tickiem). W tłumaczu
   (`HandleEvent`, podtyp `[ev+0xC]` = 1) gałąź `0x00546A3D`: gdy nagrywa (`[tr+0x1F]`, `[tr+0x15]` == 0, tryb kursora

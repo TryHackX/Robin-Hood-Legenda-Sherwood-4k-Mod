@@ -57,7 +57,8 @@ original DirectDraw wrapper, plus optional HD graphics prepared with AI models f
   (`DATA\Interface\Default.res` → `hd\menu_parts\`, in the mod archive) instead of being smoothed 2×. The hedge along
   the bottom runs along the whole width with any number of characters; sword swings (hold the left button and draw)
   work at every zoom and are recognised as in the original game (before 1.2.7 the extra frames between game ticks
-  made almost every line a normal strike).
+  made almost every line a normal strike). Green patches while **left Shift** is held are the game's own view of
+  the places your men can reach behind obstacles or on top of rocks and stumps (manual p. 16), not a mod error.
 - Minimap in the top-right corner; dragging on it moves the camera, the map window is moved by its edges. **Its size
   and picture can be chosen** (since 1.2.5, F10 → "MINIMAPA - WIELKOSC" / "MINIMAPA - OBRAZ"): classic 2× (as the
   rest of the interface), smaller 1.5×, larger 2.5×, large 3× or very large 5× (the tall maps of Nottingham and

@@ -824,6 +824,36 @@ w górę), resztę powiększa prezenter — **tylko świat**:
     maksymalne 4× (wszystkie punkty przez `ScreenToFrame`, wyniki 2 / 3 / 5), maksymalne oddalenie (zoom gry 1,0,
     wyniki 5 / 5) — smuga zawsze tuż za kursorem (`tools\out\gesty_zoom_1.2.7.png`). Obraz w walce: `Present=143.9Hz`
     przy 25 tickach/s, jak w 1.2.6 u youtubera (144 Hz) — poprawka zmienia tylko listę punktów gestu.
+- **Szóste zgłoszenie youtubera** (2026-11-21, 1.2.7; trzy zrzuty, bez logu i zapisów):
+  - Pasek przy pytaniu w Nottingham (Marian, „Nagrodę? Ryzykujesz tyle dla srebrnej strzały?”): z prawej, na całej
+    wysokości, poziom NIEprzyciemniony i większy niż przyciemnione tło obok. Prezenter przy dialogu (warstwa 2,
+    `ddm_present.cpp`): o tym, czy piksel wyjścia to tło, decyduje piksel środkowej części klatki pod nim (`BackAt`,
+    współrzędne powiększonego wycinka 1365×768), a samo tło bierze z pozycji w całej klatce (w swojej wielkości albo
+    powiększone jak lupa, `backShow`). Większy, jasny poziom = albo tło z pikselami, których gra nie przyciemniła, poza
+    wycinkiem (pokazane takie, jakie są), albo w wycinku poziom nieprzyciemniony, uznany za „obrazek dialogu” —
+    pokazany powiększony ×1,875 z dialogiem. Odtworzyć się nie dało (odprawa w Nottingham, menu Esc przy zoomie,
+    dialogi obozu youtubera: zawsze 100 % przyciemnionego poziomu); poprawka (`BuildBackdrop`, `ddm_hd_menu.cpp`) przy
+    znanej tablicy barwienia gry i tle będącym przyciemnionym poziomem: w wycinku piksel = nieprzyciemniony poziom →
+    poziom (tło trzyma kolor klatki, wersja pokazywana — przyciemniony); poza wycinkiem wszystko, co nie jest
+    przyciemnionym poziomem z chwili otwarcia dialogu → przyciemniony poziom; log „level the game left undarkened in
+    the shown part: … outside it, not the darkened level: …” z prostokątami. Na zwykłych dialogach nie zadziałała.
+  - Zielone ośmiokąty na leśnej mapie („jakby na pień dało się wskoczyć”, tylko na jednym zapisie): to podgląd
+    samej gry pod LEWYM SHIFTEM (instrukcja s. 16: miejsca zasłonięte przeszkodą / wyżej, do których drużyna może
+    dojść — płaskie wierzchołki skał, pnie). Sprawdzone w tle na zapisie youtubera `z110` (= `Savegame_104`, las z
+    tarczami): Shift rysuje te pola, na grafice oryginalnej (F8) w tych samych miejscach i kształtach; w HD wnętrze
+    to tekstura HD zabarwiona na zielono. Nie błąd moda.
+  - „Zmiana typu upscale działa tylko na postacie, a nie na mapę” (pytanie użytkownika): F7/F6 przełącza tło i
+    postacie razem (`HD: background variant switched to 'ultrasharp'`, plik `hd\maps\ultrasharp\…hdmap`); na zrzutach
+    dat2 → sgi → ultrasharp zmienia się ~40 % pikseli świata (różnica > 12/255), głównie faktura ziemi i dróg — budynki
+    wychodzą z modeli bardzo podobnie, postacie widać bardziej. Minimapa się nie zmienia (gotowe obrazy z dat2).
+    Porównanie: `tools\out\var_compare.png`.
+  - „4K to 4K, a nie 1440p?”: tryb HD liczy obraz w 2560×1440; grafika HD ma 2× piksele oryginału (np. Nottingham
+    4608×7040 dla poziomu 2304×3520), czyli przy domyślnym zoomie 1:1 na 1440p; na monitorze 4K prezenter skaluje
+    ×1,5 (sharp-bilinear). Prawdziwe 4K przy tym samym kadrze = grafika HD ×3 (tła, postacie, interfejs) — kilka
+    razy więcej danych i generowania.
+  - Narzędzia: `tools\save_test.ps1` (test w tle na wybranym zapisie: `-Profile` cudzy folder zapisów na czas
+    testu, `-NoPlay` + kroki w menu „Wczytaj” — lista: nazwa z `Profiles`, pozycja w kolumnie), `tools\save_thumbs.py`
+    (arkusz miniatur zapisów `<zapis>_t`), harness `hold DIK` / `release DIK`.
 - **Wydajność sprite'ów HD** (2026-11-17, v1.2.1): `Sprites::TryShadowBlit` (główna ścieżka sprite'ów HD przez procedury
   gry `0x0062261C/0x006220EC`) liczona po 8 pikseli SSE2 (przezroczyste/ukryte zostają, cień przyciemnia pojedynczo, reszta
   = piksel HD). Las misji z obozu: klatka pośrednia 11,2 → 7,1 ms, 86 → 140 kl./s. Do diagnozy: plik mapy linkera

@@ -146,6 +146,7 @@ namespace {
         // 2026-11-17). The game darkens with a known per-pixel map (0x0053B330, the colour table
         // made for it, bit-identical) or not at all: whichever of the two fits the backdrop clearly
         // replaces the guesses.
+        bool exact = false;     // the game's own colour table: every level colour's darkened colour is known
         {
             const uint16_t* coloured = HD::LastBackdropColouring();
             size_t nMap = 0, nSame = 0, nAll = 0;
@@ -161,6 +162,7 @@ namespace {
             if (nAll > 0) {
                 if (coloured && nMap >= nSame && nMap * 10 >= nAll * 3) {
                     for (uint32_t c = 0; c < 65536; ++c) cand[c] = coloured[c];
+                    exact = true;
                 } else if (nSame * 10 >= nAll * 3) {
                     for (uint32_t c = 0; c < 65536; ++c) cand[c] = static_cast<uint16_t>(c);
                 }
@@ -171,6 +173,20 @@ namespace {
         // of the picture matched it by chance (a dotted ring by the title, 2026-11-15). Black pixels prove
         // nothing (the vote maps every dark level colour to the black of such a picture) - only the
         // others count.
+        // A strip of the level NOT darkened beside the darkened backdrop (YouTuber's report 2026-11-21,
+        // a question in Nottingham, 1.2.7: a full-height strip on the right showed the level undarkened
+        // and larger). Two ways the backdrop can hold such pixels, both repaired below when the game's
+        // own colour table is known (`exact`) and the backdrop is the darkened level (`!none`):
+        //  - in the shown part: the game's backdrop is the level itself, undarkened (c == world, while
+        //    the darkened colour differs). It counted as "a picture of the dialog", and the presenter
+        //    showed the frame there - enlarged with the dialog. Now it is level: the backdrop keeps the
+        //    frame's colour (so the presenter still recognises it) and its shown version (t5) the
+        //    darkened one;
+        //  - outside the shown part (where the game draws no dialog): anything that is not the darkened
+        //    level of the dialog's start (e.g. an older picture) is shown as that darkened level.
+        static std::vector<uint32_t> undarkened, foreign;
+        undarkened.clear();
+        foreign.clear();
         size_t shownLevel = 0, shown = 0;
         for (int y = 0; y < h; ++y) {
             const size_t row = static_cast<size_t>(y) * w;
@@ -178,12 +194,17 @@ namespace {
             const uint16_t* c = comp + row;
             const bool rowIn = y >= crop.top && y < crop.bottom;
             for (int x = 0; x < w; ++x) {
+                const uint16_t dark = cand[g_world[row + x]];
                 if (!rowIn || x < crop.left || x >= crop.right) {
                     out[x] = 0xFF000000u | to8888[c[x]];
+                    if (exact && c[x] != dark) foreign.push_back(static_cast<uint32_t>(row + x));
                     continue;
                 }
-                const uint16_t dark = cand[g_world[row + x]];
-                const bool level = c[x] == dark;
+                bool level = c[x] == dark;
+                if (!level && exact && c[x] == g_world[row + x]) {
+                    undarkened.push_back(static_cast<uint32_t>(row + x));
+                    level = true;
+                }
                 out[x] = level ? 0xFF000000u | to8888[c[x]] : to8888[dark];   // alpha 0: a picture of the dialog lies here
                 if (c[x] != 0) {
                     ++shown;
@@ -196,8 +217,31 @@ namespace {
         // HD menu picture, when there is one (OnScreenCopy)
         const bool none = shownLevel * 10 < shown * 4;
         g_backdropNone = none;
+        g_backdropShow.clear();
         if (none) {
             for (size_t i = 0; i < n; ++i) g_backdrop[i] &= 0x00FFFFFFu;
+        } else if ((!undarkened.empty() || !foreign.empty()) && undarkened.size() + foreign.size() < n / 3) {
+            // (more than a third of the frame would mean the level copy is another picture than the backdrop's)
+            auto box = [&](const std::vector<uint32_t>& px, char* text, size_t size) {
+                int x0 = w, y0 = h, x1 = -1, y1 = -1;
+                for (const uint32_t i : px) {
+                    const int x = static_cast<int>(i % static_cast<uint32_t>(w)), y = static_cast<int>(i / static_cast<uint32_t>(w));
+                    x0 = (std::min)(x0, x); y0 = (std::min)(y0, y); x1 = (std::max)(x1, x); y1 = (std::max)(y1, y);
+                }
+                if (px.empty()) std::snprintf(text, size, "none");
+                else std::snprintf(text, size, "%zu px in %d,%d-%d,%d", px.size(), x0, y0, x1 + 1, y1 + 1);
+            };
+            char a[96], b[96];
+            box(undarkened, a, sizeof(a));
+            box(foreign, b, sizeof(b));
+            for (const uint32_t i : foreign) g_backdrop[i] = 0xFF000000u | to8888[cand[g_world[i]]];
+            if (!undarkened.empty()) {
+                g_backdropShow = g_backdrop;
+                for (const uint32_t i : undarkened) g_backdropShow[i] = 0xFF000000u | to8888[cand[g_world[i]]];
+            }
+            Logger::Info("HD menu: dialog backdrop - level the game left undarkened in the shown part: %s; outside it, not "
+                         "the darkened level: %s (shown part %ld,%ld-%ld,%ld) - shown darkened.",
+                         a, b, crop.left, crop.top, crop.right, crop.bottom);
         }
         QueryPerformanceCounter(&q1);
         QueryPerformanceFrequency(&qf);
@@ -210,13 +254,12 @@ namespace {
         // The level was shown magnified (smooth zoom): where the backdrop shows the world (not the
         // interface: the frame equals the world copy there), it shows the magnified world, darkened
         // the way the game darkened it (the colour map just learned), bilinear.
-        g_backdropShow.clear();
         if (!g_lupaValid || g_lupa.w != w || g_lupa.h != h || level < n / 5 || g_lupa.m <= 1.0f) return;
         // Integer arithmetic: darkened colour of every RGB565 value once, source columns/rows and
         // weights (0..256) once per column/row. (With floats per pixel and channel this took ~150 ms
         // at 2560x1440 - the hitch when the in-game menu opened, user report 2026-11-15.)
         const ULONGLONG t0 = GetTickCount64();
-        g_backdropShow = g_backdrop;
+        if (g_backdropShow.size() != g_backdrop.size()) g_backdropShow = g_backdrop;
         const float m = g_lupa.m;
         // not the hedge band along the bottom: its black base and the black frame below a level
         // smaller than the view were the same pixel in both copies - the magnified world showed

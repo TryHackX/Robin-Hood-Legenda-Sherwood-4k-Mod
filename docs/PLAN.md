@@ -359,6 +359,11 @@ Do sprawdzenia przy okazji: czy miganie ikon akcji ma teraz właściwe tempo; po
      kreskę za pętlę → wynik 1. Punkt równy ostatniemu nie jest już dopisywany (ostatni dostaje świeżą jasność, smuga
      bez zmian). Sprawdzone w tle (`tools\swing_test.ps1`): kreski dają ciosy kierunkowe (2/3/5/6). Opis:
      `docs\HD_MODE.md` („Gesty miecza — przyczyna i poprawka”), adresy: `docs\RE_NOTES.md` („Ślad gestu”).
+   - ◐ **v1.2.8 — tło dialogu** (2026-11-21; szóste zgłoszenie: w Nottingham przy pytaniu z prawej pasek poziomu
+     nieprzyciemniony i większy): tło dialogu pokazuje teraz przyciemniony poziom także tam, gdzie gra go nie
+     przyciemniła (w środkowej części i poza nią); dokładny przypadek nieodtworzony — log ma linię z prostokątami, gdyby
+     wróciło. Zielone ośmiokąty w lesie = podgląd gry pod lewym Shiftem (sprawdzone na zapisie youtubera, tak samo na
+     oryginalnej grafice). F7/F6 zmienia tło i postacie. Opis: `docs\HD_MODE.md` („Szóste zgłoszenie youtubera”).
    - ◐ **Kooperacja — rozpoznanie** (2026-11-19, pytanie użytkownika o multiplayer w stylu Noita Entangled Worlds: każdy
      swoja kamera i zaznaczenie, gospodarz wybiera drużynę, bez podbierania postaci): sonda tylko w teście w tle
      (`src\coop_probe.cpp`, `tools\coop_run.ps1`, `tools\coop_compare.py`). Warstwa rozkazów znaleziona (tłumacz wejścia

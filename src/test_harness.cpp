@@ -162,6 +162,16 @@ namespace {
             if (cmd[0] != 'd') Enqueue(0, ofs, 0x00, cmd[0] == 'c' ? 90.0 : 20.0);
             Enqueue(0, 0, 0, 60.0);
             Ack(seq, WaitQueueEmpty(5000) ? "ok" : "err timeout");
+        } else if (!std::strcmp(cmd, "hold") || !std::strcmp(cmd, "release")) {
+            // a key held down until "release DIK" (shots while e.g. left Shift is held)
+            unsigned dik = 0;
+            if (std::sscanf(args, "%i", reinterpret_cast<int*>(&dik)) != 1 || dik == 0 || dik > 0xFF) {
+                Ack(seq, "err usage: hold|release DIK");
+                return;
+            }
+            Enqueue(1, dik, cmd[0] == 'h' ? 0x80 : 0x00, 20.0);
+            Enqueue(0, 0, 0, 60.0);
+            Ack(seq, WaitQueueEmpty(5000) ? "ok" : "err timeout");
         } else if (!std::strcmp(cmd, "key")) {
             unsigned dik = 0;
             int hold = 80;

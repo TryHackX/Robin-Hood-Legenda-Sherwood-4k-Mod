@@ -15,6 +15,13 @@ TEGO UŻYWA GRA
                             jakości (nowy / pierwszy magazyn). Robi je od nowa:
                             python -I tools/hd/make_inbetweens.py --files Characters/ --jobs 3 --redo --sharp
                             python -I tools/hd/between_quality.py
+  sprites\_between_more\    Druga próba par postaci, których _between nie przyjął (upadki, szybkie ciosy, schylanie;
+                            ok. 11 400 klatek, 2026-11-22). Mod szuka pary najpierw w _between, potem tutaj.
+  sprites\_between_anim\    Klatki pośrednie animacji POZIOMU (DATA\Animations: ptaki, kury, flagi, dym, muchy...) i
+                            płynny tor lotu między ich krokami (2026-11-22). Oba foldery w SherwoodHD-4-klatki-posrednie-2.zip,
+                            potrzebują moda 1.2.9 lub nowszego. Robi je kolejka:  tools\hd\queue_between.ps1,
+                            potem:  python -I tools/hd/compact_between.py --store _between_anim --keep-all
+                                    python -I tools/hd/compact_between.py --store _between_more
 
   menu\<wariant>\*.mhd      Tła menu (menu główne, opcje, wczytywanie...) powiększone tym samym modelem co mapy; gra pokazuje
                             je przy MenuZoom=1 i HDMenu=1. Nowe tła mod sam zbiera do work\menu_frames\, robi je:

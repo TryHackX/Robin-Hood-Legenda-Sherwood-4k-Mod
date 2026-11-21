@@ -1,7 +1,8 @@
 """Motion and timing of every in-between pair, for the game (2026-11-15, user report: Robin standing still looked
 "as if his clothes kept changing", the crouch still looked choppy).
 
-    python -I tools/hd/between_motion.py [--workers 6]     -> hd/work/between_motion.npz (+ a summary)
+    python -I tools/hd/between_motion.py [--workers 6] [--store _between_anim]
+        -> hd/work/between_motion.npz (store _between) or hd/work/between_motion_<store>.npz (+ a summary)
 
 1. MOTION. Many animation steps are no movement at all: in Robin's idle animation the original 1x frames differ in a
    quarter of the figure's pixels, but only by shading (cloth folds) - the optical flow between them is ~0.1 px. An
@@ -35,6 +36,10 @@ BETWEEN = ROOT / 'hd' / 'sprites' / '_between'
 ENTRY = np.dtype([("a", "<u4"), ("b", "<u4"), ("off", "<u8"), ("size", "<u4"), ("w", "<u2"), ("h", "<u2"),
                   ("dxa", "<i2"), ("dya", "<i2"), ("dxb", "<i2"), ("dyb", "<i2")])
 OUT = WORK / 'between_motion.npz'
+
+
+def motion_file(store):
+    return WORK / ('between_motion.npz' if store == '_between' else f'between_motion{store}.npz')
 
 
 def read_csv():
@@ -115,6 +120,9 @@ def _measure(job):
     changed = float(((np.abs(ga - gb) > 6) | (ma != mb))[fig].mean())
     big_a = cv2.resize(ga.astype(np.uint8), None, fx=4, fy=4, interpolation=cv2.INTER_CUBIC)
     big_b = cv2.resize(gb.astype(np.uint8), None, fx=4, fy=4, interpolation=cv2.INTER_CUBIC)
+    if min(big_a.shape) < 12:
+        # sparks, drops - smaller than DIS can work on (2026-11-22, the level animations): not measured
+        return i, -1.0, -1.0, changed
     dis = cv2.DISOpticalFlow_create(cv2.DISOPTICAL_FLOW_PRESET_MEDIUM)
     fl = dis.calc(big_a, big_b, None)
     mag = np.hypot(fl[..., 0], fl[..., 1]) / 4.0
@@ -127,8 +135,11 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--workers', type=int, default=6)
     ap.add_argument('--limit', type=int, default=0, help='only the first N usable pairs (a test)')
+    ap.add_argument('--store', default='_between', help='folder under hd/sprites (the level animations: _between_anim)')
     args = ap.parse_args()
-    raw = (BETWEEN / 'between.idx').read_bytes()
+    global OUT
+    OUT = motion_file(args.store)
+    raw = (ROOT / 'hd' / 'sprites' / args.store / 'between.idx').read_bytes()
     count = struct.unpack_from('<I', raw, 8)[0]
     idx = np.frombuffer(raw, ENTRY, count, 16)
     t0 = time.time()

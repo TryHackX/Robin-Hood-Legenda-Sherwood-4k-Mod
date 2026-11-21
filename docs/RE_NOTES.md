@@ -219,6 +219,17 @@ zasłoniętych części sprite'a `0x5BBF20/0x5BC3C0`, stan kamery 5 = pełne odr
 `0x50F98E`) oraz `docs\SPRITE_BANK.md` (format `.dic/.bks/.rhs`). Klawisze gry z instrukcji: Num+/Num− zoom, strzałki
 przewijanie, F1 szybki zapis, F5 szybki odczyt, Alt pole widzenia, 1–5 bohaterowie — mod używa F6/F7/F8.
 
+Dopisane 2026-11-22 (v1.2.9, opis: `docs\HD_MODE.md` „Zgłoszenia użytkownika w trakcie gry”, §5g):
+- `0x0058C88B` — procedura pikselowa z testem głębi (wywołanie z `0x005911C5`), czyta obraz poziomu pod tym, co
+  rysuje, i potrafi wyjść za koniec powierzchni (Nottingham: 8014 B za powierzchnią 2304×3520) → access violation przy
+  powierzchniach przydzielonych na styk; DDM daje każdej powierzchni zerowany margines 128 wierszy + 4 KB z obu stron.
+- Kursor misji `0x005F1CA0`: kopia ekranu pod kursorem do dwóch powierzchni 55×55, `Lock` całego obrazka kursora
+  (powierzchnia jego rozmiaru, np. 35×43; klucz 0x07C0), złożenie programowe z cieniem na jednej kopii, blit ×2 z kluczem.
+- `[0x006C0FA8]` (wskaźnik silnika misji) zostaje ustawiony po wyjściu z misji do menu głównego — „jest silnik” nie
+  znaczy „trwa misja”.
+- Animacje poziomu (`DATA\Animations\<pora>\*.rhs`) rysuje rozciągnięcie DirectDraw; krok = `flags + 1` tików, ruch
+  (lot, pływanie) zapisany w przesunięciach klatek, nie w pozycji elementu.
+
 ## Co-op: warstwa rozkazów, losowość, powtarzalność (rozpoznanie 2026-11-19, tylko badanie)
 Sonda: `src\coop_probe.cpp` (działa WYŁĄCZNIE w trybie testowym `SHERWOODFIX_TEST=1`; w zwykłej grze nie zakłada
 żadnego haka), polecenie harnessu `coop …`, skrypty `tools\coop_run.ps1` (nagranie / powtórka w tle),

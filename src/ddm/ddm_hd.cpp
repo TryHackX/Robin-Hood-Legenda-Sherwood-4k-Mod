@@ -1613,6 +1613,12 @@ namespace {
 //    picture; HDWater=2 / 3 (the player's wish of 2026-11-15: "rób wodę") the HD water moved by
 //    waves (see "animated HD water" above); HDWater=0 the game's frames as they are.
 // Returns true when the sprite was handled here (drawn or left out).
+bool LevelOrigin(int& x, int& y) {
+    x = g_originX;
+    y = g_originY;
+    return g_originValid && g_current != nullptr;
+}
+
 bool DrawGroundAnimation(const Buf& dst, const RECT& d, const RECT& clip, const Buf& src, const RECT& s) {
     const auto& cfg = SherwoodConfig::Get();
     const HdMap* hd = g_current;

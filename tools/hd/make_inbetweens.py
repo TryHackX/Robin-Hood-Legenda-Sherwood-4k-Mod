@@ -237,6 +237,9 @@ class Maker:
         # sharp: every pixel of the middle frame from ONE of the two moved frames (the one the network trusts more
         # there) instead of their mix - where the two disagree the mix was soft / doubled (2026-11-15)
         self.sharp = False
+        # coarse-to-fine scales of the flow (None = the network's own 16, 8, 4, 2, 1); doubled (32 ... 2) the first
+        # estimate sees twice as far - for the large moves the default could not follow (falls, quick strikes)
+        self.scales = None
 
     def release(self):
         self.torch.cuda.empty_cache()
@@ -258,8 +261,18 @@ class Maker:
             big_a = F.interpolate(a, scale_factor=m, mode="bicubic", align_corners=False).float()
             big_b = F.interpolate(b, scale_factor=m, mode="bicubic", align_corners=False).float()
             ta, tb = self.picture(big_a), self.picture(big_b)
-            _, flow, mask = self.net(ta, tb, 0.5)
-            flow, mask = flow.float(), mask.float()
+            # the network needs sides divisible by 64 at its own scales (16 ... 1), by 128 with doubled ones; the
+            # canvases are cut for 4x - other magnifications or scales get a border (edge pixels repeated), cut off
+            # again afterwards (2026-11-22: magnify 2 and doubled scales stopped with a size mismatch)
+            h, w = ta.shape[2], ta.shape[3]
+            need = int(64 * max(self.scales or self.rife.IFNet.SCALES) / 16)
+            ph, pw = (-h) % need, (-w) % need
+            if ph or pw:
+                ta_n, tb_n = F.pad(ta, (0, pw, 0, ph), mode="replicate"), F.pad(tb, (0, pw, 0, ph), mode="replicate")
+            else:
+                ta_n, tb_n = ta, tb
+            _, flow, mask = self.net(ta_n, tb_n, 0.5, self.scales)
+            flow, mask = flow[:, :, :h, :w].float(), mask[:, :, :h, :w].float()
             wa, wb = self.rife.warp(big_a, flow[:, :2]), self.rife.warp(big_b, flow[:, 2:4])
             mid = torch.where(mask > 0.5, wa, wb) if self.sharp else wa * mask + wb * (1 - mask)
             # quality check: do the two source frames, each moved to the middle, agree?
@@ -448,6 +461,22 @@ def write_sheet(path, items, zoom=2, width=2400):
     log(f"sheet: {path} {sheet.size}")
 
 
+class FrameChain:
+    """HD frames from the first of several stores that has them. The level's animations (--files Animations/,
+    2026-11-22) are partly lossless frames, kept per background variant (dat2) and not in _common."""
+
+    def __init__(self, names):
+        self.stores = [it.HdStore(n) for n in names]
+
+    def frame(self, i):
+        for s in self.stores:
+            if i < len(s.entries):
+                px = s.frame(i)
+                if px is not None:
+                    return px
+        return None
+
+
 def prepare(store, offs, keys):
     """[(key, a planes, b planes, x0, y0)] for the pairs whose frames exist and whose canvas is not too large."""
     out = []
@@ -609,6 +638,14 @@ def main():
                     help="make again the rejected pairs whose frames are shadow-only silhouettes (before 2026-11-14 15:00 "
                          "these were always rejected)")
     ap.add_argument("--batch-pixels", type=int, default=2_500_000, help="magnified pixels per batch")
+    ap.add_argument("--rife-scales", default="",
+                    help='flow scales of the network, e.g. "32,16,8,4,2" for large moves (default: its own 16,8,4,2,1)')
+    ap.add_argument("--rejected-from", default="",
+                    help="only the pairs this store has rejected (size 0) - a second try with other settings, kept in "
+                         "--store (e.g. _between_more)")
+    ap.add_argument("--frames-from", nargs="*", default=["_common"],
+                    help="HD frame stores under hd/sprites, the first that has a frame gives it (level animations: "
+                         "_common dat2)")
     args = ap.parse_args()
     SHARP_STORE[0] = 1 if args.sharp else 0
 
@@ -632,12 +669,16 @@ def main():
     if args.selftest:
         selftest(args, pairs, offs)
         return
-    store = it.HdStore("_common")
+    store = FrameChain(args.frames_from)
     entries = {} if (args.redo or args.survey) else load_index(args.store)
     skip = set()
     for name in args.skip_store:
         skip |= set(load_index(name))
     todo = sorted(k for k in pairs if k not in entries and k not in skip)
+    if args.rejected_from:
+        rejected = {k for k, e in load_index(args.rejected_from).items() if e[3] == 0}
+        todo = [k for k in todo if k in rejected]
+        log(f"{len(todo)} pairs rejected in {args.rejected_from} - tried again")
     if args.shard:
         part, parts = (int(v) for v in args.shard.split("/"))
         todo = [k for k in todo if (k[0] * 31 + k[1]) % parts == part]
@@ -670,6 +711,8 @@ def main():
 
     maker = Maker(args.magnify, args.half, args.card_share)
     maker.sharp = args.sharp
+    if args.rife_scales:
+        maker.scales = tuple(float(v) for v in args.rife_scales.split(","))
     sdir = store_dir(args.store)
     sdir.mkdir(parents=True, exist_ok=True)
     dat_path = sdir / "between.dat"

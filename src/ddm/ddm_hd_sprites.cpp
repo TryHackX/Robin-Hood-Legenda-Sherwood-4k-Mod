@@ -3,6 +3,7 @@
 #include "ddm_hd.h"
 #include "../config.h"
 #include "../logger.h"
+#include "../motion_smooth.h"
 #include "../timing.h"
 
 #include <MinHook.h>
@@ -187,6 +188,45 @@ namespace {
     std::vector<uint8_t> g_betweenHold;
     DataFile g_betweenDat;
     bool   g_betweenTried = false;
+    // The level's own animations (DATA\Animations\...: pigeons, crows, ducks, hens, flags, smoke ...; drawn by
+    // DirectDraw stretches, see TryStretch) have a store of their own, hd\sprites\_between_anim\ (with the second
+    // try below in SherwoodHD-4-klatki-posrednie-2.zip of HD pack 1). Its entries follow the other stores' in the
+    // index space of FindBetween / GetBetween (SetOf).
+    std::vector<BetweenEntry> g_betweenAnim;
+    std::vector<uint8_t> g_betweenAnimQ, g_betweenAnimHold;
+    DataFile g_betweenAnimDat;
+    // The characters' pairs the first store rejected (big moves: falls, quick strikes, bending down), tried again
+    // with other settings of the network (tools\hd\queue_between.ps1): hd\sprites\_between_more\. Searched after
+    // the characters' store, before the level animations'.
+    std::vector<BetweenEntry> g_betweenMore;
+    std::vector<uint8_t> g_betweenMoreQ, g_betweenMoreHold;
+    DataFile g_betweenMoreDat;
+
+    // the stores in the order they are searched; the index space of FindBetween / GetBetween runs over them one
+    // after the other
+    struct BetweenSet {
+        std::vector<BetweenEntry>& entries;
+        std::vector<uint8_t>& quality;
+        std::vector<uint8_t>& hold;
+        DataFile& dat;
+    };
+    constexpr int kBetweenSets = 3;
+    BetweenSet SetOf(int i) {
+        if (i == 0) return { g_between, g_betweenQ, g_betweenHold, g_betweenDat };
+        if (i == 1) return { g_betweenMore, g_betweenMoreQ, g_betweenMoreHold, g_betweenMoreDat };
+        return { g_betweenAnim, g_betweenAnimQ, g_betweenAnimHold, g_betweenAnimDat };
+    }
+
+    // Where a sprite object's frames were drawn by TryStretch (level HD pixels of the frame's top-left corner).
+    // A level animation's movement lies in its frames' offsets (a pigeon's flight, a duck swimming), not in the
+    // element's position: the motion smoothing never saw it, the figure jumped every 80-160 ms.
+    struct SpritePlace {
+        uint32_t cur = 0, prev = 0;  // the frame drawn now / before it
+        int cx = 0, cy = 0;          // where `cur` was drawn last
+        int px = 0, py = 0;          // where `prev` was drawn last
+        uint32_t tick = 0;           // tick of the last draw
+    };
+    std::unordered_map<void*, SpritePlace> g_places;
 
     uint32_t Crc32(uint32_t crc, const uint8_t* p, size_t n) {     // as zlib.crc32
         static uint32_t table[256];
@@ -261,6 +301,7 @@ namespace {
         std::vector<uint16_t> px;
         int      w = 0, h = 0;
         uint32_t lastUse = 0;
+        mutable int figX = -1, figY = -1;   // centre of the figure's opaque pixels (FigureCentre; -1 = not yet)
     };
     std::unordered_map<uint64_t, Ready> g_ready;   // key: frame | shadow colour << 32
     size_t   g_readyBytes = 0;
@@ -623,14 +664,15 @@ namespace {
         return &g_ready.emplace(key, std::move(r)).first->second;
     }
 
-    void OpenBetween() {
-        if (g_betweenTried) return;
-        g_betweenTried = true;
-        const std::string dir = GameDir() + "hd\\sprites\\_between\\";
+    // One store of in-between frames: its sorted index and data, and - for exactly this index - its quality
+    // list and step lengths. `label` names it in the log.
+    void OpenBetweenStore(const char* folder, const char* label, std::vector<BetweenEntry>& entries, DataFile& dat,
+                          std::vector<uint8_t>& quality, std::vector<uint8_t>& hold) {
+        const std::string dir = GameDir() + "hd\\sprites\\" + folder + "\\";
         const DWORD share = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE; // the generator may be appending
         HANDLE idx = CreateFileA((dir + "between.idx").c_str(), GENERIC_READ, share, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
         if (idx == INVALID_HANDLE_VALUE) {
-            Logger::Info("HD sprites: no in-between frames (hd\\sprites\\_between\\between.idx).");
+            Logger::Info("HD sprites: no in-between frames for %s (hd\\sprites\\%s\\between.idx).", label, folder);
             return;
         }
         struct Header { char magic[4]; uint32_t version, count, reserved; } hdr{};
@@ -638,55 +680,55 @@ namespace {
         bool ok = ReadFile(idx, &hdr, sizeof(hdr), &got, nullptr) && got == sizeof(hdr) &&
                   std::memcmp(hdr.magic, "HDBT", 4) == 0 && hdr.version == 1 && hdr.count < 4000000;
         if (ok && hdr.count) {
-            g_between.resize(hdr.count);
+            entries.resize(hdr.count);
             const DWORD bytes = static_cast<DWORD>(hdr.count * sizeof(BetweenEntry));
-            ok = ReadFile(idx, g_between.data(), bytes, &got, nullptr) && got == bytes;
+            ok = ReadFile(idx, entries.data(), bytes, &got, nullptr) && got == bytes;
         }
         CloseHandle(idx);
         if (ok) {
             // the lookup is a binary search: the order must be right
-            ok = std::is_sorted(g_between.begin(), g_between.end(), [](const BetweenEntry& x, const BetweenEntry& y) {
+            ok = std::is_sorted(entries.begin(), entries.end(), [](const BetweenEntry& x, const BetweenEntry& y) {
                 return x.a != y.a ? x.a < y.a : x.b < y.b;
             });
         }
         if (ok) {
-            ok = OpenData(g_betweenDat, dir + "between.dat");
+            ok = OpenData(dat, dir + "between.dat");
         }
         if (!ok) {
-            g_between.clear();
-            Logger::Warn("HD sprites: the in-between frame store could not be read - ignored.");
+            entries.clear();
+            Logger::Warn("HD sprites: the in-between frame store of %s could not be read - ignored.", label);
             return;
         }
         size_t usable = 0;
-        for (const BetweenEntry& e : g_between) usable += e.size != 0;
-        Logger::Info("HD sprites: %zu in-between frames available (%zu frame pairs known).", usable, g_between.size());
+        for (const BetweenEntry& e : entries) usable += e.size != 0;
+        Logger::Info("HD sprites: %zu in-between frames for %s available (%zu frame pairs known).", usable, label, entries.size());
 
         // their quality (see g_betweenQ): only for exactly this index. between.q belongs to the store of the
         // current HD pack, between.v1.q to the first one (soft frames by mixing, 2026-11-14): the mod archive
         // carries both, the one whose CRC matches the installed index is taken.
-        g_betweenQ.clear();
+        quality.clear();
         struct QHeader { char magic[4]; uint32_t version, count, crc; } qh{};
         uint32_t crc = Crc32(0, reinterpret_cast<const uint8_t*>(&hdr), sizeof(hdr));
-        crc = Crc32(crc, reinterpret_cast<const uint8_t*>(g_between.data()), g_between.size() * sizeof(BetweenEntry));
+        crc = Crc32(crc, reinterpret_cast<const uint8_t*>(entries.data()), entries.size() * sizeof(BetweenEntry));
 
         // the steps' lengths (see g_betweenHold), for exactly this index as well
-        g_betweenHold.clear();
+        hold.clear();
         HANDLE tf = CreateFileA((dir + "between.t").c_str(), GENERIC_READ, share, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
         if (tf != INVALID_HANDLE_VALUE) {
             QHeader th{};
             bool tok = ReadFile(tf, &th, sizeof(th), &got, nullptr) && got == sizeof(th) && std::memcmp(th.magic, "HDBS", 4) == 0 &&
-                       th.version == 1 && th.count == g_between.size() && th.crc == crc;
+                       th.version == 1 && th.count == entries.size() && th.crc == crc;
             if (tok) {
-                g_betweenHold.resize(static_cast<size_t>(th.count) * 2);
-                const DWORD bytes = static_cast<DWORD>(g_betweenHold.size());
-                tok = ReadFile(tf, g_betweenHold.data(), bytes, &got, nullptr) && got == bytes;
+                hold.resize(static_cast<size_t>(th.count) * 2);
+                const DWORD bytes = static_cast<DWORD>(hold.size());
+                tok = ReadFile(tf, hold.data(), bytes, &got, nullptr) && got == bytes;
             }
             CloseHandle(tf);
-            if (!tok) g_betweenHold.clear();
+            if (!tok) hold.clear();
             size_t known = 0;
-            for (uint8_t t : g_betweenHold) known += t != 0;
-            if (tok) Logger::Info("HD sprites: step lengths of the animations (between.t) known for %zu of %zu changes.", known, g_betweenHold.size());
-            else Logger::Warn("HD sprites: between.t does not belong to this in-between store - step lengths measured while playing.");
+            for (uint8_t t : hold) known += t != 0;
+            if (tok) Logger::Info("HD sprites: step lengths of %s (between.t) known for %zu of %zu changes.", label, known, hold.size());
+            else Logger::Warn("HD sprites: between.t of %s does not belong to its store - step lengths measured while playing.", label);
         }
         const char* used = nullptr;
         bool any = false;
@@ -695,32 +737,39 @@ namespace {
             if (qf == INVALID_HANDLE_VALUE) continue;
             any = true;
             bool qok = ReadFile(qf, &qh, sizeof(qh), &got, nullptr) && got == sizeof(qh) && std::memcmp(qh.magic, "HDBQ", 4) == 0 &&
-                       qh.version == 1 && qh.count == g_between.size() && qh.crc == crc;
+                       qh.version == 1 && qh.count == entries.size() && qh.crc == crc;
             if (qok) {
-                g_betweenQ.resize(qh.count);
-                qok = ReadFile(qf, g_betweenQ.data(), qh.count, &got, nullptr) && got == qh.count;
+                quality.resize(qh.count);
+                qok = ReadFile(qf, quality.data(), qh.count, &got, nullptr) && got == qh.count;
             }
             CloseHandle(qf);
             if (qok) {
                 used = name;
                 break;
             }
-            g_betweenQ.clear();
+            quality.clear();
         }
         if (!any) {
-            Logger::Info("HD sprites: no quality list for them (hd\\sprites\\_between\\between.q) - all are used.");
+            Logger::Info("HD sprites: no quality list for %s (hd\\sprites\\%s\\between.q) - all are used.", label, folder);
             return;
         }
         if (!used) {
-            Logger::Warn("HD sprites: no between.q belongs to this in-between store - all frames are used.");
+            Logger::Warn("HD sprites: no between.q belongs to the in-between store of %s - all frames are used.", label);
             return;
         }
-        Logger::Info("HD sprites: quality list %s.", used);
         const int limit = SherwoodConfig::Get().hdInBetweenQuality;
         size_t kept = 0;
-        for (size_t i = 0; i < g_between.size(); ++i) kept += g_between[i].size != 0 && g_betweenQ[i] <= limit;
-        Logger::Info("HD sprites: in-between frames up to a difference of %d of 255 (HDInBetweenQuality): %zu of %zu used.",
-                     limit, kept, usable);
+        for (size_t i = 0; i < entries.size(); ++i) kept += entries[i].size != 0 && quality[i] <= limit;
+        Logger::Info("HD sprites: %s - quality list %s, frames up to a difference of %d of 255 (HDInBetweenQuality): %zu of %zu used.",
+                     label, used, limit, kept, usable);
+    }
+
+    void OpenBetween() {
+        if (g_betweenTried) return;
+        g_betweenTried = true;
+        OpenBetweenStore("_between", "the characters", g_between, g_betweenDat, g_betweenQ, g_betweenHold);
+        OpenBetweenStore("_between_more", "the characters (second try)", g_betweenMore, g_betweenMoreDat, g_betweenMoreQ, g_betweenMoreHold);
+        OpenBetweenStore("_between_anim", "the level's animations", g_betweenAnim, g_betweenAnimDat, g_betweenAnimQ, g_betweenAnimHold);
     }
 
     // The frame half-way between `prev` and `cur` (either order), and where its top-left corner
@@ -728,34 +777,71 @@ namespace {
     // sprite changed to `cur` (with the phase of the tick); the in-between belongs to the first half of the
     // step `cur` stays - its length from between.t, else `heldPrev` (how long `prev` stayed), else 1 tick.
     // The entry of the pair whose in-between frame is due now (no data read; -1 = none).
-    ptrdiff_t FindBetween(uint32_t prev, uint32_t cur, float elapsed, int heldPrev) {
-        OpenBetween();
-        if (g_between.empty()) return -1;
+    // The entry of the pair (prev, cur) in a store (either order; any entry, also one the generator rejected), or -1.
+    ptrdiff_t PairIn(const std::vector<BetweenEntry>& entries, uint32_t prev, uint32_t cur) {
+        if (entries.empty()) return -1;
         const uint32_t a = (std::min)(prev, cur), b = (std::max)(prev, cur);
-        const auto it = std::lower_bound(g_between.begin(), g_between.end(), std::make_pair(a, b),
+        const auto it = std::lower_bound(entries.begin(), entries.end(), std::make_pair(a, b),
                                          [](const BetweenEntry& e, const std::pair<uint32_t, uint32_t>& k) {
                                              return e.a != k.first ? e.a < k.first : e.b < k.second;
                                          });
-        if (it == g_between.end() || it->a != a || it->b != b || it->size == 0) return -1;
-        const size_t index = static_cast<size_t>(it - g_between.begin());
-        if (!g_betweenQ.empty() && g_betweenQ[index] > SherwoodConfig::Get().hdInBetweenQuality) {
+        if (it == entries.end() || it->a != a || it->b != b) return -1;
+        return static_cast<ptrdiff_t>(it - entries.begin());
+    }
+
+    // How many ticks `cur` stays when the animation goes prev -> cur (0 = unknown), from a store's between.t.
+    int HoldIn(const std::vector<BetweenEntry>& entries, const std::vector<uint8_t>& hold, size_t index, uint32_t cur) {
+        if (hold.empty()) return 0;
+        return hold[cur == entries[index].b ? index : entries.size() + index];
+    }
+
+    ptrdiff_t FindBetween(uint32_t prev, uint32_t cur, float elapsed, int heldPrev) {
+        OpenBetween();
+        // the first store with a frame for the pair (a pair the characters' store rejected may have one from the
+        // second try)
+        size_t base = 0;
+        int set = -1;
+        ptrdiff_t found = -1;
+        for (int i = 0; i < kBetweenSets; ++i) {
+            const BetweenSet b = SetOf(i);
+            const ptrdiff_t at = PairIn(b.entries, prev, cur);
+            if (at >= 0 && b.entries[static_cast<size_t>(at)].size != 0) {
+                set = i;
+                found = at;
+                break;
+            }
+            base += b.entries.size();
+        }
+        if (set < 0) return -1;
+        const BetweenSet b = SetOf(set);
+        const size_t index = static_cast<size_t>(found);
+        if (!b.quality.empty() && b.quality[index] > SherwoodConfig::Get().hdInBetweenQuality) {
             return -1;              // too soft, or no motion to show: the animation as the game shows it
         }
-        int ticks = 0;
-        if (!g_betweenHold.empty()) ticks = g_betweenHold[cur == b ? index : g_between.size() + index];
+        int ticks = HoldIn(b.entries, b.hold, index, cur);
         if (ticks <= 0) ticks = heldPrev;
         // At most 4 ticks: a pose the game holds longer still changes within 80 ms, not in slow motion.
         ticks = (std::max)(1, (std::min)(ticks, 4));
         // 1 tick: up to 0.45 (measured at 144 Hz: centres the switch, see kBetweenPhase), 2: 0.95, 3: 1.45, 4: 1.95
         if (elapsed >= 0.5f * static_cast<float>(ticks) - (0.5f - kBetweenPhase)) return -1;
-        return static_cast<ptrdiff_t>(index);
+        return static_cast<ptrdiff_t>(base + index);
     }
 
     const Ready* GetBetween(size_t index, uint32_t cur, uint32_t tone, int* dx, int* dy) {
-        const auto it = g_between.begin() + static_cast<ptrdiff_t>(index);
+        size_t local = index;
+        int set = 0;
+        while (set < kBetweenSets - 1 && local >= SetOf(set).entries.size()) {
+            local -= SetOf(set).entries.size();
+            ++set;
+        }
+        const BetweenSet b = SetOf(set);
+        if (local >= b.entries.size()) return nullptr;
+        const std::vector<BetweenEntry>& entries = b.entries;
+        const DataFile& dat = b.dat;
+        const auto it = entries.begin() + static_cast<ptrdiff_t>(local);
         *dx = cur == it->a ? it->dxA : it->dxB;
         *dy = cur == it->a ? it->dyA : it->dyB;
-        const uint64_t key = (1ull << 62) | (static_cast<uint64_t>(tone & 3) << 40) | static_cast<uint64_t>(it - g_between.begin());
+        const uint64_t key = (1ull << 62) | (static_cast<uint64_t>(tone & 3) << 40) | static_cast<uint64_t>(index);
         auto hit = g_ready.find(key);
         if (hit != g_ready.end()) {
             hit->second.lastUse = ++g_useCounter;
@@ -765,7 +851,7 @@ namespace {
         r.w = it->w;
         r.h = it->h;
         r.lastUse = ++g_useCounter;
-        if (!ReadEntry(g_betweenDat, IndexEntry{ it->offset, it->size, it->w, it->h }, r.w, r.h, r.px)) {
+        if (!ReadEntry(dat, IndexEntry{ it->offset, it->size, it->w, it->h }, r.w, r.h, r.px)) {
             r.px.clear();
             g_ready.emplace(key, std::move(r));
             return nullptr;
@@ -1040,6 +1126,150 @@ namespace {
             }
         }
     }
+
+    // The same for a frame drawn by a DirectDraw stretch (TryStretch): the colour key is left out, a shadow
+    // pixel gets `shadow` - the solid colour the game decoded the frame's shadow with (0 = left out).
+    void DrawBetweenKeyed(const Ready& mid, const Buf& db, int x0, int y0, const uint8_t* hidden, int fw, int fh,
+                          int ox, int oy, uint32_t shadow) {
+        const int xa = (std::max)(0, -x0), xb = (std::min)(mid.w, db.w - x0);
+        for (int y = (std::max)(0, -y0); y < mid.h && y0 + y < db.h; ++y) {
+            const uint16_t* row = mid.px.data() + static_cast<size_t>(y) * mid.w;
+            auto* out = reinterpret_cast<uint16_t*>(db.bits + static_cast<size_t>(y0 + y) * db.pitch) + x0;
+            const uint8_t* hrow = hidden ? hidden + static_cast<size_t>((std::min)((std::max)((y + oy) >> 1, 0), fh - 1)) * fw : nullptr;
+            for (int x = xa; x < xb; ++x) {
+                uint32_t p = row[x];
+                if (p == kKey) continue;
+                if (hrow && hrow[(std::min)((std::max)((x + ox) >> 1, 0), fw - 1)] == 2) continue; // behind a wall, a tree ...
+                if (p == kMarker) {
+                    if (!shadow) continue;
+                    p = shadow;
+                }
+                out[x] = static_cast<uint16_t>(p);
+            }
+        }
+    }
+
+    // Where the figure is in the frame: the centre of its opaque pixels (HD pixels; the frame's own size when it
+    // has none). Kept with the frame.
+    void FigureCentre(const Ready& f, int& x, int& y) {
+        if (f.figX < 0) {
+            int64_t sx = 0, sy = 0, n = 0;
+            for (int yy = 0; yy < f.h; ++yy) {
+                const uint16_t* row = f.px.data() + static_cast<size_t>(yy) * f.w;
+                for (int xx = 0; xx < f.w; ++xx) {
+                    if (row[xx] == kKey || row[xx] == kMarker) continue;
+                    sx += xx;
+                    sy += yy;
+                    ++n;
+                }
+            }
+            f.figX = n ? static_cast<int>(sx / n) : f.w / 2;
+            f.figY = n ? static_cast<int>(sy / n) : f.h / 2;
+        }
+        x = f.figX;
+        y = f.figY;
+    }
+
+    // The colour the game gave the frame's shadow in the surface (0 = none seen).
+    uint32_t ShadowColourOf(const Buf& sb, const Ready& hd) {
+        for (int hy = 0; hy < hd.h; hy += 2) {
+            const uint16_t* row = hd.px.data() + static_cast<size_t>(hy) * hd.w;
+            const auto* low = reinterpret_cast<const uint16_t*>(sb.bits + static_cast<size_t>(hy >> 1) * sb.pitch);
+            for (int hx = 0; hx < hd.w; hx += 2) {
+                if (row[hx] == kMarker && low[hx >> 1] != kKey) return low[hx >> 1];
+            }
+        }
+        return 0;
+    }
+
+    // A level animation's sprite drawn by TryStretch - its step is one of the level animations' store
+    // (_between_anim). The figure glides from where the previous frame lay to its own place during the step
+    // (a step late; nobody controls these animations), and in the first half of the step its in-between frame
+    // is shown, if there is one. offX / offY: destination pixel (X, Y) shows HD pixel (X + offX, Y + offY) -
+    // moved here by the glide; `glided` = it was moved. Returns true when the in-between frame was drawn.
+    constexpr int kGlideMin = 4;     // HD pixels the figure must move in a step to glide
+    constexpr int kGlideMax = 80;    // ... and may move at most (a pigeon's flight ~10-30; the loop starting over
+                                     // jumps far)
+    bool AnimateLevelSprite(const Buf& dst, const Buf& src, const Decoded& rec, const Ready& hd, int& offX, int& offY,
+                            bool& glided) {
+        glided = false;
+        if (!rec.sprite || rec.fw > src.w || rec.fh > src.h || hd.w != rec.fw * 2 || hd.h != rec.fh * 2) return false;
+        int originX = 0, originY = 0;
+        if (!HD::LevelOrigin(originX, originY)) return false;
+        // where the figure is in the level (HD px): the frame's top-left corner + the centre of its opaque pixels.
+        // Not the corner alone: the frames of a bird sitting in one place are cut to different sizes, the game
+        // places each so the bird stays - gliding the corners made it wobble.
+        int figX = 0, figY = 0;
+        FigureCentre(hd, figX, figY);
+        const int lx = originX - offX + figX, ly = originY - offY + figY;
+        if (g_places.size() > 20000) g_places.clear();
+        SpritePlace& pl = g_places[rec.sprite];
+        if (pl.tick + 2 < g_tick || pl.tick > g_tick) {          // not followed lately: from here on
+            pl = SpritePlace{};
+            pl.cur = pl.prev = rec.frame;
+            pl.px = lx;
+            pl.py = ly;
+        } else if (rec.frame != pl.cur) {
+            pl.prev = pl.cur;
+            pl.px = pl.cx;
+            pl.py = pl.cy;
+            pl.cur = rec.frame;
+        }
+        pl.cx = lx;
+        pl.cy = ly;
+        pl.tick = g_tick;
+        if (rec.prev == rec.frame || pl.prev != rec.prev) return false;     // no step to follow
+        OpenBetween();
+        const ptrdiff_t pair = PairIn(g_betweenAnim, rec.prev, rec.frame);
+        if (pair < 0) return false;                                        // not a level animation's step
+        const float phase = Timing::RenderPhase();
+        if (phase < 0.0f) return false;
+        const float elapsed = static_cast<float>(rec.age) + phase;
+        int ticks = HoldIn(g_betweenAnim, g_betweenAnimHold, static_cast<size_t>(pair), rec.frame);
+        if (ticks <= 0) ticks = rec.heldPrev;
+        ticks = (std::max)(1, (std::min)(ticks, 4));
+        const float t = (std::min)(1.0f, elapsed / static_cast<float>(ticks));
+        const int jx = lx - pl.px, jy = ly - pl.py;                        // the figure's jump from the previous frame
+        // a real move (a flight, a swim) - not the few pixels a pose change moves the figure's centre; only with
+        // the smooth movement of the objects on (SmoothMotion=1): with it off nothing glides between ticks
+        const int jump = (std::max)(std::abs(jx), std::abs(jy));
+        const bool glide = jump >= kGlideMin && jump <= kGlideMax && t < 1.0f && MotionSmooth::IsEnabled();
+        if (g_betweenOn.load(std::memory_order_relaxed) && rec.age < 4) {
+            const ptrdiff_t entry = FindBetween(rec.prev, rec.frame, elapsed, rec.heldPrev);
+            if (entry >= 0) {
+                int mx = 0, my = 0;
+                if (const Ready* mid = GetBetween(static_cast<size_t>(entry), rec.frame, rec.tone, &mx, &my)) {
+                    // the in-between frame lies half-way between the two; gliding, it is where the figure is now
+                    const float back = glide ? 0.5f - t : 0.0f;
+                    const int x0 = -offX + mx + static_cast<int>(std::lround(-static_cast<float>(jx) * back));
+                    const int y0 = -offY + my + static_cast<int>(std::lround(-static_cast<float>(jy) * back));
+                    static std::vector<uint8_t> hidden;
+                    const bool cutNow = rec.masked && HiddenMap(src, rec, hd, hidden);
+                    DrawBetweenKeyed(*mid, dst, x0, y0, cutNow ? hidden.data() : nullptr, rec.fw, rec.fh, mx, my, ShadowColourOf(src, hd));
+                    if (TraceActive()) {
+                        char text[140];
+                        std::snprintf(text, sizeof(text), "ABT %u->%u at=(%d,%d) size=%dx%d jump=(%d,%d) t=%.2f", rec.prev, rec.frame,
+                                      x0, y0, mid->w, mid->h, jx, jy, t);
+                        TraceMark(text);
+                    }
+                    g_betweenDrawn.fetch_add(1, std::memory_order_relaxed);
+                    g_drawn.fetch_add(1, std::memory_order_relaxed);
+                    return true;
+                }
+            }
+        }
+        if (glide) {
+            offX += static_cast<int>(std::lround(static_cast<float>(jx) * (1.0f - t)));
+            offY += static_cast<int>(std::lround(static_cast<float>(jy) * (1.0f - t)));
+            glided = true;
+            if (TraceActive()) {
+                char text[120];
+                std::snprintf(text, sizeof(text), "AGL %u->%u jump=(%d,%d) t=%.2f", rec.prev, rec.frame, jx, jy, t);
+                TraceMark(text);
+            }
+        }
+        return false;
+    }
 }
 
 void InstallHooks() {
@@ -1264,16 +1494,22 @@ bool TryStretch(const Buf& dst, const RECT& d, const RECT& clip, const Buf& src,
     if (!hd) return false;
     // destination pixel (X, Y) shows HD pixel (2*s.left + X - d.left, 2*s.top + Y - d.top) and
     // belongs to pixel (hx/2, hy/2) of the surface; beyond the frame the surface is transparent
-    const int offX = 2 * s.left - d.left, offY = 2 * s.top - d.top;
+    int offX = 2 * s.left - d.left, offY = 2 * s.top - d.top;
+    // a level animation: gliding between its steps, in-between frames (see AnimateLevelSprite)
+    bool glided = false;
+    if (AnimateLevelSprite(dst, src, *rec, *hd, offX, offY, glided)) return true;
+    // moved by the glide, the frame reaches out of the blit's rectangle: the whole surface is its area
+    RECT area = clip;
+    if (glided) area = RECT{ 0, 0, dst.w, dst.h };
     const bool cut = rec->masked;
-    for (int y = clip.top; y < clip.bottom; ++y) {
+    for (int y = area.top; y < area.bottom; ++y) {
         const int hy = y + offY;
         if (hy < 0 || hy >= hd->h) continue;
         const uint16_t* row = hd->px.data() + static_cast<size_t>(hy) * hd->w;
         const auto* low = reinterpret_cast<const uint16_t*>(src.bits + static_cast<size_t>(hy >> 1) * src.pitch);
         auto* out = reinterpret_cast<uint16_t*>(dst.bits + static_cast<size_t>(y) * dst.pitch);
-        const int x0 = (std::max)(static_cast<int>(clip.left), -offX);
-        const int x1 = (std::min)(static_cast<int>(clip.right), hd->w - offX);
+        const int x0 = (std::max)(static_cast<int>(area.left), -offX);
+        const int x1 = (std::min)(static_cast<int>(area.right), hd->w - offX);
         for (int x = x0; x < x1; ++x) {
             const int hx = x + offX;
             uint16_t p = row[hx];
@@ -1482,7 +1718,7 @@ bool BetweenOn() {
 
 bool BetweenAvailable() {
     OpenBetween();
-    return o_SpriteDecode != nullptr && !g_between.empty();
+    return o_SpriteDecode != nullptr && (!g_between.empty() || !g_betweenMore.empty() || !g_betweenAnim.empty());
 }
 
 unsigned BetweenDrawn() {

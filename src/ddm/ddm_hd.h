@@ -51,6 +51,9 @@ namespace DDM::HD {
     // smoke) that was handled here: its difference to the level picture over the HD background,
     // or left out for still HD water (see ddm_hd.cpp).
     bool DrawGroundAnimation(const Buf& dst, const RECT& d, const RECT& clip, const Buf& src, const RECT& s);
+    // Destination pixel (0, 0) of the world surface shows HD level pixel (x, y) (twice the camera position);
+    // false while no HD background was drawn in this frame.
+    bool LevelOrigin(int& x, int& y);
 
     // Main thread, once per game tick: hot keys, variant switches, the redraw they need.
     void OnGameTick();

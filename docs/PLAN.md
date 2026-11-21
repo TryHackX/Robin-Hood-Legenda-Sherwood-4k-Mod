@@ -364,6 +364,14 @@ Do sprawdzenia przy okazji: czy miganie ikon akcji ma teraz właściwe tempo; po
      przyciemniła (w środkowej części i poza nią); dokładny przypadek nieodtworzony — log ma linię z prostokątami, gdyby
      wróciło. Zielone ośmiokąty w lesie = podgląd gry pod lewym Shiftem (sprawdzone na zapisie youtubera, tak samo na
      oryginalnej grafice). F7/F6 zmienia tło i postacie. Opis: `docs\HD_MODE.md` („Szóste zgłoszenie youtubera”).
+   - ✔ **v1.2.9 — wywalenie, kursor HD, pytania w menu, animacje poziomu** (2026-11-22; użytkownik w trakcie gry:
+     „leć wszystko… kolejkuj”): (1) access violation z jego logu (`0x0058C88B`, odczyt za końcem powierzchni poziomu) —
+     marginesy wokół każdej powierzchni; (2) kursor i ikony akcji z obwódką → obrazek kursora z jego wersji HD
+     (`hd\menu_parts`), sprawdzone strzałka i pięści; (3) „wyjść z gry?” w menu głównym po misji i „nadpisać?” przy
+     zapisie z tłem HD (ścieżka (A) także „w misji”); (4) klatki pośrednie animacji poziomu (ptaki, kury, flagi, dym,
+     muchy…; 7 636) + płynny tor lotu, druga próba odrzuconych par postaci (+11 386, pokrycie 65 → 68 %), magazyny
+     odchudzone (`tools\hd\compact_between.py`) i wydane jako `SherwoodHD-4-klatki-posrednie-2.zip` w `hd-pack-1`.
+     Kącik oka Robina — tak jest w oryginale. Opis: `docs\HD_MODE.md` („Zgłoszenia użytkownika w trakcie gry”, §5g).
    - ◐ **Kooperacja — rozpoznanie** (2026-11-19, pytanie użytkownika o multiplayer w stylu Noita Entangled Worlds: każdy
      swoja kamera i zaznaczenie, gospodarz wybiera drużynę, bez podbierania postaci): sonda tylko w teście w tle
      (`src\coop_probe.cpp`, `tools\coop_run.ps1`, `tools\coop_compare.py`). Warstwa rozkazów znaleziona (tłumacz wejścia

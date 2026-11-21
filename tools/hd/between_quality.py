@@ -8,6 +8,7 @@ moves (user report 2026-11-15, Robin's idle animation). The DLL now uses only fr
 between.idx, so the store itself stays as it is.
 
     python -I tools/hd/between_quality.py            -> hd/sprites/_between/between.q  (+ a summary)
+    python -I tools/hd/between_quality.py --store _between_anim    (the level animations' store)
 
 between.q: "HDBQ", u32 version 1, u32 count (= entries of between.idx), u32 CRC-32 of between.idx,
            then count bytes: the colour difference rounded up (0..254), 255 = not measured.
@@ -41,6 +42,9 @@ MIN_MOTION_P90 = 1.25
 
 
 def main():
+    global DIR
+    store = sys.argv[sys.argv.index('--store') + 1] if '--store' in sys.argv else '_between'
+    DIR = os.path.join(ROOT, 'hd', 'sprites', store)
     idx_path = os.path.join(DIR, 'between.idx')
     raw = open(idx_path, 'rb').read()
     magic, ver, count, sharp = struct.unpack_from('<4sIII', raw, 0)
@@ -69,7 +73,7 @@ def main():
     h = zlib.crc32(raw) & 0xFFFFFFFF            # the index this file belongs to
     # motion and step lengths (between_motion.py), measured for exactly this index
     motion = None
-    mpath = os.path.join(ROOT, 'hd', 'work', 'between_motion.npz')
+    mpath = os.path.join(ROOT, 'hd', 'work', 'between_motion.npz' if store == '_between' else 'between_motion%s.npz' % store)
     if os.path.exists(mpath):
         m = np.load(mpath)
         if int(m['crc']) == h and len(m['p90']) == count:

@@ -403,6 +403,50 @@ pokazywaną częścią 1365×768: `ref` = piksel klatki, do którego należy blo
   tylko róg paska 29×95), postacie przygaszone mgłą jak w grze.
 - Niesprawdzalne w tle: misje z drużyną (kilka portretów) i prawdziwy staw (Nottingham) — potrzebny postęp kampanii.
 
+## 5g. Klatki pośrednie animacji poziomu i druga próba postaci (2026-11-22, v1.2.9)
+Prośby użytkownika: „dla innych animacji też zrób klatki pośrednie”, „wszystko co jest animowane”, „i ta druga próba
+odrzuconych”; kolejka na kartę graficzną `tools\hd\queue_between.ps1` (czeka, gdy okno gry jest otwarte).
+- **Animacje poziomu** — `DATA\Animations\<pora>\*.rhs` (116 plików: gołębie, wrony, kaczki, kury, flagi, dym, muchy,
+  krowy, świnie…), rysowane rozciągnięciami DirectDraw (`TryStretch`), nie ścieżką postaci. Osobny magazyn
+  `hd\sprites\_between_anim\`: `make_inbetweens.py --files Animations/ --store _between_anim --sharp --frames-from
+  _common dat2` (klatki HD części animacji są tylko w magazynie wariantu `dat2` — `FrameChain` bierze pierwszy, który
+  ma klatkę), potem `between_motion.py --store _between_anim` i `between_quality.py --store _between_anim`. 15 714 par,
+  13 223 przyjętych, **7 636 pokazywanych** (5 587 bez ruchu — p90 przepływu < 1,25 px, falowanie w miejscu, ostra klatka
+  pośrednia byłaby łataniną obu jak u postaci w spoczynku). Klatki mniejsze niż 12 px po powiększeniu ×4 (iskry,
+  krople) nie są mierzone (DIS ich nie liczy). Sieć RIFE wymaga boków podzielnych przez `64·max(skal)/16` — małe płótna
+  dostają obrzeże z powtórzonych krawędzi, obcinane po obliczeniu.
+- **Płynny tor** (`AnimateLevelSprite`, `ddm_hd_sprites.cpp`): ruch tych animacji jest w przesunięciach klatek, nie w
+  pozycji elementu. DLL śledzi miejsce figury per obiekt (`g_places`): środek jej nieprzezroczystych pikseli w poziomie
+  HD = `LevelOrigin` − przesunięcie rysowania + środek figury w klatce (nie róg — klatki siedzącego ptaka są różnie
+  przycięte, przesuwanie rogów dawało drżenie). Gdy przy zmianie kroku figura skoczyła o 4–80 px HD, rysunek jedzie
+  od poprzedniego miejsca do nowego przez cały krok (o krok później — tymi animacjami nikt nie steruje); w pierwszej
+  połowie kroku klatka pośrednia (jeśli jest), przesunięta tam, gdzie figura jest w danej chwili. Tylko dla kroków,
+  które zna magazyn `_between_anim` (także bez klatki) — postacie i reszta bez zmian. Ślad (`trace`): `ABT` = klatka
+  pośrednia animacji poziomu, `AGL` = przesuw.
+- **Druga próba odrzuconych par postaci** (`hd\sprites\_between_more\`): 136 552 pary, których pierwszy magazyn nie
+  przyjął (upadki, szybkie ciosy, schylanie), od nowa z innymi skalami przepływu sieci. Ustawienia próbowane na
+  losowych 1500 parach (`--survey`; pierwsza próba w kolejce stanęła na błędzie rozmiaru płótna — naprawione obrzeżem,
+  patrz wyżej), najlepsze `--rife-scales 8,4,2,1,1` (~10 % odzyskanych w próbie). Całość (`make_inbetweens.py --files
+  Characters/ --rejected-from _between --store _between_more --sharp --rife-scales 8,4,2,1,1`, 26 min):
+  **11 400 przyjętych (8,3 %), 11 386 z ruchem**. Pokrycie kroków
+  animacji postaci (`tools\hd\between_coverage.py --file Characters/`): 65 % → 68 % (Robin 67 % → 69 %).
+- DLL: trzy magazyny w jednej przestrzeni indeksów (`SetOf`, `kBetweenSets`): `FindBetween` bierze pierwszy, który ma
+  klatkę dla pary — `_between`, potem `_between_more`, potem `_between_anim`; każdy z własnym `between.q` / `between.t`
+  pod CRC swojego indeksu. Log przy starcie: `HD sprites: N in-between frames for the characters (second try) / the
+  level's animations available`.
+- **Odchudzenie** (`tools\hd\compact_between.py`): generator trzyma każdą wypróbowaną parę; zostają tylko klatki
+  pokazywane przy domyślnym `HDInBetweenQuality=17` (magazyny ostre — wszystkie przyjęte mają q ≤ 17, poza parami bez
+  ruchu). `_between_anim --keep-all`: indeks cały (płynny tor musi znać każdy krok), dane 277,7 → 131,3 MB;
+  `_between_more`: tylko pokazywane wpisy, indeks 4,37 → 0,36 MB, dane 102,8 MB. `between.q`, `between.t` i
+  `hd\work\between_motion<magazyn>.npz` przepisane pod nowy CRC (`between_quality.py` działa dalej na odchudzonym).
+- Sprawdzone w tle (Nottingham, kamera strzałkami, `trace` w kilku miejscach mapy): magazyny wczytane (7 636 i 11 386
+  klatek, listy jakości i długości kroków pasują); klatki pośrednie flag, świni, krowy, kury, much i gołębia 03, przesuw
+  much i gołębia (skoki 4–10 px HD, w pierwszej połowie kroku klatka pośrednia przesuwana o ~1 px na klatkę obrazu,
+  potem przesuw do końca kroku — ciągle); zrzuty flagi co 60 ms ostre, bez podwójnego rysunku. Lot gołębi 01/02 (duże
+  skoki) się nie trafił — pauzy między lotami 4–20 s.
+- Wydanie: oba magazyny w archiwum `SherwoodHD-4-klatki-posrednie-2.zip` wydania `hd-pack-1` (`tools\make_hd_packs.py
+  --only 4`) — dane zmieniają się rzadko, archiwum moda zostaje ~150 MB. Bez niego mod działa jak w 1.2.8.
+
 ## 6. Tryb testowy w tle (żeby nie zabierać użytkownikowi ekranu)
 - `tools\htest.ps1 [-Ini plik] [-MenuOnly]` — start ukrytej gry (`SHERWOODFIX_TEST=1`), pominięcie filmów, „Graj!".
 - `tools\hctl.ps1 -Cmd "a; b" [-Shot nazwa | -ShotOut nazwa] [-Crop x,y,w,h] [-MaxWidth n] [-Wait ms]`.
@@ -868,12 +912,37 @@ w górę), resztę powiększa prezenter — **tylko świat**:
     plików `Characters\*.rhs`; animacje otoczenia rysuje DirectDraw, tam ich nie ma). Krok animacji (`flags + 1` tików,
     `hd\work\frame_index.csv`): gołębie Nottingham 80 ms (12,5 kl./s), wrony 120 ms, kaczki 160 ms, do tego pauzy po
     4–20 s; lot (gołąb do ~250×270 px poziomu, kaczka 213×153) jest zapisany w PRZESUNIĘCIACH klatek, nie w pozycji
-    elementu — `MotionSmooth` go nie widzi, więc ptak skacze co 80–160 ms obok płynnych postaci. Możliwa poprawka:
-    przesunięcie interpolowane między krokami (płynny tor lotu) + klatki pośrednie RIFE dla tych kilku plików i ich
-    rysowanie w ścieżce DirectDraw.
+    elementu — `MotionSmooth` go nie widzi, więc ptak skacze co 80–160 ms obok płynnych postaci. Zrobione w 1.2.9:
+    płynny tor między krokami i klatki pośrednie RIFE dla wszystkich animacji poziomu (§5g).
   - Narzędzia: `tools\save_test.ps1` (test w tle na wybranym zapisie: `-Profile` cudzy folder zapisów na czas
     testu, `-NoPlay` + kroki w menu „Wczytaj” — lista: nazwa z `Profiles`, pozycja w kolumnie), `tools\save_thumbs.py`
     (arkusz miniatur zapisów `<zapis>_t`), harness `hold DIK` / `release DIK`.
+- **Zgłoszenia użytkownika w trakcie gry** (2026-11-22, 1.2.8 → poprawki w 1.2.9):
+  - **Wywalenie gry** (znalezione w jego logu z 2026-11-21, nie zgłoszone): access violation w `0x0058C88B` —
+    procedura pikselowa z testem głębi, która czyta obraz poziomu pod tym, co rysuje (wywołanie z `0x005911C5`); w
+    Nottingham 8014 bajtów za końcem powierzchni poziomu 2304×3520. Powierzchnie DDM miały dokładnie swój rozmiar
+    (+32 B) — DirectDraw trzymał powierzchnie systemowe z pamięcią wokół, takie odczyty przechodziły niezauważone.
+    Teraz każda powierzchnia ma przed sobą i za sobą zerowany margines 128 wierszy + 4 KB (`Surface::Alloc`, `ddm.cpp`).
+  - **Kursor i ikony akcji z „obwódką wycięcia”** (wiązanie, zamki, podnoszenie, krzyżyk): kursor misji
+    (`0x005F1CA0`, ślad z 2026-11-22) kopiuje ekran pod sobą do dwóch powierzchni 55×55, blokuje swój obrazek
+    (powierzchnia jego rozmiaru, cała, np. 35×43) i programowo składa go z cieniem na jednej z kopii; ta kopia idzie
+    na ekran ×2 z kluczem. Mod brał z niej piksele różne od tła i wygładzał obrazek 1× do ×2 — miękki brzeg obrazka,
+    zmieszany przez grę z tłem 1×, został wokół jako obwódka; plików HD interfejsu kursor w ogóle nie pytał. Teraz
+    powierzchnie zablokowane w czasie rysowania kursora są zapamiętane (`g_cursorPics`), ta o rozmiarze kursora jest
+    szukana po treści wśród obrazków interfejsu HD (`HD::Patch::InterfacePicture`, `hd\menu_parts\`) i rysowana z
+    alfą, cień = co najwyżej połowa ciemności jak u gry (`HdCursor`); bez niej — wydobyte piksele z kluczem 0x07C0
+    też szukane, dopiero potem wygładzenie jak dawniej. Sprawdzone w tle: strzałka i pięści ostre, bez obwódki.
+    Obrazków w `DATA\Interface\Default.res`: 1126, z wersją HD 1118 (`tools\hd\res_pictures.py`).
+  - **„Brew Robina i inne części są przezroczyste”** (zrzut portretu): tak wygląda oryginalny obrazek — prześwity
+    między liśćmi i półprzezroczysta zielona twarz są w pliku gry, HD oddaje je wiernie. Nie błąd.
+  - **Pytania ze starym tłem 1×**: „Czy rzeczywiście chcesz wyjść z gry…?” w MENU GŁÓWNYM (po misji) i „Na pewno
+    chcesz zapisać grę na już istniejącej?” na ekranie zapisu. Ścieżka (A) w `OnScreenCopy` (ostatni rozpoznany
+    ekran menu z czymś narysowanym na nim → obraz HD wokół) była wyłączona „w misji”, a wskaźnik silnika
+    `[0x006C0FA8]` zostaje ustawiony po misji — menu główne po misji liczyło się jako misja; ekran zapisu w misji to
+    obrazek menu na całość, pytanie rysowane jak w menu. (A) działa teraz zawsze. Sprawdzone w tle: misja → Wyjdź →
+    menu główne → „Wyjdź z gry” (log: `a screen without a picture of its own - 77 % still the last menu picture`) i
+    zapis na istniejący → tło HD wokół obu pytań (`tools\out\ex3_q2.png`, `sv1_q.png`).
+  - Klatki pośrednie animacji poziomu i druga próba postaci: §5g.
 - **Wydajność sprite'ów HD** (2026-11-17, v1.2.1): `Sprites::TryShadowBlit` (główna ścieżka sprite'ów HD przez procedury
   gry `0x0062261C/0x006220EC`) liczona po 8 pikseli SSE2 (przezroczyste/ukryte zostają, cień przyciemnia pojedynczo, reszta
   = piksel HD). Las misji z obozu: klatka pośrednia 11,2 → 7,1 ms, 86 → 140 kl./s. Do diagnozy: plik mapy linkera

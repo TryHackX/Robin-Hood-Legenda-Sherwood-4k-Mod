@@ -42,6 +42,55 @@ class Surface;
 class DDraw7;
 class DDraw1;
 
+constexpr uint16_t kGreenKey = 0x07C0;   // the colour key of the game's interface pictures (and of their HD files)
+
+// The mission's cursor (0x005F1CA0, trace of 2026-11-22): the game copies the screen under it into two small
+// surfaces, locks the cursor's own picture (a surface of its size, "whole") and composes it in software over
+// one of the copies, with its shadow; that copy goes to the screen magnified. The surfaces locked whole while
+// the cursor is drawn: the picture is the one of the cursor's size - its HD version is found by its content.
+Surface* g_cursorPics[4] = {};
+unsigned g_cursorPicsSerial = 0;
+int      g_cursorPicsCount = 0;
+
+// The mission's cursor (its own pixels, the rest kGreenKey - see the cursor branch of DoBlt) as its HD
+// picture, when one of the collected interface pictures has exactly its content: colour where the picture
+// covers, mixed with what lies below on its soft edge, half darkness under its shadow. d = the 2x rectangle.
+bool HdCursor(const Buf& dst, const RECT& d, const RECT& clip, const Buf& src, const RECT& s) {
+    const int sw = s.right - s.left, sh = s.bottom - s.top;
+    int w2 = 0, h2 = 0;
+    const uint32_t* bgra = nullptr;
+    const uint8_t* shade = nullptr;
+    if (!HD::Patch::InterfacePicture(src, s, w2, h2, bgra, shade) || w2 != 2 * sw || h2 != 2 * sh) return false;
+    for (int y = clip.top; y < clip.bottom; ++y) {
+        const int hy = y - d.top;
+        if (hy < 0 || hy >= h2) continue;
+        auto* out = reinterpret_cast<uint16_t*>(dst.bits + static_cast<size_t>(y) * dst.pitch);
+        for (int x = clip.left; x < clip.right; ++x) {
+            const int hx = x - d.left;
+            if (hx < 0 || hx >= w2) continue;
+            const size_t i = static_cast<size_t>(hy) * w2 + hx;
+            const uint32_t c = bgra[i], a = c >> 24;
+            const uint32_t o = out[x];
+            uint32_t r = o >> 11, g = (o >> 5) & 63, b = o & 31;
+            if (a > 0) {
+                const uint32_t cr = (c >> 19) & 31, cg = (c >> 10) & 63, cb = (c >> 3) & 31;
+                r = (cr * a + r * (255 - a) + 127) / 255;
+                g = (cg * a + g * (255 - a) + 127) / 255;
+                b = (cb * a + b * (255 - a) + 127) / 255;
+            } else if (shade[i]) {
+                const uint32_t keep = 510 - shade[i];       // at most half darkness, as the game's shadow
+                r = r * keep / 510;
+                g = g * keep / 510;
+                b = b * keep / 510;
+            } else {
+                continue;
+            }
+            out[x] = static_cast<uint16_t>((r << 11) | (g << 5) | b);
+        }
+    }
+    return true;
+}
+
 struct State {
     std::recursive_mutex lock;   // surface list, display mode, primary chain
     HWND  hwnd = nullptr;
@@ -123,6 +172,7 @@ public:
 // ------------------------------------------------------------------------------------ surface
 struct Storage {            // the part of a surface that Flip exchanges
     uint8_t* bits = nullptr;
+    uint8_t* base = nullptr; // the allocation: bits lie past a margin in it (Surface::Alloc)
     bool     virt = false;  // VirtualAlloc (large) vs _aligned_malloc (small)
     HBITMAP  dib = nullptr; // set once GetDC was used: bits then live inside the DIB section
     HDC      dc = nullptr;
@@ -241,16 +291,28 @@ public:
     Buf buf() const { return Buf{ st.bits, pitch, w, h }; }
     bool isFront() const { return this == g.primary; }
 
+    // Zeroed rows before and after every surface. The game reads a little past its surfaces now and then:
+    // the user's session of 2026-11-21 ended in an access violation at 0x0058C88B (a per-pixel routine with a
+    // depth test that reads the level picture under what it draws - in Nottingham, 8014 bytes past the end of
+    // the 2304x3520 level surface). DirectDraw's system-memory surfaces had memory around them, the reads went
+    // unnoticed; here they met the end of the allocation.
+    static constexpr int kMarginRows = 128;
+
     bool Alloc() {
-        const size_t size = static_cast<size_t>(pitch) * static_cast<size_t>(h) + 32;
+        const size_t body = static_cast<size_t>(pitch) * static_cast<size_t>(h);
+        const size_t margin = (static_cast<size_t>(pitch) * kMarginRows + 4096 + 63) & ~static_cast<size_t>(63);
+        const size_t size = margin + body + margin + 32;
+        uint8_t* base = nullptr;
         if (size >= 256 * 1024) {
-            st.bits = static_cast<uint8_t*>(VirtualAlloc(nullptr, size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
+            base = static_cast<uint8_t*>(VirtualAlloc(nullptr, size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));   // zeroed
             st.virt = true;
         } else {
-            st.bits = static_cast<uint8_t*>(_aligned_malloc(size, 32));
+            base = static_cast<uint8_t*>(_aligned_malloc(size, 64));
             st.virt = false;
-            if (st.bits) std::memset(st.bits, 0, size);
+            if (base) std::memset(base, 0, size);
         }
+        st.base = base;
+        st.bits = base ? base + margin : nullptr;
         return st.bits != nullptr;
     }
 
@@ -261,11 +323,11 @@ public:
                 DeleteDC(st.dc);
             }
             DeleteObject(st.dib);
-        } else if (st.bits) {
+        } else if (st.base) {
             if (st.virt) {
-                VirtualFree(st.bits, 0, MEM_RELEASE);
+                VirtualFree(st.base, 0, MEM_RELEASE);
             } else {
-                _aligned_free(st.bits);
+                _aligned_free(st.base);
             }
         }
         st = Storage{};
@@ -515,6 +577,13 @@ public:
                       rect->left, rect->top, rect->right, rect->bottom, GameCallers());
         } else {
             DDM_TRACE("LOCK %p(%dx%d%s) whole by %s", static_cast<void*>(this), w, h, isFront() ? " front" : "", GameCallers());
+            if (UiScale::CursorDrawing() && w <= 160 && h <= 160) {
+                if (g_cursorPicsSerial != UiScale::CursorSerial()) {
+                    g_cursorPicsSerial = UiScale::CursorSerial();
+                    g_cursorPicsCount = 0;
+                }
+                if (g_cursorPicsCount < 4) g_cursorPics[g_cursorPicsCount++] = this;
+            }
         }
         // remembered for the crash log: the game writes sprites straight into locked memory
         LockRecord& rec = g_lastLocks[g_lockSeq++ % kLockHistory];
@@ -653,6 +722,18 @@ void HedgeStrip(const Buf& dst, int w, int h, const RECT& d, const Buf& src, con
         if (mc.right > end) mc.right = end;
         if (ClipToBounds(mc, w, h)) SmoothPicture2x16(dst, md, mb, ms, mc, midKey);
     }
+}
+
+// The cursor's own picture (see g_cursorPics) drawn from its HD version - false when it has none.
+bool CursorPictureHd(const Buf& dst, const RECT& d, const RECT& clip, const Surface* composed, int sw, int sh) {
+    if (g_cursorPicsSerial != UiScale::CursorSerial()) return false;
+    for (int i = 0; i < g_cursorPicsCount; ++i) {
+        const Surface* p = g_cursorPics[i];
+        if (!p || p == composed || std::find(g.surfaces.begin(), g.surfaces.end(), p) == g.surfaces.end()) continue;
+        if (p->w != sw || p->h != sh || !p->st.bits) continue;
+        return HdCursor(dst, d, clip, p->buf(), RECT{ 0, 0, sw, sh });
+    }
+    return false;
 }
 
 HRESULT Surface::DoBlt(const RECT* dstRect, Surface* src, const RECT* srcRect, DWORD flags, const DDBLTFX* fx) {
@@ -845,6 +926,8 @@ HRESULT Surface::DoBlt(const RECT* dstRect, Surface* src, const RECT* srcRect, D
             if (UiScale::LastScaledWasMap() && inside && !mirrorX && !mirrorY && Diag::IsMainThread()) {
                 // the opened map at its own size (MapScale): its HD picture (MinimapHD) scaled once and kept
                 ScaledPicture16(buf(), d, src->buf(), s, clip, keyed ? keyColor : kNoColor);
+            } else if (cursor && dw == sw * 2 && dh == sh * 2 && !mirrorX && !mirrorY && CursorPictureHd(buf(), d, clip, src, sw, sh)) {
+                // the cursor's own picture had an HD version (g_cursorPics)
             } else if (cursor && dw == sw * 2 && dh == sh * 2 && !mirrorX && !mirrorY) {
                 // only the cursor's own pixels: those that differ from the background copy
                 static std::vector<uint16_t> tmp;
@@ -856,11 +939,16 @@ HRESULT Surface::DoBlt(const RECT* dstRect, Surface* src, const RECT* srcRect, D
                     const auto* bp = reinterpret_cast<const uint16_t*>(bb.bits + static_cast<size_t>(s_cursorBgRect.top + y) * bb.pitch) +
                                      s_cursorBgRect.left;
                     uint16_t* tp = tmp.data() + static_cast<size_t>(y) * sw;
-                    for (int x = 0; x < sw; ++x) tp[x] = sp[x] == bp[x] ? keyColor : sp[x];
+                    // the green key the interface pictures' HD files were made with (their content keys)
+                    for (int x = 0; x < sw; ++x) tp[x] = sp[x] == bp[x] ? kGreenKey : sp[x];
                 }
                 const Buf tb{ reinterpret_cast<uint8_t*>(tmp.data()), sw * 2, sw, sh };
                 const RECT ts{ 0, 0, sw, sh };
-                SmoothSprite2x16(buf(), d, tb, ts, clip, keyColor, kNoColor, 256, nullptr, false, false);
+                // its HD picture when the cursor is one of the collected pictures (2026-11-22, user: "even the
+                // cursor ... has that outline" - it was the 1x picture smoothed, the HD files never asked)
+                if (!HdCursor(buf(), d, clip, tb, ts)) {
+                    SmoothSprite2x16(buf(), d, tb, ts, clip, kGreenKey, kNoColor, 256, nullptr, false, false);
+                }
             } else if (keyed && dw == sw * 2 && dh == sh * 2 && !mirrorX && !mirrorY && inside &&
                        HD::Font::KeyedGlyph2x(buf(), d, clip, src->buf(), s, static_cast<uint16_t>(keyColor))) {
                 // a letter of a colour-keyed font with an HD version (ddm_hd_font.h)

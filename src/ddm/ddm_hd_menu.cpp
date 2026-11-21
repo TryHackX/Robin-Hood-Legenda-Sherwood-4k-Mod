@@ -700,13 +700,17 @@ void OnScreenCopy(const Buf& src, unsigned serial, unsigned gen, unsigned genWri
             if (g_src.inner) pic = Load(g_src.inner);
         }
         if (pic) {
-            if (!mission && (pic != g_basePic || g_src.onBase == 0)) {
+            // (A) also "in a mission" (2026-11-22, user: the questions "quit the game?" in the main menu and
+            // "overwrite?" on the save screen showed the old 1x picture): the engine's pointer stays set after a
+            // mission, so the main menu counted as a mission too; and in a mission this point is reached only
+            // with a menu picture over everything (load / save / options), where a question is drawn the same way
+            if (pic != g_basePic || g_src.onBase == 0) {
                 // recognised: the pixels it was recognised in, for what may be drawn over it later (A)
                 g_basePic = pic;
                 g_baseCrop = CropPixels(src, crop);
                 g_src.onBase = 1;
             }
-        } else if (!mission && g_basePic && g_baseCrop && g_baseCrop->size() == cropPx) {
+        } else if (g_basePic && g_baseCrop && g_baseCrop->size() == cropPx) {
             // (A) the last recognised screen with something drawn over it (a dialog): when most of the
             // picture's pixels are still there. Black proves nothing (most menus have black around their
             // picture): only the other pixels count.

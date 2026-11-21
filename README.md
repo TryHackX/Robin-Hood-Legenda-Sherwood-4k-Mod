@@ -35,7 +35,10 @@ original DirectDraw wrapper, plus optional HD graphics prepared with AI models f
 - Optional in-between frames for character animations (RIFE model) — animations 2× smoother. Since 2026-11-15 the
   frames are **sharp** (every pixel taken from one of the two moved frames instead of mixing them), so all accepted
   ones are shown — about 3× more transitions than before (`SherwoodHD-3-klatki-posrednie.zip`, updated in HD graphics
-  pack 1; the quality lists for both the new and the first pack come with the mod archive).
+  pack 1; the quality lists for both the new and the first pack come with the mod archive). Since 1.2.9 also the
+  level's own animations — pigeons, crows, ducks, hens, flags, smoke, flies… — have in-between frames, and what flies
+  or swims moves along a smooth path instead of jumping every 80–160 ms; a second try added about 11,400 frames to the
+  characters' moves the first pack had to skip (`SherwoodHD-4-klatki-posrednie-2.zip`).
 - **Smooth zoom** (magnifier): zoom in and out in small steps (game keys, mouse wheel — about the cursor, the buttons
   in the corner), from "the whole level fills the screen" (no black bands) up to 4× closer. The engine renders at 1.0
   or 2.0 (HD pictures) and the graphics card magnifies the rest — only the world, the interface keeps its size; clicks
@@ -70,7 +73,8 @@ original DirectDraw wrapper, plus optional HD graphics prepared with AI models f
   real camp like the other levels).
 - Menus and game dialogs (briefing, Esc menu, save/load, options) shown full-screen instead of a small 1024×768 box
   in the middle — **in HD**: menu backgrounds upscaled by AI (HD pack), and the letters, buttons, the briefing's
-  parchment, seals (also highlighted under the cursor), portraits and the campaign map drawn from HD versions
+  parchment, seals (also highlighted under the cursor), portraits, the mouse cursor with its action icons (since
+  1.2.9) and the campaign map drawn from HD versions
   (`hd\fonts\`, `hd\menu_parts\`, in the mod archive). The campaign map is HD in every state of the campaign: all
   five castles (drawn and coloured, with their glow), flags, path markers and the Sheriff's army arrows — taken
   straight from the game's `DATA\Interface\Default.res` (`tools\hd\res_pictures.py`). Questions asked during a
@@ -126,11 +130,12 @@ whether to replace files, answer yes.
 | `SherwoodHD-1-postacie-b.zip` | 1.1 GB | 2.0 GB | characters and all their animations (part 2) | **required** |
 | `SherwoodHD-2-tla-dat2.zip` | 0.7 GB | 1.1 GB | all 20 map backgrounds, roofs, trees, objects, menu backgrounds (default variant `dat2`) | **required** |
 | `SherwoodHD-3-klatki-posrednie.zip` | 1.6 GB | 3.0 GB | in-between frames: character animations 2× smoother (F9); new sharp frames since 2026-11-15 | recommended |
+| `SherwoodHD-4-klatki-posrednie-2.zip` | 0.1 GB | 0.2 GB | in-between frames of the level's animations (birds, flags, smoke…) with a smooth flight path, and a second try for the characters (mod 1.2.9 or newer) | recommended |
 | `SherwoodHD-wariant-aomr.zip` | 0.7 GB | 1.1 GB | another look of the backgrounds (F6 / F7) | optional |
 | `SherwoodHD-wariant-sgi.zip` | 0.7 GB | 1.4 GB | another look of the backgrounds (F6 / F7) | optional |
 | `SherwoodHD-wariant-ultrasharp.zip` | 0.7 GB | 1.1 GB | another look of the backgrounds (F6 / F7) | optional |
 
-Required only: 2.9 GB to download, 5.1 GB on disk. Everything: 6.4 GB to download, 11.6 GB on disk.
+Required only: 2.9 GB to download, 5.1 GB on disk. Everything: 6.5 GB to download, 11.8 GB on disk.
 
 Unpack **each** archive into the game folder (see above). Afterwards the game folder holds `hd\maps\…`,
 `hd\sprites\…` and `hd\menu\…`. Check: `hd\sprites\_common\` must contain `sprites.idx`, `sprites.dat` **and**
@@ -212,7 +217,7 @@ window too. Display Capture always works, but records the whole screen.
 | F10 | mod settings panel (in menus, game dialogs and missions) |
 | F8 | HD background ↔ original (quick comparison) |
 | F7 / F6 | next / previous HD graphics variant |
-| F9 | in-between frames of character animations (when generated) |
+| F9 | in-between frames of animations — characters and the level's own (when installed) |
 
 Quick save and quick load are the game's own keys (F1 and F5, unless changed in the game's Options → Keyboard). The
 F10 panel ("KLAWISZ SZYBKIEGO ZAPISU" / "KLAWISZ SZYBKIEGO ODCZYTU") or `QuickSaveKey=` / `QuickLoadKey=` in

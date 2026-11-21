@@ -26,6 +26,9 @@ PACKS = [
     ("1b", "SherwoodHD-1-postacie-b.zip", [(COMMON, 2, 2)]),
     ("2", "SherwoodHD-2-tla-dat2.zip", ["hd/maps/dat2", "hd/sprites/dat2", "hd/menu/dat2"]),
     ("3", "SherwoodHD-3-klatki-posrednie.zip", ["hd/sprites/_between"]),
+    # 2026-11-22 (mod 1.2.9): the level's animations (birds, flags, smoke ...) and the second try of the characters'
+    # rejected pairs - compacted by tools/hd/compact_between.py
+    ("4", "SherwoodHD-4-klatki-posrednie-2.zip", ["hd/sprites/_between_more", "hd/sprites/_between_anim"]),
     ("aomr", "SherwoodHD-wariant-aomr.zip", ["hd/maps/aomr", "hd/sprites/aomr", "hd/menu/aomr"]),
     ("sgi", "SherwoodHD-wariant-sgi.zip", ["hd/maps/sgi", "hd/sprites/sgi", "hd/menu/sgi"]),
     ("ultrasharp", "SherwoodHD-wariant-ultrasharp.zip", ["hd/maps/ultrasharp", "hd/sprites/ultrasharp", "hd/menu/ultrasharp"]),

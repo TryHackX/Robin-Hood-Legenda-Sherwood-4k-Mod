@@ -42,6 +42,17 @@ krok czyta cały kontekst). Lockstep to z grubsza kilkanaście–kilkadziesiąt 
 pełne tygodniowe limity; w kalendarzu kilka tygodni do ~2 miesięcy, zależnie od tego, jak często da się testować we
 dwóch. Wersja z gospodarzem — kilka razy więcej, odradzana.
 
+**Gotowy netcode? (pytanie użytkownika 2026-11-22: „gotowy netcode, a my tylko adresy i obsługa serwer–klient, jak w
+Noicie”)** — tylko na warstwę transportu: wysyłanie pakietów, połączenie, niezawodność, NAT. Kandydaci: ENet (prosty
+UDP z niezawodnością), GameNetworkingSockets (Valve, przekaźniki), Steam P2P odpada (gra z GOG); albo bez NAT-u — VPN
+u graczy (Radmin VPN / ZeroTier / Tailscale) i zwykłe połączenie po IP. Biblioteki „całej synchronizacji” typu GGPO
+(rollback) nie pasują: wymagają zapisu i cofnięcia całego stanu gry w każdej klatce i przeliczenia kilku ticków —
+ta gra tego szybko nie umie (setki elementów, sekwencje, skrypty misji). Lockstep (wymiana poleceń z opóźnieniem 2–3
+ticków = 80–120 ms) piszemy sami — mała pętla, symulacja jest powtarzalna (sonda). Entangled Worlds: Noita ma API
+modów w Lua, a sieć robi osobny program-proxy połączony z grą lokalnie — tę architekturę da się powtórzyć (DLL ↔
+proxy), ale to też tylko transport. Biblioteka skraca głównie kamień 7 (internet / NAT) i część 2 — razem może
+10–15 % pracy; reszta (kamienie 1–6, 8) to praca na samej grze, jak w planie.
+
 **Alternatywa bez pracy:** Parsec (darmowy) — jedna osoba uruchamia grę, druga łączy się i może sterować myszą i
 klawiaturą (wspólne sterowanie, nie osobne kamery).
 

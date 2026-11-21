@@ -861,6 +861,16 @@ w górę), resztę powiększa prezenter — **tylko świat**:
     4608×7040 dla poziomu 2304×3520), czyli przy domyślnym zoomie 1:1 na 1440p; na monitorze 4K prezenter skaluje
     ×1,5 (sharp-bilinear). Prawdziwe 4K przy tym samym kadrze = grafika HD ×3 (tła, postacie, interfejs) — kilka
     razy więcej danych i generowania.
+  - Ptaki (pytanie użytkownika 2026-11-22: „czy są w HD i mają klatki pośrednie, nie wyglądają płynnie”): to animacje
+    otoczenia z `DATA\Animations\<pora>\` (`not_birds.rhs` gołębie Nottingham, `York_crow` / `York_pigeon`,
+    `Lei_duck` kaczki, `der_henns` kury). HD — tak: klatki są w magazynach (`_common`: gołębie Nottingham 191/199,
+    kaczki 98/98; `dat2`: kury 119/120; York ok. połowa w każdym). Klatek pośrednich — nie (generator robił tylko 117
+    plików `Characters\*.rhs`; animacje otoczenia rysuje DirectDraw, tam ich nie ma). Krok animacji (`flags + 1` tików,
+    `hd\work\frame_index.csv`): gołębie Nottingham 80 ms (12,5 kl./s), wrony 120 ms, kaczki 160 ms, do tego pauzy po
+    4–20 s; lot (gołąb do ~250×270 px poziomu, kaczka 213×153) jest zapisany w PRZESUNIĘCIACH klatek, nie w pozycji
+    elementu — `MotionSmooth` go nie widzi, więc ptak skacze co 80–160 ms obok płynnych postaci. Możliwa poprawka:
+    przesunięcie interpolowane między krokami (płynny tor lotu) + klatki pośrednie RIFE dla tych kilku plików i ich
+    rysowanie w ścieżce DirectDraw.
   - Narzędzia: `tools\save_test.ps1` (test w tle na wybranym zapisie: `-Profile` cudzy folder zapisów na czas
     testu, `-NoPlay` + kroki w menu „Wczytaj” — lista: nazwa z `Profiles`, pozycja w kolumnie), `tools\save_thumbs.py`
     (arkusz miniatur zapisów `<zapis>_t`), harness `hold DIK` / `release DIK`.

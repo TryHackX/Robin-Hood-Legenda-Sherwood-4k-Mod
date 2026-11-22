@@ -434,8 +434,15 @@ void ClearOutsideLevel() {
     const float r = (lw - camX) * zr, b = (lh - camY) * zr;
     const int right = static_cast<int>(std::ceil(r)), bottom = static_cast<int>(std::ceil(b));
     const int w = static_cast<int>(W), h = static_cast<int>(H);
-    if (right > 0 && right < w) DDM::FillBack(RECT{ right, 0, w, h }, 0);
-    if (bottom > 0 && bottom < h) DDM::FillBack(RECT{ 0, bottom, (std::min)(right, w), h }, 0);
+    // Not black: RGB565 0x0801 (8,0,8 - looks black). The presenter tells the interface from the world by the
+    // frame pixel still being the world copy's; with black here every black pixel of the interface over the band
+    // counted as world and showed the magnified level - holes in Robin's eyebrow and the leaves around his eye in
+    // the top right corner on small levels at 1.0 (user report 2026-11-22). 0x0801 is in no 1x interface picture
+    // except as single pixels (245 of 8.1 million) and in 349 of 17 million HD ones - lone pixels, which the
+    // presenter's neighbour rule leaves to the interface.
+    constexpr uint16_t kOutsideLevel = 0x0801;
+    if (right > 0 && right < w) DDM::FillBack(RECT{ right, 0, w, h }, kOutsideLevel);
+    if (bottom > 0 && bottom < h) DDM::FillBack(RECT{ 0, bottom, (std::min)(right, w), h }, kOutsideLevel);
 }
 
 void OnWorldDrawn() {

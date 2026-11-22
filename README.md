@@ -73,8 +73,8 @@ original DirectDraw wrapper, plus optional HD graphics prepared with AI models f
   real camp like the other levels).
 - Menus and game dialogs (briefing, Esc menu, save/load, options) shown full-screen instead of a small 1024×768 box
   in the middle — **in HD**: menu backgrounds upscaled by AI (HD pack), and the letters, buttons, the briefing's
-  parchment, seals (also highlighted under the cursor), portraits, the mouse cursor with its action icons (since
-  1.2.9) and the campaign map drawn from HD versions
+  parchment, seals (also highlighted under the cursor), portraits, the mouse cursor with its action icons (in a
+  mission since 1.2.9, in menus and dialogs since 1.2.10) and the campaign map drawn from HD versions
   (`hd\fonts\`, `hd\menu_parts\`, in the mod archive). The campaign map is HD in every state of the campaign: all
   five castles (drawn and coloured, with their glow), flags, path markers and the Sheriff's army arrows — taken
   straight from the game's `DATA\Interface\Default.res` (`tools\hd\res_pictures.py`). Questions asked during a

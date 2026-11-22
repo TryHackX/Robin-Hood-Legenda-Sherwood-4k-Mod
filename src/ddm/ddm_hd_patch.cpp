@@ -342,6 +342,100 @@ namespace {
         }
         return s;
     }
+
+    // The game's cursor in menus and dialogs (see GetCursor), per storage it was drawn into (the flip chain
+    // has two; the pointer keeps a background copy for each).
+    struct CursorRec {
+        const uint8_t* bits = nullptr;
+        int x = 0, y = 0, w = 0, h = 0;
+        std::vector<uint16_t> under, after;     // the frame there before / after the cursor was drawn
+        const Picture* pic = nullptr;
+        uint32_t factor = 0;
+        std::vector<uint32_t> overlay;          // (2w+2) x (2h+2), see GetCursor
+        unsigned generation = 0;
+        unsigned lastUse = 0;
+    };
+    CursorRec g_cursorRecs[2];
+    unsigned  g_cursorGen = 0, g_cursorUse = 0, g_cursorsDrawn = 0, g_cursorsNoHd = 0;
+
+    // The HD picture as the presenter lays it over the output - what End() does in the shadow, premultiplied:
+    // out = colour * a + below * (what the shadow leaves of it) * (1 - a).
+    void BuildCursorOverlay(CursorRec& r) {
+        const Picture* p = r.pic;
+        const int tw = r.w * 2 + 2, th = r.h * 2 + 2;
+        r.overlay.assign(static_cast<size_t>(tw) * th, 0u);
+        const uint32_t f = (std::min)(r.factor, 256u);
+        for (int y = 0; y < p->h2 && y < 2 * r.h; ++y) {
+            for (int x = 0; x < p->w2 && x < 2 * r.w; ++x) {
+                const size_t k = static_cast<size_t>(y) * p->w2 + x;
+                const uint32_t c = p->bgra[k], a = c >> 24, s = p->shade[k];
+                const uint32_t m = 256 - ((256 - f) * s + 127) / 255;           // of 256, as Shade()
+                const uint32_t keep = (m * (255 - a) + 128) / 256;             // of 255
+                const uint32_t b = ((c & 0xFF) * a + 127) / 255, g = (((c >> 8) & 0xFF) * a + 127) / 255,
+                               rr = (((c >> 16) & 0xFF) * a + 127) / 255;
+                r.overlay[static_cast<size_t>(y + 1) * tw + static_cast<size_t>(x + 1)] = ((255 - keep) << 24) | (rr << 16) | (g << 8) | b;
+            }
+        }
+    }
+
+    // after the pointer drew the cursor (op.kind 4, see BeginShadowPicture): remembered for the presenter
+    void EndCursor(const Op& op) {
+        CursorRec* r = nullptr;
+        for (CursorRec& c : g_cursorRecs) {
+            if (c.bits == op.dst.bits) r = &c;
+        }
+        if (!r) {
+            r = &g_cursorRecs[0];
+            for (CursorRec& c : g_cursorRecs) {
+                if (c.lastUse < r->lastUse) r = &c;
+            }
+        }
+        r->bits = op.dst.bits;
+        r->lastUse = ++g_cursorUse;
+        const bool sized = r->w == op.w && r->h == op.h;
+        r->x = op.x;
+        r->y = op.y;
+        r->w = op.w;
+        r->h = op.h;
+        r->under = op.before;
+        r->after.resize(static_cast<size_t>(op.w) * op.h);
+        for (int y = 0; y < op.h; ++y) {
+            std::memcpy(r->after.data() + static_cast<size_t>(y) * op.w,
+                        op.dst.bits + static_cast<size_t>(op.y + y) * op.dst.pitch + static_cast<size_t>(op.x) * 2,
+                        static_cast<size_t>(op.w) * 2);
+        }
+        const Picture* p = static_cast<const Picture*>(op.picture);
+        if (p != r->pic || op.factor != r->factor || !sized || r->overlay.empty()) {
+            r->pic = p;
+            r->factor = op.factor;
+            BuildCursorOverlay(*r);
+            r->generation = ++g_cursorGen;
+        }
+        ++g_cursorsDrawn;
+    }
+}
+
+bool GetCursor(const uint8_t* frameBits, int pitch, Cursor& out) {
+    if (!frameBits || pitch <= 0) return false;
+    for (const CursorRec& r : g_cursorRecs) {
+        if (r.bits != frameBits || r.overlay.empty() || r.w <= 0 || r.h <= 0) continue;
+        // the frame must still hold the cursor exactly as it was drawn (else it moved on, or something covered it)
+        for (int y = 0; y < r.h; ++y) {
+            if (std::memcmp(frameBits + static_cast<size_t>(r.y + y) * pitch + static_cast<size_t>(r.x) * 2,
+                            r.after.data() + static_cast<size_t>(y) * r.w, static_cast<size_t>(r.w) * 2) != 0) {
+                return false;
+            }
+        }
+        out.x = r.x;
+        out.y = r.y;
+        out.w = r.w;
+        out.h = r.h;
+        out.under = r.under.data();
+        out.overlay = r.overlay.data();
+        out.generation = r.generation;
+        return true;
+    }
+    return false;
 }
 
 bool Active() {
@@ -564,6 +658,7 @@ void Reset() {
     g_shadows.clear();
     g_picSeen.clear();
     g_comp.clear();
+    for (CursorRec& c : g_cursorRecs) c.bits = nullptr;
 }
 
 void OnCopy(const Buf& dst, int dx, int dy, const Buf& src, const RECT& s, bool dstIsScreen, bool srcIsScreen) {
@@ -740,9 +835,12 @@ bool BeginKeyed(const Buf& dst, int dx, int dy, const Buf& src, const RECT& s, u
 
 bool BeginShadowPicture(const uint16_t* src, uint16_t* dst, int w, int h, uint32_t factor, uint32_t marker, bool keyed, Op& op) {
     const Timed timed;
-    if (g_cursor || !BaseOn() || !src || !dst) return false;
+    if (!BaseOn() || !src || !dst) return false;
     Buf db{}, sb{};
-    if (!FindLockedBuf(dst, db) || !FrameSized(db) || !ActiveFor(db.bits) || !FindLockedBuf(src, sb) || sb.bits == db.bits) return false;
+    if (!FindLockedBuf(dst, db) || !FrameSized(db) || (!g_cursor && !ActiveFor(db.bits)) || !FindLockedBuf(src, sb) ||
+        sb.bits == db.bits) {
+        return false;
+    }
     const size_t off = static_cast<size_t>(reinterpret_cast<const uint8_t*>(dst) - db.bits);
     op.dst = db;
     op.x = static_cast<int>((off % static_cast<size_t>(db.pitch)) / 2);
@@ -754,6 +852,19 @@ bool BeginShadowPicture(const uint16_t* src, uint16_t* dst, int w, int h, uint32
     const int sx = static_cast<int>((soff % static_cast<size_t>(sb.pitch)) / 2), sy = static_cast<int>(soff / static_cast<size_t>(sb.pitch));
     if (sx + w > sb.w || sy + h > sb.h) return false;
     const RECT r{ sx, sy, sx + w, sy + h };
+    if (g_cursor) {
+        // the pointer's cursor: no patch (see SetCursorDrawing) - remembered for the presenter (EndCursor)
+        const Picture* p = FindPicture(sb, r, keyed ? 0x07C0u : 0xFFFFFFFFu, marker & 0xFFFF);
+        if (!p) {
+            ++g_cursorsNoHd;
+            return false;
+        }
+        op.kind = 4;
+        op.picture = p;
+        op.factor = factor;
+        KeepBefore(op);
+        return true;
+    }
     if (const Picture* p = FindPicture(sb, r, keyed ? 0x07C0u : 0xFFFFFFFFu, marker & 0xFFFF)) {
         op.kind = 2;
         op.picture = p;
@@ -773,6 +884,10 @@ bool BeginShadowPicture(const uint16_t* src, uint16_t* dst, int w, int h, uint32
 void End(Op& op) {
     const Timed timed;
     if (op.kind == 0) return;
+    if (op.kind == 4) {
+        EndCursor(op);
+        return;
+    }
     Shadow* sh = Find(op.dst.bits);
     if (!sh) {
         if (op.kind == 3) return;
@@ -1027,9 +1142,10 @@ bool MapPicture(const Buf& src, const RECT& r, int& wk, int& hk, const uint32_t*
 int Describe(char* out, int size) {
     return std::snprintf(out, size,
                          "shadows=%u created=%u resets=%u copies=%u glyphs=%u glyphsNoHd=%u pictures=%u picturesNoHd=%u "
-                         "picLoaded=%u picCollected=%u ui=%u/%u active=%d",
+                         "picLoaded=%u picCollected=%u ui=%u/%u active=%d cursors=%u cursorsNoHd=%u",
                          static_cast<unsigned>(g_shadows.size()), g_created, g_resets, g_copies, g_glyphs, g_glyphsNoHd,
-                         g_pictures, g_picturesNoHd, g_picLoaded, g_picCollected, g_uiFound, g_uiAsked, Active() ? 1 : 0);
+                         g_pictures, g_picturesNoHd, g_picLoaded, g_picCollected, g_uiFound, g_uiAsked, Active() ? 1 : 0,
+                         g_cursorsDrawn, g_cursorsNoHd);
 }
 
 } // namespace DDM::HD::Patch

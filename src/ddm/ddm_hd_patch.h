@@ -63,8 +63,24 @@ namespace DDM::HD::Patch {
     bool BeginShadowPicture(const uint16_t* src, uint16_t* dst, int w, int h, uint32_t factor, uint32_t marker, bool keyed, Op& op);
     void End(Op& op);
 
-    // The game's cursor is being drawn (0x005F1700): its pictures are not patches.
+    // The game's cursor is being drawn (0x005F1700): its pictures are not patches (the background under it must
+    // come back in HD when it moves on) - the presenter draws its HD picture over the output instead (GetCursor).
     void SetCursorDrawing(bool on);
+
+    // The game's cursor in menus and dialogs (2026-11-22, user: "the cursor on the scroll is the old one, in the
+    // game the new one"): the pointer (0x005F1700) draws it 1:1 with its shadow (BlendBlit -> 0x00622550) into
+    // the frame, which the presenter enlarged with everything else. Presenter, main thread: the cursor in the
+    // presented storage `frameBits` while the frame there still holds it exactly as it was drawn - its place
+    // (frame pixels), what it covered (w x h RGB565: the frame is shown without the 1x cursor) and its HD picture
+    // ((2w+2) x (2h+2) BGRA with a clear border, premultiplied colour; alpha = how much of what lies below goes,
+    // its shadow included). false = none (moved, covered, no HD picture).
+    struct Cursor {
+        int x = 0, y = 0, w = 0, h = 0;
+        const uint16_t* under = nullptr;
+        const uint32_t* overlay = nullptr;
+        unsigned generation = 0;            // changes with the overlay's content
+    };
+    bool GetCursor(const uint8_t* frameBits, int pitch, Cursor& out);
 
     // Text the game draws with GDI (TextOutA / TextOutW into a surface's DC: lists of saved games, key
     // bindings, Arial): drawn again with the same font twice as large, smoothed. Import slots of Game.exe.

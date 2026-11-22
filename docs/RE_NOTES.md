@@ -220,11 +220,21 @@ zasłoniętych części sprite'a `0x5BBF20/0x5BC3C0`, stan kamery 5 = pełne odr
 przewijanie, F1 szybki zapis, F5 szybki odczyt, Alt pole widzenia, 1–5 bohaterowie — mod używa F6/F7/F8.
 
 Dopisane 2026-11-22 (v1.2.9, opis: `docs\HD_MODE.md` „Zgłoszenia użytkownika w trakcie gry”, §5g):
-- `0x0058C88B` — procedura pikselowa z testem głębi (wywołanie z `0x005911C5`), czyta obraz poziomu pod tym, co
-  rysuje, i potrafi wyjść za koniec powierzchni (Nottingham: 8014 B za powierzchnią 2304×3520) → access violation przy
-  powierzchniach przydzielonych na styk; DDM daje każdej powierzchni zerowany margines 128 wierszy + 4 KB z obu stron.
+- `0x0058C88B` — w `0x0058C7A0`, jednej z 10 procedur pasków pionowych wypełniacza wielokątów stożków widzenia
+  (`0x00590C90..0x005934B0`; wybór w `0x0058C6F0`: `[obj+0x20C]` 1:1 `0x58C7A0/0x58C960/0x58CB40/0x58CD00`, `+0x210`
+  ×2 `0x58CEE0/0x58D0A0/0x58D290/0x58D450`, `+0x214` pół `0x58D630/0x58D7E0`; 565/555), thiscall (próg głębi, x,
+  y0, y1, wartość, przyrost na wiersz), `ret 0x18`, rysuje y0..y1 tylko gdy y1 > y0. Obiekt: blokada celu `+0x08`
+  (silnikowa: `+4` szer., `+6` wys., `+8` pitch, `+0x10` bity → tu `+0x0C/+0x0E/+0x10/+0x18`), blokada mapy `+0x2C`
+  (`+0x30/+0x32/+0x34/+0x3C`), piksele celu `+0x20` / pitch px `+0x24`, mapy `+0x44` / `+0x48`, bufor głębi
+  `+0x50` / krok `+0x54`, kamera `+0x90/+0x94`, kolor `+0xC2..+0xC6`. Czyta mapę w (x + kamera, y + kamera) bez
+  sprawdzania rozmiaru — przy widoku większym od poziomu za jej końcem (Nottingham 8014 B, Rozdroża 131 wierszy).
+  Silnikowa blokada `0x005E5A00(id, info, 0)` wypełnia info z DDSURFACEDESC.
 - Kursor misji `0x005F1CA0`: kopia ekranu pod kursorem do dwóch powierzchni 55×55, `Lock` całego obrazka kursora
   (powierzchnia jego rozmiaru, np. 35×43; klucz 0x07C0), złożenie programowe z cieniem na jednej kopii, blit ×2 z kluczem.
+- Kursor w menu i oknach: wskaźnik `0x005F1700` (thiscall, obiekt w `esi`): pozycja `[0x6C1206]`/`[0x6C1216]` (u16),
+  obrazek z `0x00600920` (menedżer `[0x6C1338]`), licznik `[esi+0x10]` wybiera parę prostokątów `+0x14/+0x3C` albo
+  `+0x28/+0x50` i powierzchnię tła `[0x6C125C]` / `[0x6C12FC]` (kopia ekranu `0x005E6440`), potem `BlendBlit`
+  `0x005EC5F0(obrazek, …, cel 0, …, klucz cienia 0x1F, 50 %, 1)` → 1:1 `0x00622550`.
 - `[0x006C0FA8]` (wskaźnik silnika misji) zostaje ustawiony po wyjściu z misji do menu głównego — „jest silnik” nie
   znaczy „trwa misja”.
 - Animacje poziomu (`DATA\Animations\<pora>\*.rhs`) rysuje rozciągnięcie DirectDraw; krok = `flags + 1` tików, ruch

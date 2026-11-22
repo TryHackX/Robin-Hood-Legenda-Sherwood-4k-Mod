@@ -371,7 +371,13 @@ Do sprawdzenia przy okazji: czy miganie ikon akcji ma teraz właściwe tempo; po
      zapisie z tłem HD (ścieżka (A) także „w misji”); (4) klatki pośrednie animacji poziomu (ptaki, kury, flagi, dym,
      muchy…; 7 636) + płynny tor lotu, druga próba odrzuconych par postaci (+11 386, pokrycie 65 → 68 %), magazyny
      odchudzone (`tools\hd\compact_between.py`) i wydane jako `SherwoodHD-4-klatki-posrednie-2.zip` w `hd-pack-1`.
-     Kącik oka Robina — tak jest w oryginale. Opis: `docs\HD_MODE.md` („Zgłoszenia użytkownika w trakcie gry”, §5g).
+     Opis: `docs\HD_MODE.md` („Zgłoszenia użytkownika w trakcie gry”, §5g).
+   - ✔ **v1.2.10 — wywalenie przy stożkach widzenia, kursor HD w oknach, brew Robina** (2026-11-22; użytkownik:
+     „miałem crasha”, „kursor na zwoju w starej wersji”, „czemu oko nie jest poprawione”): (1) to samo `0x0058C88B`
+     drugi raz, 131 wierszy za mapą — stożki widzenia czytały mapę za jej krawędzią, gdy widok jest większy od poziomu
+     → paski przycinane do mapy (10 procedur); (2) kursor w menu i oknach z obrazka HD (prezenter: klatka bez kursora
+     1× + nakładka HD); (3) czarne piksele interfejsu nad pasem za poziomem brane za świat (dziury w brwi i liściach)
+     → pas w kolorze 0x0801. Pierwsza ocena brwi („jak w oryginale”) była błędna. Opis: `docs\HD_MODE.md` (ten sam rozdział).
    - ◐ **Kooperacja — rozpoznanie** (2026-11-19, pytanie użytkownika o multiplayer w stylu Noita Entangled Worlds: każdy
      swoja kamera i zaznaczenie, gospodarz wybiera drużynę, bez podbierania postaci): sonda tylko w teście w tle
      (`src\coop_probe.cpp`, `tools\coop_run.ps1`, `tools\coop_compare.py`). Warstwa rozkazów znaleziona (tłumacz wejścia

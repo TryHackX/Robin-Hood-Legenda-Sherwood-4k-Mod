@@ -1,5 +1,6 @@
 #include "widescreen_patch.h"
 #include "config.h"
+#include "ddm/ddm_hd.h"
 #include "ui_scale.h"
 #include "view_zoom.h"
 #include "logger.h"
@@ -291,6 +292,120 @@ namespace {
         Logger::Info("WidescreenPatch: HD view may zoom out from 2.0 to 1.0 on every level: %d.", ok ? 1 : 0);
     }
 
+    // ---- coloured see-through areas over the level: cut to the level picture (2026-11-22) ----
+    // A polygon filler (0x00590xxx/0x00592xxx/0x00593xxx, object in ecx; vision cones, the fields under left Shift)
+    // draws them as vertical spans with one of ten span routines (chosen at 0x0058C6F0: [obj+0x20C] 1:1,
+    // [obj+0x210] twice as large, [obj+0x214] half as large; 565 / 555), thiscall (depth threshold, x, y0, y1,
+    // value, value per row), ret 0x18. Each reads the level picture - the map surface, locked: [obj+0x44] bits,
+    // [obj+0x48] pitch, size at [obj+0x30] / [obj+0x32] - at (x + [obj+0x90], y + [obj+0x94]): the place on the
+    // screen plus the camera, never checked against the level's size. The game's own views stayed inside a level;
+    // the HD view's 1.0 on small levels and the full-height view show a black band beyond it, and a span over the
+    // band read past the map surface: the user's game ended there twice (0x0058C88B: 2026-11-21 Nottingham, 8 KB
+    // past its end; 2026-11-22 a crossroads map 1408x960, 131 rows past it - more than the surfaces' margins).
+    // Each span is cut to the rows and columns the level picture (and the target) has; outside them there is no
+    // level to colour anyway.
+    using Span_t = void(__fastcall*)(uint8_t* obj, void* edx, int depth, int x, int y0, int y1, int value, int perRow);
+    enum SpanKind { kSpan1x, kSpan2x, kSpanHalf };
+    std::atomic<unsigned> g_spansCut{ 0 };
+
+    // false: nothing of the span lies over the level picture (left out). y0..y1 inclusive; the routines draw
+    // nothing when y1 <= y0.
+    bool ClipSpan(const uint8_t* o, SpanKind kind, int x, int& y0, int& y1, int& value, int perRow) {
+        const int dstW = *reinterpret_cast<const uint16_t*>(o + 0x0C), dstH = *reinterpret_cast<const uint16_t*>(o + 0x0E);
+        const int srcW = *reinterpret_cast<const uint16_t*>(o + 0x30);
+        int srcH = *reinterpret_cast<const uint16_t*>(o + 0x32);
+        const int offX = *reinterpret_cast<const int*>(o + 0x90), offY = *reinterpret_cast<const int*>(o + 0x94);
+        if (dstW <= 0 || dstH <= 0 || srcW <= 0 || srcH <= 0) return true;      // sizes not known: as the game does it
+        // test harness only ("dbg 1024"): the level counts 400 rows shorter - the cut spans can be seen
+        if (DDM::HD::DebugFlags() & 1024u) srcH = (std::max)(1, srcH - 400);
+        if (kind == kSpanHalf) {
+            // target (x >> 1, y >> 1), level (x + 1 + offX, y + 1 + offY); rows y0, y0 + 2, ... ((y1 - y0 + 2) >> 1)
+            const int lx = x + 1 + offX;
+            if (x < 0 || (x >> 1) >= dstW || lx < 0 || lx >= srcW) return false;
+            const int lo = (std::max)(0, -1 - offY);
+            if (y0 < lo) {
+                const int k = (lo - y0 + 1) / 2;
+                y0 += 2 * k;
+                value += 2 * k * perRow;
+            }
+            if (y1 <= y0) return false;
+            const int room = srcH - 2 - offY - y0;                  // level rows left below the first one
+            const int fit = (std::min)(room / 2 + 1, dstH - (y0 >> 1));
+            if (room < 0 || fit <= 0) return false;
+            if (((y1 - y0 + 2) >> 1) > fit) y1 = y0 + 2 * fit - 1;
+            return y1 > y0;
+        }
+        // 1:1 / twice as large: level (x + offX, y + offY); the target (x, y) / (2x, 2y) 2x2
+        const int lx = x + offX;
+        const int tw = kind == kSpan2x ? dstW / 2 : dstW, th = kind == kSpan2x ? dstH / 2 : dstH;
+        if (x < 0 || x >= tw || lx < 0 || lx >= srcW) return false;
+        const int lo = (std::max)(0, -offY), hi = (std::min)(th - 1, srcH - 1 - offY);
+        if (y0 < lo) {
+            value += (lo - y0) * perRow;
+            y0 = lo;
+        }
+        if (y1 > hi) y1 = hi;
+        return y1 > y0;
+    }
+
+    template <int I>
+    struct SpanHook {
+        static Span_t orig;
+        static SpanKind kind;
+        static void __fastcall Hook(uint8_t* obj, void* edx, int depth, int x, int y0, int y1, int value, int perRow) {
+            static bool s_seen = false;
+            if (!s_seen) {
+                s_seen = true;
+                Logger::Info("WidescreenPatch: span routine %d first used (level picture %dx%d, target %dx%d, camera %d,%d).", I,
+                             *reinterpret_cast<const uint16_t*>(obj + 0x30), *reinterpret_cast<const uint16_t*>(obj + 0x32),
+                             *reinterpret_cast<const uint16_t*>(obj + 0x0C), *reinterpret_cast<const uint16_t*>(obj + 0x0E),
+                             *reinterpret_cast<const int*>(obj + 0x90), *reinterpret_cast<const int*>(obj + 0x94));
+            }
+            const int x0 = x, oy0 = y0, oy1 = y1;
+            const bool keep = ClipSpan(obj, kind, x, y0, y1, value, perRow);
+            if (oy1 > oy0 && (!keep || y0 != oy0 || y1 != oy1)) {
+                if (g_spansCut.fetch_add(1, std::memory_order_relaxed) < 3) {
+                    Logger::Info("WidescreenPatch: a see-through area reached past the level picture (%dx%d, camera %d,%d): "
+                                 "span x=%d rows %d..%d cut to %s.",
+                                 *reinterpret_cast<const uint16_t*>(obj + 0x30), *reinterpret_cast<const uint16_t*>(obj + 0x32),
+                                 *reinterpret_cast<const int*>(obj + 0x90), *reinterpret_cast<const int*>(obj + 0x94),
+                                 x0, oy0, oy1, keep ? "the rows over the level" : "nothing");
+                }
+            }
+            if (keep) orig(obj, edx, depth, x, y0, y1, value, perRow);
+        }
+    };
+    template <int I> Span_t SpanHook<I>::orig = nullptr;
+    template <int I> SpanKind SpanHook<I>::kind = kSpan1x;
+
+    template <int I>
+    int InstallSpan(uintptr_t addr, SpanKind kind, const uint8_t (&prolog)[9]) {
+        SpanHook<I>::kind = kind;
+        return std::memcmp(reinterpret_cast<const void*>(addr), prolog, sizeof(prolog)) == 0 &&
+               MH_CreateHook(reinterpret_cast<LPVOID>(addr), reinterpret_cast<LPVOID>(&SpanHook<I>::Hook),
+                             reinterpret_cast<LPVOID*>(&SpanHook<I>::orig)) == MH_OK &&
+               MH_EnableHook(reinterpret_cast<LPVOID>(addr)) == MH_OK ? 1 : 0;
+    }
+
+    void PatchSpanClip() {
+        static const uint8_t kA[9] = { 0x8B, 0x44, 0x24, 0x10, 0x83, 0xEC, 0x18, 0x53, 0x55 };   // mov eax,[esp+10h]; sub esp,18h; push ebx; push ebp
+        static const uint8_t kB[9] = { 0x83, 0xEC, 0x18, 0x53, 0x55, 0x8B, 0x6C, 0x24, 0x28 };   // sub esp,18h; push ebx; push ebp; mov ebp,[esp+28h]
+        static const uint8_t kC[9] = { 0x8B, 0x44, 0x24, 0x0C, 0x8B, 0x54, 0x24, 0x10, 0x83 };   // mov eax,[esp+0Ch]; mov edx,[esp+10h]; sub ...
+        static const uint8_t kD[9] = { 0x83, 0xEC, 0x18, 0x8B, 0x44, 0x24, 0x24, 0x53, 0x55 };   // sub esp,18h; mov eax,[esp+24h]; push ebx; push ebp
+        int n = 0;
+        n += InstallSpan<0>(0x0058C7A0, kSpan1x, kA);
+        n += InstallSpan<1>(0x0058C960, kSpan1x, kB);
+        n += InstallSpan<2>(0x0058CB40, kSpan1x, kA);
+        n += InstallSpan<3>(0x0058CD00, kSpan1x, kB);
+        n += InstallSpan<4>(0x0058CEE0, kSpan2x, kC);
+        n += InstallSpan<5>(0x0058D0A0, kSpan2x, kD);
+        n += InstallSpan<6>(0x0058D290, kSpan2x, kC);
+        n += InstallSpan<7>(0x0058D450, kSpan2x, kD);
+        n += InstallSpan<8>(0x0058D630, kSpanHalf, kA);
+        n += InstallSpan<9>(0x0058D7E0, kSpanHalf, kA);
+        Logger::Info("WidescreenPatch: see-through areas over the level (vision cones, Shift fields) cut to the level picture: %d of 10 span routines.", n);
+    }
+
     void PatchFullHeightView() {
         static const uint8_t kFsub80[] = { 0xD8, 0x25, 0x98, 0x75, 0x67, 0x00 };
         static const uint8_t kFsub0[]  = { 0xD8, 0x25, 0x88, 0x74, 0x67, 0x00 };
@@ -432,6 +547,8 @@ void Initialize() {
     if (cfg.hdView) {
         PatchCanZoomOut();
     }
+    // always: any view larger than a level (the HD view, the full height, the smooth zoom, a large resolution)
+    PatchSpanClip();
 
     // 4. Hook camera clamping & positioning functions to prevent negative-coordinate crashes
     // on maps smaller than the viewport (e.g. Sherwood Hideout in 1080p/1440p/4K).

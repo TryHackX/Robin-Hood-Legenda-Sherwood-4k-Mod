@@ -59,7 +59,14 @@ namespace {
         float lupaM, lupaWorldH;             // layer 3: magnification, frame rows that hold the world
         float lupaX, lupaY;                  // layer 3: frame position at the output's top-left corner
         float patchOn, pad0, pad1, pad2;     // menus: HD patches (t6 frame pixel it belongs to, t7 HD) over the layers
+        float cursorX, cursorY, cursorW, cursorH;   // menus: the game's cursor (texture pixels; W 0 = none), t8 its HD picture
     };
+
+    // the game's cursor in menus and dialogs, drawn from its HD picture over the output (ddm_hd_patch.h GetCursor)
+    ID3D11Texture2D*          g_cursorTex = nullptr;
+    ID3D11ShaderResourceView* g_cursorSrv = nullptr;
+    int      g_cursorTexW = 0, g_cursorTexH = 0;
+    unsigned g_cursorGen = 0;
 
     // the world before the mission's windows were drawn (layer 3), same format as the frame texture
     ID3D11Texture2D*          g_snapTex = nullptr;
@@ -110,9 +117,10 @@ namespace {
         "Texture2D backShow : register(t5);\n"
         "Texture2D<uint> patchRef : register(t6);\n"
         "Texture2D patchHd : register(t7);\n"
+        "Texture2D cursorTex : register(t8);\n"
         "SamplerState smpPoint : register(s0);\n"
         "SamplerState smpLinear : register(s1);\n"
-        "cbuffer C : register(b0) { float2 texSize; float2 outSize; float mode; float layer; float2 cropOrigin; float4 full; float4 lupa; float4 extra; };\n"
+        "cbuffer C : register(b0) { float2 texSize; float2 outSize; float mode; float layer; float2 cropOrigin; float4 full; float4 lupa; float4 extra; float4 cursor; };\n"
         "uint Pack565(float3 c) {\n"
         "  return ((((uint)(c.r * 255.0 + 0.5)) >> 3) << 11) | ((((uint)(c.g * 255.0 + 0.5)) >> 2) << 5) | (((uint)(c.b * 255.0 + 0.5)) >> 3);\n"
         "}\n"
@@ -182,7 +190,7 @@ namespace {
         "  if (mode >= 0.5 && m > 1.001 && m < 1.999) return CatRom(world, texel);\n"
         "  return Filtered(world, texel, outSize / texSize * m);\n"
         "}\n"
-        "float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target {\n"
+        "float4 Base(float4 pos, float2 uv) {\n"
         "  if (extra.x > 0.5) {\n"
         "    int2 t = int2(min(floor(uv * texSize), texSize - 1.0));\n"
         "    if (PatchState(t) == 1 && CountPatchOther(t) <= 4) {\n"
@@ -220,6 +228,19 @@ namespace {
         "  float2 c = f - 0.5;\n"
         "  float2 ff = (c - clamp(c, -region, region)) * scale + 0.5;\n"
         "  return float4(tex.Sample(smpLinear, (i + ff) / texSize).rgb, 1.0);\n"
+        "}\n"
+        // menus: the game's cursor from its HD picture over everything (the frame texture holds what it covered,
+        // so every layer shows its HD picture under it); t8 = 2x picture with a clear 1-texel border, premultiplied
+        "float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target {\n"
+        "  float4 o = Base(pos, uv);\n"
+        "  if (cursor.z > 0.5) {\n"
+        "    float2 q = uv * texSize - cursor.xy;\n"
+        "    if (q.x > -0.5 && q.y > -0.5 && q.x < cursor.z + 0.5 && q.y < cursor.w + 0.5) {\n"
+        "      float4 c = cursorTex.Sample(smpLinear, (q * 2.0 + 1.0) / (cursor.zw * 2.0 + 2.0));\n"
+        "      o.rgb = c.rgb + o.rgb * (1.0 - c.a);\n"
+        "    }\n"
+        "  }\n"
+        "  return o;\n"
         "}\n";
 
     template <typename T>
@@ -534,7 +555,45 @@ namespace {
         return slot;
     }
 
+    void ReleaseCursor() {
+        SafeRelease(g_cursorSrv);
+        SafeRelease(g_cursorTex);
+        g_cursorTexW = g_cursorTexH = 0;
+        g_cursorGen = 0;
+    }
+
+    // the HD picture of the game's cursor (GetCursor) in t8: a texture of its size, uploaded when it changes
+    bool PrepareCursor(const DDM::HD::Patch::Cursor& c) {
+        const int tw = c.w * 2 + 2, th = c.h * 2 + 2;
+        if (c.w <= 0 || c.h <= 0 || tw > 1024 || th > 1024 || !c.overlay) return false;
+        if (!g_cursorTex || g_cursorTexW != tw || g_cursorTexH != th) {
+            ReleaseCursor();
+            D3D11_TEXTURE2D_DESC td{};
+            td.Width = static_cast<UINT>(tw);
+            td.Height = static_cast<UINT>(th);
+            td.MipLevels = 1;
+            td.ArraySize = 1;
+            td.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+            td.SampleDesc.Count = 1;
+            td.Usage = D3D11_USAGE_DEFAULT;
+            td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+            if (FAILED(g_dev->CreateTexture2D(&td, nullptr, &g_cursorTex)) ||
+                FAILED(g_dev->CreateShaderResourceView(g_cursorTex, nullptr, &g_cursorSrv))) {
+                ReleaseCursor();
+                return false;
+            }
+            g_cursorTexW = tw;
+            g_cursorTexH = th;
+        }
+        if (c.generation != g_cursorGen) {
+            g_ctx->UpdateSubresource(g_cursorTex, 0, nullptr, c.overlay, static_cast<UINT>(tw * 4), 0);
+            g_cursorGen = c.generation;
+        }
+        return true;
+    }
+
     void ReleaseD3D() {
+        ReleaseCursor();
         ReleasePatch(g_patch[0]);
         ReleasePatch(g_patch[1]);
         ReleaseLayer();
@@ -920,6 +979,8 @@ namespace {
         bool backdropOn = false;
         bool lupaOn = false;
         PatchSlot* patch = nullptr;
+        DDM::HD::Patch::Cursor cursor;
+        bool cursorOn = false;
         const int frameW = w, frameH = h;
         const uint8_t* const frameBits = bits;
         ViewZoom::View lupa;
@@ -928,11 +989,13 @@ namespace {
             bits += static_cast<size_t>(crop.top) * pitch + static_cast<size_t>(crop.left) * 2;
             w = crop.right - crop.left;
             h = crop.bottom - crop.top;
-            const unsigned dbg = DDM::HD::DebugFlags();              // test harness: 64/128/256 leave a layer out
+            const unsigned dbg = DDM::HD::DebugFlags();              // test harness: 64/128/256/512 leave a layer out
             backdropOn = !(dbg & 256u) && PrepareBackdrop(frameW, frameH);           // a mission's dialog: only it enlarged
             layerOn = !backdropOn && !(dbg & 128u) && PrepareLayer(crop, w, h);      // HD menu pictures, where there are some
             patch = PreparePatch(frameBits, crop, w, h);                            // HD letters and pictures over both
             if (dbg & 64u) patch = nullptr;
+            // the game's cursor from its HD picture (over everything; the frame shown without the 1x one)
+            cursorOn = !(dbg & 512u) && DDM::HD::Patch::GetCursor(frameBits, pitch, cursor) && PrepareCursor(cursor);
         } else if (lupaFrame && g_snapValid && g_snapTex && g_snapW == w && g_snapH == h) {
             lupaOn = true;      // the world went to its texture before the windows were drawn
         }
@@ -945,16 +1008,42 @@ namespace {
             return false;
         }
         auto* dst = static_cast<uint8_t*>(map.pData);
+        // the game's 1x cursor out of the frame texture: what it covered (its HD picture comes over the output)
+        auto uncover = [&](bool is565) {
+            if (!cursorOn) return;
+            for (int y = 0; y < cursor.h; ++y) {
+                const int ty = cursor.y + y - crop.top;
+                if (ty < 0 || ty >= h) continue;
+                uint8_t* row = dst + static_cast<size_t>(ty) * map.RowPitch;
+                const uint16_t* under = cursor.under + static_cast<size_t>(y) * cursor.w;
+                for (int x = 0; x < cursor.w; ++x) {
+                    const int tx = cursor.x + x - crop.left;
+                    if (tx < 0 || tx >= w) continue;
+                    const uint32_t p = under[x];
+                    if (is565) {
+                        reinterpret_cast<uint16_t*>(row)[tx] = static_cast<uint16_t>(p);
+                    } else {
+                        uint32_t r = (p >> 11) & 0x1F, g = (p >> 5) & 0x3F, b = p & 0x1F;
+                        r = (r << 3) | (r >> 2);
+                        g = (g << 2) | (g >> 4);
+                        b = (b << 3) | (b >> 2);
+                        reinterpret_cast<uint32_t*>(row)[tx] = 0xFF000000u | (r << 16) | (g << 8) | b;
+                    }
+                }
+            }
+        };
         if (g_tex565) {
             const size_t rowBytes = static_cast<size_t>(w) * 2;
             for (int y = 0; y < h; ++y) {
                 std::memcpy(dst + static_cast<size_t>(y) * map.RowPitch, bits + static_cast<size_t>(y) * pitch, rowBytes);
             }
+            uncover(true);
             RenderDDraw::DrawOverlayRGB565(dst, static_cast<LONG>(map.RowPitch), w, h, bits, pitch);
             SettingsMenu::Draw(dst, static_cast<LONG>(map.RowPitch), false, w, h, crop.left, crop.top, bits, pitch);
         } else {
             RenderDDraw::ConvertRGB565ToXRGB8888_SSE2(reinterpret_cast<const uint16_t*>(bits), pitch,
                                                       reinterpret_cast<uint32_t*>(dst), static_cast<int>(map.RowPitch), w, h);
+            uncover(false);
             SettingsMenu::Draw(dst, static_cast<LONG>(map.RowPitch), true, w, h, crop.left, crop.top, bits, pitch);
         }
         g_ctx->Unmap(g_tex, 0);
@@ -984,6 +1073,12 @@ namespace {
             c.cropX = static_cast<float>(crop.left);
             c.cropY = static_cast<float>(crop.top);
             c.patchOn = patch ? 1.0f : 0.0f;
+            if (cursorOn) {
+                c.cursorX = static_cast<float>(cursor.x - crop.left);
+                c.cursorY = static_cast<float>(cursor.y - crop.top);
+                c.cursorW = static_cast<float>(cursor.w);
+                c.cursorH = static_cast<float>(cursor.h);
+            }
             int fx = 0, fy = 0, fw = 0, fh = 0;
             FitRect(frameW, frameH, static_cast<int>(g_bbW), static_cast<int>(g_bbH), fx, fy, fw, fh);
             c.fullX = static_cast<float>(fx);
@@ -1009,11 +1104,12 @@ namespace {
         g_ctx->VSSetShader(g_vs, nullptr, 0);
         g_ctx->PSSetShader(g_ps, nullptr, 0);
         g_ctx->PSSetConstantBuffers(0, 1, &g_cb);
-        ID3D11ShaderResourceView* srvs[8] = { g_srv, layerOn ? g_layerOrigSrv : nullptr, layerOn ? g_layerHdSrv : nullptr,
+        ID3D11ShaderResourceView* srvs[9] = { g_srv, layerOn ? g_layerOrigSrv : nullptr, layerOn ? g_layerHdSrv : nullptr,
                                               backdropOn ? g_backdropSrv : nullptr, lupaOn ? g_snapSrv : nullptr,
                                               (backdropOn && g_backShowOn) ? g_backShowSrv : nullptr,
-                                              patch ? patch->refSrv : nullptr, patch ? patch->hdSrv : nullptr };
-        g_ctx->PSSetShaderResources(0, 8, srvs);
+                                              patch ? patch->refSrv : nullptr, patch ? patch->hdSrv : nullptr,
+                                              cursorOn ? g_cursorSrv : nullptr };
+        g_ctx->PSSetShaderResources(0, 9, srvs);
         ID3D11SamplerState* samplers[2] = { g_smpPoint, g_smpLinear };
         g_ctx->PSSetSamplers(0, 2, samplers);
         g_ctx->Draw(3, 0);

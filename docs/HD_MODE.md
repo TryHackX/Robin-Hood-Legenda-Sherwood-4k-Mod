@@ -923,6 +923,18 @@ w górę), resztę powiększa prezenter — **tylko świat**:
     Nottingham 8014 bajtów za końcem powierzchni poziomu 2304×3520. Powierzchnie DDM miały dokładnie swój rozmiar
     (+32 B) — DirectDraw trzymał powierzchnie systemowe z pamięcią wokół, takie odczyty przechodziły niezauważone.
     Teraz każda powierzchnia ma przed sobą i za sobą zerowany margines 128 wierszy + 4 KB (`Surface::Alloc`, `ddm.cpp`).
+    **Drugi raz** (2026-11-22 01:01, gra 1.2.9, Rozdroża 1408×960 przy 1.0): 369 654 B = 131 wierszy za końcem — za
+    marginesem. Prawdziwa przyczyna: `0x0058C7A0` to jedna z 10 procedur pasków pionowych wypełniacza wielokątów
+    (`0x00590C90..0x005934B0`) — **stożki widzenia** przeciwników (oko w prawym górnym rogu „Pokaż / ukryj pole
+    widzenia nieprzyjaciela” + klik na żołnierza). Czyta obraz poziomu (powierzchnia mapy) w miejscu ekran + kamera,
+    bez sprawdzania jego rozmiaru; widoki gry nigdy nie wychodziły poza poziom, widok HD przy 1.0 na małym poziomie i
+    widok pełnej wysokości — tak (czarny pas), a stożek nad pasem czytał za mapą. Poprawka (1.2.10,
+    `widescreen_patch.cpp` `PatchSpanClip`): haki na wszystkie 10 procedur (`[obj+0x20C]` 1:1, `+0x210` ×2, `+0x214`
+    pół; obiekt: blokada celu `+0x08` — szer./wys. `+0x0C/+0x0E`, blokada mapy `+0x2C` — `+0x30/+0x32`, kamera
+    `+0x90/+0x94`), każdy pasek przycięty do wierszy i kolumn mapy i celu (początek przesunięty z poprawką wartości
+    `+= wiersze × przyrost`). Sprawdzone w tle: stożek żołnierza przy 2.0 (procedura 4) i 1.0 (procedura 0) rysuje
+    się jak dawniej; `dbg 1024` = poziom liczony o 400 wierszy niższy (do oglądania przycięcia). Samego stożka za
+    dolną krawędzią nie udało się złapać (żołnierze idą ścieżką u góry).
   - **Kursor i ikony akcji z „obwódką wycięcia”** (wiązanie, zamki, podnoszenie, krzyżyk): kursor misji
     (`0x005F1CA0`, ślad z 2026-11-22) kopiuje ekran pod sobą do dwóch powierzchni 55×55, blokuje swój obrazek
     (powierzchnia jego rozmiaru, cała, np. 35×43) i programowo składa go z cieniem na jednej z kopii; ta kopia idzie
@@ -933,8 +945,27 @@ w górę), resztę powiększa prezenter — **tylko świat**:
     alfą, cień = co najwyżej połowa ciemności jak u gry (`HdCursor`); bez niej — wydobyte piksele z kluczem 0x07C0
     też szukane, dopiero potem wygładzenie jak dawniej. Sprawdzone w tle: strzałka i pięści ostre, bez obwódki.
     Obrazków w `DATA\Interface\Default.res`: 1126, z wersją HD 1118 (`tools\hd\res_pictures.py`).
-  - **„Brew Robina i inne części są przezroczyste”** (zrzut portretu): tak wygląda oryginalny obrazek — prześwity
-    między liśćmi i półprzezroczysta zielona twarz są w pliku gry, HD oddaje je wiernie. Nie błąd.
+    **Kursor w menu i oknach** (1.2.10; użytkownik: „kursor na zwoju jest w starej wersji, a w grze już nowy”): tam
+    rysuje go inna procedura — wskaźnik `0x005F1700`: kopia tła spod kursora do jednej z dwóch powierzchni
+    (`[0x6C125C]` / `[0x6C12FC]`, na zmianę licznikiem `[esi+0x10]` — dwie pamięci łańcucha flip), potem `BlendBlit`
+    obrazka kursora 1:1 prosto do klatki (klucz cienia 0x001F, 50 %) → `0x00622550`. Jako łatka cienia (§5e) nie
+    może iść: po przejściu kursora tło HD pod nim by przepadło. Teraz `BeginShadowPicture` przy rysowaniu wskaźnika
+    zapamiętuje kursor (miejsce, piksele „przed” i „po”, obrazek HD po treści) zamiast łatki, a prezenter, gdy
+    pokazywana pamięć wciąż ma w tym miejscu kursor dokładnie taki, jak narysowany (`Patch::GetCursor`): wgrywa do
+    tekstury klatki piksele „przed” (wszystkie warstwy HD widzą tam tło, jakby kursora nie było) i na końcu shadera
+    kładzie obrazek HD (t8, 2× z przezroczystą ramką 1 teksela, kolor przemnożony przez pokrycie, alfa = ile znika z
+    tego, co pod spodem, razem z cieniem — tak jak `End()` składa łatkę). `dbg 512` = bez tego (do porównań).
+    Shadery prezentera sprawdza przed grą `tools\check_shader.py` (fxc z Windows SDK; DLL kompiluje je dopiero w grze).
+  - **„Brew Robina i inne części są przezroczyste”** (zrzut rogu z okiem). Pierwsza ocena była BŁĘDNA („tak wygląda
+    oryginalny obrazek”) — porównany był plik obrazka, nie to, co gra pokazuje; użytkownik dopytał 2026-11-22.
+    Porównanie w grze (ten sam róg z `HDMenu=1` i `HDMenu=0`, `tools\testcfg\user_copy_nohdui.ini`) i piksel po
+    pikselu z plikiem HD (`9e2d5bdbf05af92b.hdp`, twarz 74×60): plik jest pełny, a w grze w miejscu CZARNYCH pikseli
+    (brew, kontury liści) prześwitywała ziemia. Przyczyna w prezenterze (lupa, warstwa 3): piksel klatki równy kopii
+    świata = świat, pokazany powiększony; na małym poziomie przy 1.0 pas za krawędzią poziomu (`ClearOutsideLevel`)
+    był czarny, więc czarne piksele interfejsu nad nim liczyły się jako świat. Poprawka (1.2.10): pas wypełniany
+    kolorem 0x0801 (RGB 8,0,8 — wygląda jak czerń; w obrazkach interfejsu tylko pojedyncze piksele: 245 z 8,1 mln
+    w 1×, 349 z 17 mln w HD — reguła sąsiadów zostawia je interfejsowi). Sprawdzone w tle: brew i liście pełne,
+    zwoje z cieniem jak w oryginale (`tools\out\eye_compare2.png`: przed | po | oryginał 1×).
   - **Pytania ze starym tłem 1×**: „Czy rzeczywiście chcesz wyjść z gry…?” w MENU GŁÓWNYM (po misji) i „Na pewno
     chcesz zapisać grę na już istniejącej?” na ekranie zapisu. Ścieżka (A) w `OnScreenCopy` (ostatni rozpoznany
     ekran menu z czymś narysowanym na nim → obraz HD wokół) była wyłączona „w misji”, a wskaźnik silnika

@@ -513,8 +513,9 @@ kotwicą obrazka, nad którym jest kursor (lista obrazków z ostatniej klatki), 
 - Wskaźnik okien misji: RHGame+0x68+0x1758, pozycja floaty +0x80; `Pointer::Update` (0x00628210) dodaje ruch z
   InputState (s16 dx,dy) — przy skali ruch jest zerowany na czas wywołania, a pozycja ustawiana z przeliczenia.
 - Rysowane poza blitami (piszą piksele same, ich prostokąty też przeliczane): `DrawRect` 0x005ECDC0 (ramka widoku
-  kamery na mapie; linia pogrubiana do 2 px), `BlendBlit` 0x005EC5F0 (półprzezroczyste, np. 29×95 w prawym dolnym rogu;
-  sam rozciąga, nie przycina → przycinanie po stronie moda).
+  kamery na mapie; linia pogrubiana do 2 px), `BlendBlit` 0x005EC5F0 (z cieniem 50 %, np. 29×95 w prawym dolnym rogu;
+  sam rozciąga, nie przycina → przycinanie po stronie moda; przy ×2 kończy w procedurze sprite'ów 2× `0x0062261C`,
+  od 1.3.1 obraz z `hd\menu_parts` — `Sprite2xWindowHd`).
 - Poza menedżerem okien, z `RHGame::RenderFrame`: napis z pieniędzmi 0x004C8140 (od lewego górnego rogu), zegar misji
   0x00511B90 (jedna kotwica dla całego napisu), komunikat 0x005C84A0 (od dołu, środek), kursor 0x005F1CA0 (wokół
   „czubka"). Kursor gra składa w powierzchni 55×55 (kopia tła + kursor) — przy powiększeniu piksele równe pierwszej

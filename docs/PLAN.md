@@ -405,6 +405,14 @@ wczytaniu (11:56:21, 11:56:26) i jedna bez przypisanej przyczyny (11:56:52–57;
 jednym rdzeniu — przez wcześniejsze 45 s eksportu gra szła równo). Do obserwacji. Klawisze F6/F7/F8 nadal
 niepotwierdzone (w logu brak „background variant switched").
 
+### 1.3.1 (2026-11-22) — ostatnie dwa elementy interfejsu w HD
+- Róg ekranu z rogiem myśliwskim (29×95, prawy dolny) i czerwona pieczęć po prawej (41×41) gra powiększa własną
+  procedurą sprite'ów 2× (`0x0062261C`, z cieniem: kolor klucza 0x07C0, marker 0x001F, czynnik 128). Gdy rysują się okna
+  (`UiScale::Drawing()`), `Sprite2xWindowHd` bierze je z `hd\menu_parts` po zawartości (pliki były już, z
+  `Default.res`). Obrazy trzyma menedżer okien poza ostatnio zablokowanymi powierzchniami — czytane spod wskaźnika
+  procedury. Stara ścieżka wygładzania pokazywała róg „wyblakły”; obraz gry jest w pełni kryjący [Z]. `dbg 8192` = bez
+  tego, `dbg 16384` (test) zapisuje obraz 1× do `tools\out\harness\sprite2x_<w>x<h>.raw`.
+
 ### 1.3.0 (2026-11-22) — natywne mapy 4K, warstwa poziomu, pauza
 - **Natywne mapy 4K** (`HDMaps4k=1`): `hd\maps4k\<wariant>\<klucz>.hdm4` (4× model 4xNomos2_hq_dat2 + dopasowanie kolorów; `tools\hd\upscale_4k.py`, `tools\hd\make_maps4k.py`). Wszystkie 20 map, wariant dat2, 3,3 GB. Używane przy zoomie powyżej ok. 2,2 na 2560×1440 i od 2,0 na monitorze 4K. Tylko tło mapy; postacie, drzewa, cienie, stożki widzenia i interfejs zostają takie, jak rysuje gra. Zweryfikowane [Z] w teście w tle (Croisement02). Paczki opcjonalne: `SherwoodHD-5-mapy-4k-a.zip` i `-b.zip` (wydanie `hd-pack-1`). Opis: `docs\HD_MODE.md`.
 - **Warstwa poziomu poniżej 2,0** (`HDLevelLayer=1`): zamiast powiększonych oryginalnych pikseli tło z obrazu HD poziomu.

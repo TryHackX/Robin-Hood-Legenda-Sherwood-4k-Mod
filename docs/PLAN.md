@@ -405,6 +405,21 @@ wczytaniu (11:56:21, 11:56:26) i jedna bez przypisanej przyczyny (11:56:52–57;
 jednym rdzeniu — przez wcześniejsze 45 s eksportu gra szła równo). Do obserwacji. Klawisze F6/F7/F8 nadal
 niepotwierdzone (w logu brak „background variant switched").
 
+### 1.3.4 (2026-11-22) — trawa pod bramką na mapie wozu
+- **Róg mapy wozu (Croisement02)** (zgłoszenie: „w jednym miejscu wciąż nie mogę wejść, mimo że tam zwykła trawa”,
+  „przez bramkę po trawie pod nią powinno się dać chodzić”, „przy samej krawędzi mapy nie pozwalaj”). Diagnoza z 1.3.3
+  („pas niedostępny dla gracza”) była błędna: trawa leży w głównej strefie ziemi gry (`zoneq`: strefa id 0), krzyżyk
+  robił mod. Przy interfejsie 2× prawy koniec żywopłotu (obrazek 320×165, powiększony od rogu do 1920..2560 ×
+  1110..1440) sięga wysoko nad swoje liście; wskaźnik nad jego przezroczystą górą był przeliczany jak nad
+  interfejsem — świat dostawał punkt (kursor + (2560, 1440)) / 2, za dolną krawędzią mapy, i gra pokazywała „nie da
+  się”. Teraz (`UiScale::PieceUnder`) piksel klucza powiększonego obrazka nie należy do obrazka, gdy przeliczony punkt
+  nie leży na żadnym oknie gry (gra trafia w okna prostokątami — tam bez zmian): wskaźnik idzie wtedy do świata
+  z prawdziwą pozycją. Źródło obrazka zapisuje DDM przy powiększaniu (`UiScale::NoteSource`, `DDM::PixelIsKey`).
+  Liście żywopłotu działają jak dotąd — sam brzeg mapy za nimi nadal niedostępny.
+- Rozpoznanie stref chodzenia i wyboru kursora: RE_NOTES („Strefy chodzenia i kursor misji”); polecenia testu
+  `zones`, `zoneq`, `zonelog`, `pointer`; `tools\probe_walk.ps1` zapisuje też, czy wskaźnik trafia w okno gry,
+  `tools\hd\plot_walk.py` rysuje wynik na zrzucie klatki. Usunięty podgląd krzaków (`mock_corner_bushes.py`).
+
 ### 1.3.3 (2026-11-22) — korony drzew z obrazu HD poziomu
 - **Korony drzew** (zgłoszenie: „na mapie liście wyglądają dobrze, a to, co gra rysuje na nich, jest złe”): gra
   rysuje korony drugi raz nad poziomem jako sprite z „sitem” — co drugi piksel kluczem (szachownica), reszta to

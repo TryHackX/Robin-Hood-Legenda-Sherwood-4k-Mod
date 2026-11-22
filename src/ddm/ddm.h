@@ -28,6 +28,9 @@ namespace DDM {
     int TakeHudBandTop();
     // test harness: the mission cursor's own picture drawn last - width << 48 | height << 32 | content hash (0 = none)
     uint64_t LastCursorKey();
+    // a surface's pixel (x, y) is the colour key - false when the surface is gone (its serial: a new surface can
+    // reuse an old address) or the pixel lies outside it (UiScale: the pointer over a see-through part)
+    bool PixelIsKey(const void* surface, unsigned serial, int x, int y, uint16_t key);
     // ... the same without taking it: the band's top row seen last (0 = never drawn)
     int LastHudBandTop();
 }

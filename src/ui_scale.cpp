@@ -88,9 +88,18 @@ namespace {
     // What was drawn where in the last frame (enlarged rectangle and its anchor): the mouse is
     // mapped back with the anchor of the picture it is over - an enlarged picture may reach into
     // the next grid cell.
-    struct Piece { float l, t, r, b, ax, ay, f; };     // f: the factor it was enlarged with (the map has its own)
+    struct Piece {
+        float l, t, r, b, ax, ay, f;        // f: the factor it was enlarged with (the map has its own)
+        // the picture it shows (NoteSource): the pointer over its colour key is not over the picture
+        const void* src = nullptr;
+        unsigned srcSerial = 0;
+        float sl = 0.0f, st = 0.0f, sr = 0.0f, sb = 0.0f;
+        uint16_t key = 0;
+        bool keyed = false, mirrorX = false, mirrorY = false;
+    };
     std::vector<Piece> g_pieces[2];
     int g_piecesCur = 0;            // being filled now; the other one is the last complete frame
+    int g_lastPiece = -1;           // main thread: the piece the last Transform added (NoteSource), -1 = none
 
     // The opened map's own size ([Display] MapScale, 2026-11-18, user: "an option to choose the minimap's size"):
     // its window is enlarged by this factor instead of the interface's 2 (main thread).
@@ -173,6 +182,55 @@ namespace {
     uint8_t* g_camDragMap = nullptr;    // the drag started on the map's picture: it moves the camera
     uint8_t* g_winDragMap = nullptr;    // the drag moves the window
 
+    // A point in the game's own coordinates lies on one of the mission's shown windows (rectangle +0x70, valid
+    // +0x80, shown +0x5C): a window takes the pointer there whatever the pixel (the game's hit tests are rectangles).
+    bool OnMissionWindow(float x, float y) {
+        auto* game = *reinterpret_cast<uint8_t* const*>(0x006C0B3C);
+        if (!game || !Readable(game + 0x68, 0x10)) return false;
+        void** begin = *reinterpret_cast<void***>(game + 0x68 + 8);
+        void** end = *reinterpret_cast<void***>(game + 0x68 + 0xC);
+        if (!begin || end <= begin || end - begin > 256 || !Readable(begin, static_cast<size_t>(end - begin) * sizeof(void*))) return false;
+        for (void** it = begin; it != end; ++it) {
+            const auto* win = static_cast<const uint8_t*>(*it);
+            if (!win || !Readable(win, 0x84) || !win[0x80] || !win[0x5C]) continue;
+            const float* rc = reinterpret_cast<const float*>(win + 0x70);
+            if (x >= rc[0] && x < rc[2] && y >= rc[1] && y < rc[3]) return true;
+        }
+        return false;
+    }
+
+    // The pointer at (x, y) on this enlarged picture sees through it: keyed, and its source pixel there is the key.
+    bool SeeThrough(const Piece& p, float x, float y) {
+        if (!p.keyed || !p.src || p.r <= p.l || p.b <= p.t || p.sr <= p.sl || p.sb <= p.st) return false;
+        float u = (x - p.l) / (p.r - p.l), v = (y - p.t) / (p.b - p.t);
+        if (p.mirrorX) u = 1.0f - u;
+        if (p.mirrorY) v = 1.0f - v;
+        const int sx = (std::max)(static_cast<int>(p.sl), (std::min)(static_cast<int>(p.sr) - 1, static_cast<int>(std::floor(p.sl + u * (p.sr - p.sl)))));
+        const int sy = (std::max)(static_cast<int>(p.st), (std::min)(static_cast<int>(p.sb) - 1, static_cast<int>(std::floor(p.st + v * (p.sb - p.st)))));
+        return DDM::PixelIsKey(p.src, p.srcSerial, sx, sy, p.key);
+    }
+
+    // The enlarged picture the pointer at (x, y) is over - the topmost; nullptr: the world. Its see-through pixels
+    // are no part of it unless the point they map to lies on a window: the hedge's right end (320x165, 2x from the
+    // corner) reaches high above its leaves - the grass below the gate on the carriage map (Croisement02) lay
+    // under that empty part, the world got the mapped point beyond the map's edge and the cursor showed "can't
+    // go" (user 2026-11-22). The leaves themselves stay as before: the map's very edge behind them is not walked to.
+    const Piece* PieceUnder(float x, float y, int* skipped) {
+        const auto& last = g_pieces[g_piecesCur ^ 1];
+        for (auto it = last.rbegin(); it != last.rend(); ++it) {   // the topmost first
+            if (!(x >= it->l && x < it->r && y >= it->t && y < it->b)) continue;
+            if (it->keyed && it->src && it->f > 0.0f) {
+                const float ox = it->ax + (x - it->ax) / it->f, oy = it->ay + (y - it->ay) / it->f;
+                if (!OnMissionWindow(ox, oy) && SeeThrough(*it, x, y)) {
+                    if (skipped) ++*skipped;
+                    continue;
+                }
+            }
+            return &*it;
+        }
+        return nullptr;
+    }
+
     void MapBack(float x, float y, float w, float h, float& ox, float& oy) {
         // Over the world (no enlarged picture under the mouse) the windows see the real position:
         // edge scrolling, the selection frame and the like work as without the scale.
@@ -187,14 +245,12 @@ namespace {
             f = g_mapFactorUsed;
             found = true;
         }
-        const auto& last = g_pieces[g_piecesCur ^ 1];
-        for (auto it = last.rbegin(); !found && it != last.rend(); ++it) {   // the topmost first
-            if (x >= it->l && x < it->r && y >= it->t && y < it->b) {
-                ax = it->ax;
-                ay = it->ay;
-                f = it->f;
+        if (!found) {
+            if (const Piece* p = PieceUnder(x, y, nullptr)) {
+                ax = p->ax;
+                ay = p->ay;
+                f = p->f;
                 found = true;
-                break;
             }
         }
         if (!found && g_mapOrigValid && x >= g_mapOrig[0] && x < g_mapOrig[2] && y >= g_mapOrig[1] && y < g_mapOrig[3]) {
@@ -1317,6 +1373,7 @@ namespace {
     void Transform(float& l, float& t, float& r, float& b) {
         float w, h, ax, ay;
         ScreenSize(w, h);
+        g_lastPiece = -1;
         const void* win = g_curWindow;
         float rc[4];
         float fw = static_cast<float>(g_factor);    // this rectangle's factor (the opened map: its own size)
@@ -1451,7 +1508,10 @@ namespace {
         t = ay + (t - ay) * fw;
         b = ay + (b - ay) * fw;
         auto& cur = g_pieces[g_piecesCur];
-        if (cur.size() < 4096) cur.push_back(Piece{ l, t, r, b, ax, ay, fw });
+        if (cur.size() < 4096) {
+            cur.push_back(Piece{ l, t, r, b, ax, ay, fw });
+            g_lastPiece = static_cast<int>(cur.size()) - 1;
+        }
         g_lastWasMap = isMap;
         g_lastF = fw;
     }
@@ -1712,6 +1772,36 @@ void SetMapScale(int percent) {
 
 void ScaleRectF(float* ltrb) {
     Transform(ltrb[0], ltrb[1], ltrb[2], ltrb[3]);
+}
+
+void NoteSource(const void* surface, unsigned serial, const RECT& s, bool keyed, uint16_t key, bool mirrorX, bool mirrorY) {
+    auto& cur = g_pieces[g_piecesCur];
+    if (g_lastPiece < 0 || g_lastPiece >= static_cast<int>(cur.size())) return;
+    Piece& p = cur[static_cast<size_t>(g_lastPiece)];
+    p.src = surface;
+    p.srcSerial = serial;
+    p.sl = static_cast<float>(s.left);
+    p.st = static_cast<float>(s.top);
+    p.sr = static_cast<float>(s.right);
+    p.sb = static_cast<float>(s.bottom);
+    p.key = key;
+    p.keyed = keyed;
+    p.mirrorX = mirrorX;
+    p.mirrorY = mirrorY;
+    g_lastPiece = -1;
+}
+
+int DescribePointer(float x, float y, char* out, int size) {
+    if (!out || size < 64) return 0;
+    int skipped = 0;
+    const Piece* p = PieceUnder(x, y, &skipped);
+    if (!p) {
+        return std::snprintf(out, size, "world pieces=%u seeThrough=%d", static_cast<unsigned>(g_pieces[g_piecesCur ^ 1].size()), skipped);
+    }
+    const float ox = p->ax + (x - p->ax) / p->f, oy = p->ay + (y - p->ay) / p->f;
+    return std::snprintf(out, size, "piece %.0f,%.0f,%.0f,%.0f anchor=%.0f,%.0f f=%.2f keyed=%d src=%p s=%.0f,%.0f,%.0f,%.0f -> %.1f,%.1f onWindow=%d seeThroughHere=%d skipped=%d",
+                         p->l, p->t, p->r, p->b, p->ax, p->ay, p->f, p->keyed ? 1 : 0, p->src, p->sl, p->st, p->sr, p->sb, ox, oy,
+                         OnMissionWindow(ox, oy) ? 1 : 0, SeeThrough(*p, x, y) ? 1 : 0, skipped);
 }
 
 int DescribeWindows(char* out, int size) {

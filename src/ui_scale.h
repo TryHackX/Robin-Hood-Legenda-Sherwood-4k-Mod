@@ -1,5 +1,6 @@
 #pragma once
 #include <windows.h>
+#include <cstdint>
 
 // Interface scale ([Display] UIScale=2, internal width >= 2048).
 //
@@ -19,6 +20,13 @@ namespace UiScale {
     // While Drawing(): a rectangle in window coordinates -> screen pixels.
     void ScaleRect(RECT& r);
     void ScaleRectF(float* ltrb);
+    // DDM, right after ScaleRect: the picture that rectangle shows (surface, its serial, the source rectangle,
+    // the colour key if keyed). The pointer over the key there is not over the picture - unless the point it maps
+    // to lies on one of the game's windows, it is the world's (the grass below the gate on the carriage map lay
+    // under the see-through top of the enlarged hedge, 2026-11-22).
+    void NoteSource(const void* surface, unsigned serial, const RECT& s, bool keyed, uint16_t key, bool mirrorX, bool mirrorY);
+    // test harness: what the pointer at (x, y) is mapped to and why
+    int DescribePointer(float x, float y, char* out, int size);
     // ... the last of them belonged to the opened map: drawn at the map's own size ([Display] MapScale,
     // 150..500 %, a tall map no larger than fits above the hedge), its pictures through DDM::ScaledPicture16
     bool LastScaledWasMap();

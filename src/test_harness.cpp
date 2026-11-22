@@ -17,6 +17,7 @@
 
 #include <MinHook.h>
 #include <audiopolicy.h>
+#include <intrin.h>
 #include <mmdeviceapi.h>
 #include <share.h>
 #include <algorithm>
@@ -57,6 +58,14 @@ namespace {
 
     // engine call wanted on the main thread: 1 = zoom in, 2 = zoom out (reader thread -> game tick)
     std::atomic<int> g_mainCmd{ 0 };
+    float g_zoneqPt[2]{};           // cmd 4 "zoneq": the point asked about, and the answer
+    char  g_zoneqOut[1024]{};
+    // the last calls of the zone-under-a-point routine and of the cursor's choice (InstallZoneProbe)
+    struct ZoneCall { uint32_t caller; float x, y; uint32_t zone, cc; uint16_t c4; uint8_t alt; uint32_t charZone; float cx, cy; };
+    struct CursorCall { uint32_t caller; float x, y; uint32_t zoneIn; uint16_t id; };
+    ZoneCall g_zoneCalls[8]{};
+    CursorCall g_cursorCalls[8]{};
+    std::atomic<unsigned> g_zoneCallN{ 0 }, g_cursorCallN{ 0 };
 
     // frame dump request (reader thread -> presenter -> reader thread)
     std::atomic<int> g_shotState{ 0 }; // 0 none, 1 requested, 2 done ok, 3 failed
@@ -123,7 +132,7 @@ namespace {
     }
 
     void Ack(unsigned seq, const char* fmt, ...) {
-        char text[1200];
+        char text[2400];
         va_list args;
         va_start(args, fmt);
         std::vsnprintf(text, sizeof(text), fmt, args);
@@ -318,6 +327,125 @@ namespace {
             const uint64_t k = DDM::LastCursorKey();
             Ack(seq, "ok cursor=%ux%u key=%08x", static_cast<unsigned>(k >> 48), static_cast<unsigned>((k >> 32) & 0xFFFF),
                 static_cast<unsigned>(k & 0xFFFFFFFFu));
+        } else if (!std::strcmp(cmd, "zones")) {
+            // zones NAME: the level's walk zones -> tools\out\harness\NAME.txt (tools\hd\plot_zones.py). The zone map
+            // is the engine + 0x11C: a grid of 64-unit cells per layer (u16 width +0x3E98, height +0x3E9A, layers
+            // +0x3E9C; cells +0x403C, 40 bytes: u16 count +0x10, zone pointers +0x14); a zone has its polygon at +4
+            // (vertices: begin +8, end +0xC), flags +0x30 (0x40 = found by the lookup at a point), active +0x34,
+            // floor +0x36, id +0x38, bounding box +0x3C (x0 y0 x1 y1, valid +0x4C), linked +0x58, network +0x64,
+            // parent +0x98, type +0xF0. Only read here.
+            char name[128]{};
+            if (std::sscanf(args, "%127s", name) != 1) { Ack(seq, "err usage: zones NAME"); return; }
+            uintptr_t engine = 0;
+            if (!ReadMem(kAddrEnginePtr, &engine, 4) || !engine) { Ack(seq, "err no engine"); return; }
+            const uintptr_t zm = engine + 0x11C;
+            uint16_t gw = 0, gh = 0, layers = 0;
+            uintptr_t cells = 0;
+            ReadMem(zm + 0x3E98, &gw, 2);
+            ReadMem(zm + 0x3E9A, &gh, 2);
+            ReadMem(zm + 0x3E9C, &layers, 2);
+            ReadMem(zm + 0x403C, &cells, 4);
+            if (!cells || !gw || !gh || !layers || static_cast<size_t>(gw) * gh * layers > 200000) {
+                Ack(seq, "err no zone grid (gw=%u gh=%u layers=%u)", gw, gh, layers);
+                return;
+            }
+            const std::string path = g_dir + name + ".txt";
+            FILE* f = _fsopen(path.c_str(), "w", _SH_DENYNO);
+            if (!f) { Ack(seq, "err cannot write %s", path.c_str()); return; }
+            std::fprintf(f, "grid %u %u %u\n", gw, gh, layers);
+            std::vector<uintptr_t> seen;
+            const size_t ncells = static_cast<size_t>(gw) * gh * layers;
+            for (size_t c = 0; c < ncells; ++c) {
+                uint8_t rec[40]{};
+                if (!ReadMem(cells + c * 40, rec, sizeof(rec))) continue;
+                uint16_t n = 0;
+                uintptr_t arr = 0;
+                std::memcpy(&n, rec + 0x10, 2);
+                std::memcpy(&arr, rec + 0x14, 4);
+                if (!n || !arr || n > 512) continue;
+                std::vector<uintptr_t> ptrs(n);
+                if (!ReadMem(arr, ptrs.data(), n * 4u)) continue;
+                const size_t layer = c / (static_cast<size_t>(gw) * gh), rest = c % (static_cast<size_t>(gw) * gh);
+                std::fprintf(f, "cell %u %u %u %u", static_cast<unsigned>(layer), static_cast<unsigned>(rest % gw),
+                    static_cast<unsigned>(rest / gw), n);
+                for (const uintptr_t p : ptrs) {
+                    std::fprintf(f, " %08X", static_cast<unsigned>(p));
+                    if (std::find(seen.begin(), seen.end(), p) == seen.end()) seen.push_back(p);
+                }
+                std::fprintf(f, "\n");
+            }
+            uintptr_t listB = 0, listE = 0, special = 0;
+            ReadMem(zm + 0x4064, &listB, 4);
+            ReadMem(zm + 0x4068, &listE, 4);
+            ReadMem(zm + 0x4184, &special, 4);
+            std::fprintf(f, "list %08X %08X special %08X\n", static_cast<unsigned>(listB), static_cast<unsigned>(listE),
+                static_cast<unsigned>(special));
+            if (listB && listE > listB && (listE - listB) / 4 < 4096) {
+                std::vector<uintptr_t> all((listE - listB) / 4);
+                if (ReadMem(listB, all.data(), all.size() * 4)) {
+                    for (const uintptr_t p : all)
+                        if (p && std::find(seen.begin(), seen.end(), p) == seen.end()) seen.push_back(p);
+                }
+            }
+            for (const uintptr_t z : seen) {
+                uint8_t zr[0x100]{};
+                if (!ReadMem(z, zr, sizeof(zr))) continue;
+                auto u32 = [&](size_t o) { uint32_t v; std::memcpy(&v, zr + o, 4); return v; };
+                auto u16 = [&](size_t o) { uint16_t v; std::memcpy(&v, zr + o, 2); return static_cast<unsigned>(v); };
+                auto f32 = [&](size_t o) { float v; std::memcpy(&v, zr + o, 4); return v; };
+                const uint32_t vb = u32(8), ve = u32(0xC);
+                const unsigned nv = (vb && ve > vb && (ve - vb) / 8 < 20000) ? (ve - vb) / 8 : 0;
+                std::fprintf(f, "zone %08X flags=%08X act=%u floor=%u id=%u z58=%08X z64=%08X z98=%08X f0=%u bbox=%.1f,%.1f,%.1f,%.1f,%u n=%u\n",
+                    static_cast<unsigned>(z), u32(0x30), zr[0x34], u16(0x36), u16(0x38), u32(0x58), u32(0x64), u32(0x98), u32(0xF0),
+                    f32(0x3C), f32(0x40), f32(0x44), f32(0x48), zr[0x4C], nv);
+                if (nv) {
+                    std::vector<float> v(nv * 2u);
+                    if (ReadMem(vb, v.data(), v.size() * 4)) {
+                        for (unsigned i = 0; i < nv; ++i) std::fprintf(f, "v %.2f %.2f\n", v[i * 2], v[i * 2 + 1]);
+                    }
+                }
+            }
+            std::fclose(f);
+            Ack(seq, "ok %s grid=%ux%ux%u zones=%u", path.c_str(), gw, gh, layers, static_cast<unsigned>(seen.size()));
+        } else if (!std::strcmp(cmd, "pointer")) {
+            // pointer [X Y]: what the interface scale maps the pointer at a screen point to (default: the cursor)
+            float x = -1.0f, y = -1.0f;
+            if (std::sscanf(args, "%f %f", &x, &y) != 2) CursorPos(x, y);
+            g_zoneqPt[0] = x;
+            g_zoneqPt[1] = y;
+            g_zoneqOut[0] = 0;
+            g_mainCmd.store(5);
+            const DWORD t0 = GetTickCount();
+            while (g_mainCmd.load() != 0 && GetTickCount() - t0 < 3000) Sleep(5);
+            if (g_mainCmd.exchange(0) != 0) { Ack(seq, "err no game tick in 3 s"); return; }
+            Ack(seq, "ok %.0f,%.0f %s", x, y, g_zoneqOut);
+        } else if (!std::strcmp(cmd, "zonelog")) {
+            // the last calls of the zone-under-a-point routine and of the cursor's choice (newest first)
+            std::string s;
+            char line[256];
+            const unsigned nz = g_zoneCallN.load(), nc = g_cursorCallN.load();
+            for (unsigned i = 0; i < 4 && i < nz; ++i) {
+                const ZoneCall& c = g_zoneCalls[(nz - 1 - i) % 8];
+                std::snprintf(line, sizeof(line), " Z[%08X pt=%.1f,%.1f zone=%08X cc=%08X c4=%u alt=%u char=%08X@%.0f,%.0f]",
+                    c.caller, c.x, c.y, c.zone, c.cc, c.c4, c.alt, c.charZone, c.cx, c.cy);
+                s += line;
+            }
+            for (unsigned i = 0; i < 4 && i < nc; ++i) {
+                const CursorCall& c = g_cursorCalls[(nc - 1 - i) % 8];
+                std::snprintf(line, sizeof(line), " C[%08X pt=%.1f,%.1f zoneIn=%08X id=0x%X]", c.caller, c.x, c.y, c.zoneIn, c.id);
+                s += line;
+            }
+            Ack(seq, "ok nz=%u nc=%u%s", nz, nc, s.c_str());
+        } else if (!std::strcmp(cmd, "zoneq")) {
+            // zoneq X Y: the game's own zone lookup at a level point (main thread) - which zone, per layer, and the
+            // bounding box / polygon tests of every zone in that point's cell
+            if (std::sscanf(args, "%f %f", &g_zoneqPt[0], &g_zoneqPt[1]) != 2) { Ack(seq, "err usage: zoneq X Y"); return; }
+            g_zoneqOut[0] = 0;
+            g_mainCmd.store(4);
+            const DWORD t0 = GetTickCount();
+            while (g_mainCmd.load() != 0 && GetTickCount() - t0 < 3000) Sleep(5);
+            if (g_mainCmd.exchange(0) != 0) { Ack(seq, "err no game tick in 3 s"); return; }
+            Ack(seq, "ok %s", g_zoneqOut);
         } else if (!std::strcmp(cmd, "pause")) {
             // the game's pause - the input translator's flag (singleton [0x006C0C4C] + 0x1B; RHGame::Run then skips
             // the engine's tick and the frame limiter): pause 1 | pause 0 | pause (state)
@@ -628,6 +756,58 @@ namespace {
         return r;
     }
 
+    // ---- what the cursor's zone and picture come from (command "zonelog") -----------------------------
+    // 0x004DEBF0 __thiscall(engine, const Vec2* pt) ret 4: the zone under a point -> [engine+0xC8] (zone map
+    // lookup 0x004E9760, or 0x004E9920 while [[engine+0x68]+0x14]); 0x004CC100 __thiscall(engine, bool*, const
+    // Vec2* pt) ret 8 -> the cursor's id. The last calls of each, test instance only.
+    using PFN_ZoneUnder = uint32_t(__fastcall*)(uint8_t*, void*, const float*);
+    using PFN_CursorId = uint16_t(__fastcall*)(uint8_t*, void*, bool*, const float*);
+    PFN_ZoneUnder o_ZoneUnder = nullptr;
+    PFN_CursorId o_CursorId = nullptr;
+
+    uint32_t __fastcall Hook_ZoneUnder(uint8_t* engine, void* edx, const float* pt) {
+        const uint32_t caller = reinterpret_cast<uint32_t>(_ReturnAddress());
+        const uint32_t r = o_ZoneUnder(engine, edx, pt);
+        ZoneCall c{};
+        c.caller = caller;
+        if (pt) { c.x = pt[0]; c.y = pt[1]; }
+        c.zone = *reinterpret_cast<uint32_t*>(engine + 0xC8);
+        c.cc = *reinterpret_cast<uint32_t*>(engine + 0xCC);
+        c.c4 = *reinterpret_cast<uint16_t*>(engine + 0xC4);
+        const uint8_t* e68 = *reinterpret_cast<uint8_t**>(engine + 0x68);
+        c.alt = e68 ? e68[0x14] : 0xFF;
+        if (*reinterpret_cast<uint32_t*>(engine + 0x4A00)) {
+            const uint8_t* ch = *reinterpret_cast<uint8_t**>(**reinterpret_cast<uint8_t***>(engine + 0x49FC) + 8);
+            const uint8_t* phys = ch ? *reinterpret_cast<uint8_t* const*>(ch + 0x50) : nullptr;
+            if (phys) {
+                c.charZone = *reinterpret_cast<const uint32_t*>(phys + 0xE0);
+                c.cx = *reinterpret_cast<const float*>(phys + 0x24);
+                c.cy = *reinterpret_cast<const float*>(phys + 0x28);
+            }
+        }
+        g_zoneCalls[g_zoneCallN.fetch_add(1) % 8] = c;
+        return r;
+    }
+
+    uint16_t __fastcall Hook_CursorId(uint8_t* engine, void* edx, bool* flag, const float* pt) {
+        const uint32_t caller = reinterpret_cast<uint32_t>(_ReturnAddress());
+        const uint32_t zoneIn = *reinterpret_cast<uint32_t*>(engine + 0xC8);
+        const uint16_t id = o_CursorId(engine, edx, flag, pt);
+        CursorCall c{ caller, pt ? pt[0] : -1.0f, pt ? pt[1] : -1.0f, zoneIn, id };
+        g_cursorCalls[g_cursorCallN.fetch_add(1) % 8] = c;
+        return id;
+    }
+
+    void InstallZoneProbe() {
+        bool ok = MH_CreateHook(reinterpret_cast<void*>(0x004DEBF0), reinterpret_cast<void*>(&Hook_ZoneUnder),
+                      reinterpret_cast<void**>(&o_ZoneUnder)) == MH_OK &&
+                  MH_EnableHook(reinterpret_cast<void*>(0x004DEBF0)) == MH_OK;
+        ok = ok && MH_CreateHook(reinterpret_cast<void*>(0x004CC100), reinterpret_cast<void*>(&Hook_CursorId),
+                       reinterpret_cast<void**>(&o_CursorId)) == MH_OK &&
+             MH_EnableHook(reinterpret_cast<void*>(0x004CC100)) == MH_OK;
+        Logger::Info("TEST MODE: zone / cursor probe (command 'zonelog') %s.", ok ? "ready" : "NOT available");
+    }
+
     void InstallAmbianceHook() {
         static const uint8_t kProlog[] = { 0x53, 0x56, 0x8B, 0x74, 0x24, 0x0C, 0x57, 0x6A, 0x04, 0x68, 0x54, 0x4F, 0x4F, 0x46 };
         auto* target = reinterpret_cast<void*>(0x004C1AB0);
@@ -711,6 +891,7 @@ void Init() {
     bool cursorPosSafe = false;
     const int notIsolated = IsolateDesktop(cursorPosSafe);
     InstallAmbianceHook();
+    InstallZoneProbe();
     if (!cursorPosSafe) {
         // a hidden instance that can grab the player's pointer must not run at all
         Logger::Error("TEST MODE: SetCursorPos could not be taken away from the game - ending the test instance.");
@@ -752,6 +933,59 @@ void OnGameTick() {
         if (console && *reinterpret_cast<void**>(console)) {
             reinterpret_cast<PFN_ConsoleCommand>(0x0045CDA0)(console, 0, 0);
             Logger::Warn("TEST MODE: console command WIN - the mission counts as won.");
+        }
+        g_mainCmd.store(0);
+        return;
+    }
+    if (cmd == 5) {
+        UiScale::DescribePointer(g_zoneqPt[0], g_zoneqPt[1], g_zoneqOut, sizeof(g_zoneqOut));
+        g_mainCmd.store(0);
+        return;
+    }
+    if (cmd == 4) {
+        // zone map = engine + 0x11C. 0x004E9760 __thiscall(zm, const Vec2* pt, const Vec2* from, Zone** out,
+        // u16* layerOut) ret 0x10 -> id or < 0; 0x004E8FC0 the same for one layer (arg 3) -> id, -1 blocked,
+        // -2 nothing in that layer's cell; 0x00608400 bbox test __thiscall(box, pt); 0x0060C660 polygon test
+        // __thiscall(poly, pt).
+        using PFN_Find = short(__thiscall*)(void*, const float*, const float*, void**, uint16_t*);
+        using PFN_FindLayer = short(__thiscall*)(void*, const float*, const float*, uint32_t, void**);
+        using PFN_Test = bool(__thiscall*)(void*, const float*);
+        auto* engine = *reinterpret_cast<uint8_t**>(kAddrEnginePtr);
+        int pos = 0;
+        auto out = [&](const char* fmt, auto... a) {
+            if (pos < static_cast<int>(sizeof(g_zoneqOut)) - 1)
+                pos += std::snprintf(g_zoneqOut + pos, sizeof(g_zoneqOut) - pos, fmt, a...);
+        };
+        if (!engine) {
+            out("no engine");
+        } else {
+            uint8_t* zm = engine + 0x11C;
+            const float* pt = g_zoneqPt;
+            void* zone = nullptr;
+            uint16_t layer = 0xFFFF;
+            const short id = reinterpret_cast<PFN_Find>(0x004E9760)(zm, pt, pt, &zone, &layer);
+            out("find=%d zone=%08X layer=%d |", id, static_cast<unsigned>(reinterpret_cast<uintptr_t>(zone)), static_cast<short>(layer));
+            const unsigned layers = *reinterpret_cast<uint16_t*>(zm + 0x3E9C);
+            const unsigned gw = *reinterpret_cast<uint16_t*>(zm + 0x3E98), gh = *reinterpret_cast<uint16_t*>(zm + 0x3E9A);
+            for (unsigned l = 0; l < layers && l < 8; ++l) {
+                void* z = nullptr;
+                const short r = reinterpret_cast<PFN_FindLayer>(0x004E8FC0)(zm, pt, pt, l, &z);
+                out(" L%u=%d/%08X", l, r, static_cast<unsigned>(reinterpret_cast<uintptr_t>(z)));
+                const int cx = static_cast<int>(pt[0]) >> 6, cy = static_cast<int>(pt[1]) >> 6;
+                if (cx < 0 || cy < 0 || cx >= static_cast<int>(gw) || cy >= static_cast<int>(gh)) continue;
+                const uint8_t* cell = *reinterpret_cast<uint8_t**>(zm + 0x403C) + ((l * gh + cy) * gw + cx) * 40u;
+                const unsigned n = *reinterpret_cast<const uint16_t*>(cell + 0x10);
+                auto* const* zs = *reinterpret_cast<uint8_t* const* const*>(cell + 0x14);
+                for (unsigned i = 0; i < n && i < 24; ++i) {
+                    uint8_t* zz = zs[i];
+                    const uint32_t flags = *reinterpret_cast<uint32_t*>(zz + 0x30);
+                    if (!(flags & 0x40)) continue;
+                    const bool inBox = reinterpret_cast<PFN_Test>(0x00608400)(zz + 0x3C, pt);
+                    const bool inPoly = reinterpret_cast<PFN_Test>(0x0060C660)(zz + 4, pt);
+                    out(" [%08X f=%X id=%u act=%u box=%d poly=%d]", static_cast<unsigned>(reinterpret_cast<uintptr_t>(zz)), flags,
+                        *reinterpret_cast<uint16_t*>(zz + 0x38), zz[0x34], inBox ? 1 : 0, inPoly ? 1 : 0);
+                }
+            }
         }
         g_mainCmd.store(0);
         return;

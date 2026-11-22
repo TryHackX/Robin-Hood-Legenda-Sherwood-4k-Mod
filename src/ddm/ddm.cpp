@@ -877,6 +877,10 @@ HRESULT Surface::DoBlt(const RECT* dstRect, Surface* src, const RECT* srcRect, D
         mirrorX = (fx->dwDDFX & DDBLTFX_MIRRORLEFTRIGHT) != 0;
         mirrorY = (fx->dwDDFX & DDBLTFX_MIRRORUPDOWN) != 0;
     }
+    if (uiScaled) {
+        // the enlarged picture's source: the pointer over its colour key is not over the picture (UiScale::MapBack)
+        UiScale::NoteSource(src, src->serial, s, keyed, keyColor, mirrorX, mirrorY);
+    }
     DDM_TRACE("BLT  %p(%dx%d%s) d=(%ld,%ld,%ld,%ld) <- %p(%dx%d) s=(%ld,%ld,%ld,%ld) %s%s%s%s by %s",
               static_cast<void*>(this), w, h, isFront() ? " front" : "", d.left, d.top, d.right, d.bottom,
               static_cast<void*>(src), src->w, src->h, s.left, s.top, s.right, s.bottom,
@@ -1833,6 +1837,16 @@ int g_lastHudBandTop = 0;          // main thread: the band of the last frame th
 
 uint64_t LastCursorKey() {
     return g_lastCursorKey.load(std::memory_order_relaxed);
+}
+
+bool PixelIsKey(const void* surface, unsigned serial, int x, int y, uint16_t key) {
+    std::lock_guard<std::recursive_mutex> lock(g.lock);
+    const auto* s = static_cast<const Surface*>(surface);
+    if (std::find(g.surfaces.begin(), g.surfaces.end(), s) == g.surfaces.end()) return false;
+    if (s->serial != serial || !s->st.bits || x < 0 || y < 0 || x >= s->w || y >= s->h) return false;
+    uint16_t px = 0;
+    std::memcpy(&px, s->st.bits + static_cast<size_t>(y) * s->pitch + static_cast<size_t>(x) * 2, 2);
+    return px == key;
 }
 
 int TakeHudBandTop() {

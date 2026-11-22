@@ -11,6 +11,7 @@
 #include "../logger.h"
 #include "../window_manager.h"
 #include "../input_fix.h"
+#include "../test_harness.h"
 #include "../ui_scale.h"
 #include "../watchdog.h"
 
@@ -51,6 +52,7 @@ constexpr uint16_t kGreenKey = 0x07C0;   // the colour key of the game's interfa
 Surface* g_cursorPics[4] = {};
 unsigned g_cursorPicsSerial = 0;
 int      g_cursorPicsCount = 0;
+std::atomic<uint64_t> g_lastCursorKey{ 0 };     // test harness: the cursor's own picture drawn last (LastCursorKey)
 
 // The mission's cursor (its own pixels, the rest kGreenKey - see the cursor branch of DoBlt) as its HD
 // picture, when one of the collected interface pictures has exactly its content: colour where the picture
@@ -964,6 +966,19 @@ HRESULT Surface::DoBlt(const RECT* dstRect, Surface* src, const RECT* srcRect, D
                                 s_cursorBgRect.right - s_cursorBgRect.left == sw && s_cursorBgRect.bottom - s_cursorBgRect.top == sh &&
                                 s_cursorBgRect.left >= 0 && s_cursorBgRect.top >= 0 &&
                                 s_cursorBgRect.right <= s_cursorBg->w && s_cursorBgRect.bottom <= s_cursorBg->h;
+            if (cursor && TestHarness::Enabled() && g_cursorPicsSerial == UiScale::CursorSerial() && g_cursorPicsCount > 0) {
+                // test harness ("cursor"): which picture the game drew as its cursor - its size and content
+                const Surface* p = g_cursorPics[0];
+                if (p && std::find(g.surfaces.begin(), g.surfaces.end(), p) != g.surfaces.end() && p->st.bits) {
+                    uint64_t k = 0xCBF29CE484222325ull;
+                    for (int y = 0; y < p->h; ++y) {
+                        const auto* row = reinterpret_cast<const uint16_t*>(p->st.bits + static_cast<size_t>(y) * p->pitch);
+                        for (int x = 0; x < p->w; ++x) k = (k ^ row[x]) * 0x100000001B3ull;
+                    }
+                    g_lastCursorKey.store((k & 0xFFFFFFFFull) | (static_cast<uint64_t>(p->w) << 48) | (static_cast<uint64_t>(p->h) << 32),
+                                          std::memory_order_relaxed);
+                }
+            }
             if (UiScale::LastScaledWasMap() && inside && !mirrorX && !mirrorY && Diag::IsMainThread()) {
                 // the opened map at its own size (MapScale): its HD picture (MinimapHD) scaled once and kept
                 ScaledPicture16(buf(), d, src->buf(), s, clip, keyed ? keyColor : kNoColor);
@@ -1815,6 +1830,10 @@ void TraceMark(const char* text) {
 }
 
 int g_lastHudBandTop = 0;          // main thread: the band of the last frame that drew it (see LastHudBandTop)
+
+uint64_t LastCursorKey() {
+    return g_lastCursorKey.load(std::memory_order_relaxed);
+}
 
 int TakeHudBandTop() {
     const int top = g_hudBandTop;

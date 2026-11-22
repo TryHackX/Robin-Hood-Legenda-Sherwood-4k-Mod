@@ -1,7 +1,13 @@
 #include "proxy_winmm.h"
 #include <windows.h>
 #include <mmsystem.h>
+#include <algorithm>
+#include <cmath>
 #include <cstring>
+#include <deque>
+#include <mutex>
+#include <utility>
+#include <vector>
 
 namespace {
     HMODULE g_hRealWinMM = nullptr;
@@ -227,27 +233,331 @@ HMODULE GetRealWinMMModule() {
 }
 
 namespace {
-    using PFN_waveOutWrite = UINT(WINAPI*)(HANDLE, WAVEHDR*, UINT);
-    PFN_waveOutWrite g_realWaveOutWrite = nullptr;
+    // ---- test mode: a waveOut device that plays nothing ---------------------------------------------------------
+    // FMOD's WINMM output (the test mode chooses it) opens a waveOut device and keeps writing its mix into the buffers
+    // it handed over - zeroing them at waveOutWrite was not enough (2026-11-22: the player heard the hidden game). The
+    // handle-based waveOut calls go to an emulated device instead: it takes the buffers, "plays" them in real time
+    // (position from the clock, buffers done when their time is over, WOM_DONE as the system would send it) and sends
+    // nothing to Windows - no audio session, no sound, no setting of the player's touched.
+    struct FakeOut {
+        uint32_t magic = 0x31574F46;            // "FOW1"
+        DWORD_PTR callback = 0, instance = 0;
+        DWORD kind = 0;                         // CALLBACK_* of the open call
+        double bytesPerSec = 1.0, samplesPerSec = 1.0;
+        double clockBase = 0.0;                 // position(now) = now - clockBase, at most queuedEnd
+        double pausedAt = -1.0;                 // position while paused (-1: playing)
+        double queuedEnd = 0.0;                 // seconds of audio handed over so far
+        std::deque<std::pair<WAVEHDR*, double>> queue;     // buffers and the position at which each is done
+    };
+    std::mutex g_foLock;
+    std::vector<FakeOut*> g_fakeOuts;
+    bool g_foThread = false;
+    LARGE_INTEGER g_foFreq{};
 
-    UINT WINAPI Silent_waveOutWrite(HANDLE hwo, WAVEHDR* hdr, UINT size) {
-        if (hdr && size >= sizeof(WAVEHDR) && hdr->lpData && hdr->dwBufferLength) {
-            std::memset(hdr->lpData, 0, hdr->dwBufferLength);   // FMOD mixes 16-bit samples: 0 = silence
+    double FoNow() {
+        LARGE_INTEGER t{};
+        QueryPerformanceCounter(&t);
+        return static_cast<double>(t.QuadPart) / static_cast<double>(g_foFreq.QuadPart);
+    }
+
+    FakeOut* FoFind(HANDLE h) {
+        for (FakeOut* f : g_fakeOuts) {
+            if (reinterpret_cast<HANDLE>(f) == h) return f;
         }
-        return g_realWaveOutWrite(hwo, hdr, size);
+        return nullptr;
+    }
+
+    double FoPosition(const FakeOut* f, double now) {
+        const double p = f->pausedAt >= 0.0 ? f->pausedAt : now - f->clockBase;
+        return (std::min)((std::max)(p, 0.0), f->queuedEnd);
+    }
+
+    void FoNotify(DWORD kind, DWORD_PTR callback, DWORD_PTR instance, HANDLE h, UINT msg, DWORD_PTR param) {
+        switch (kind & CALLBACK_TYPEMASK) {
+            case CALLBACK_FUNCTION:
+                if (callback) reinterpret_cast<void(CALLBACK*)(HANDLE, UINT, DWORD_PTR, DWORD_PTR, DWORD_PTR)>(callback)(h, msg, instance, param, 0);
+                break;
+            case CALLBACK_EVENT:
+                if (callback) SetEvent(reinterpret_cast<HANDLE>(callback));
+                break;
+            case CALLBACK_WINDOW:
+                if (callback) PostMessageA(reinterpret_cast<HWND>(callback), msg == WOM_OPEN ? MM_WOM_OPEN : msg == WOM_CLOSE ? MM_WOM_CLOSE : MM_WOM_DONE,
+                                           reinterpret_cast<WPARAM>(h), static_cast<LPARAM>(param));
+                break;
+            case CALLBACK_THREAD:
+                if (callback) PostThreadMessageA(static_cast<DWORD>(callback), msg == WOM_OPEN ? MM_WOM_OPEN : msg == WOM_CLOSE ? MM_WOM_CLOSE : MM_WOM_DONE,
+                                                 reinterpret_cast<WPARAM>(h), static_cast<LPARAM>(param));
+                break;
+            default:
+                break;
+        }
+    }
+
+    // buffers whose time is over: done, and told as the system would
+    DWORD WINAPI FoThread(void*) {
+        struct Done { DWORD kind; DWORD_PTR callback, instance; HANDLE h; WAVEHDR* hdr; };
+        std::vector<Done> done;
+        for (;;) {
+            Sleep(4);
+            done.clear();
+            {
+                std::lock_guard<std::mutex> lk(g_foLock);
+                const double now = FoNow();
+                for (FakeOut* f : g_fakeOuts) {
+                    const double pos = FoPosition(f, now);
+                    while (!f->queue.empty() && f->queue.front().second <= pos + 1e-9) {
+                        WAVEHDR* hdr = f->queue.front().first;
+                        f->queue.pop_front();
+                        hdr->dwFlags = (hdr->dwFlags | WHDR_DONE) & ~static_cast<DWORD>(WHDR_INQUEUE);
+                        done.push_back({ f->kind, f->callback, f->instance, reinterpret_cast<HANDLE>(f), hdr });
+                    }
+                }
+            }
+            for (const Done& d : done) FoNotify(d.kind, d.callback, d.instance, d.h, WOM_DONE, reinterpret_cast<DWORD_PTR>(d.hdr));
+        }
+    }
+
+    using PFN_WaveOut1 = UINT(WINAPI*)(HANDLE);
+    using PFN_WaveOutHdr = UINT(WINAPI*)(HANDLE, WAVEHDR*, UINT);
+    using PFN_WaveOutDw = UINT(WINAPI*)(HANDLE, DWORD);
+    using PFN_WaveOutPDw = UINT(WINAPI*)(HANDLE, DWORD*);
+    FARPROC g_realWave[24] = {};                // the real functions, by our index below
+    enum { kOpen, kClose, kPrepare, kUnprepare, kWrite, kPause, kRestart, kReset, kBreakLoop, kGetPosition, kGetVolume,
+           kSetVolume, kGetPitch, kSetPitch, kGetRate, kSetRate, kGetID, kMessage, kWaveCount };
+
+    UINT WINAPI Fo_waveOutOpen(HANDLE* out, UINT dev, const WAVEFORMATEX* fmt, DWORD_PTR callback, DWORD_PTR instance, DWORD flags) {
+        if (!fmt) return MMSYSERR_INVALPARAM;
+        if (flags & WAVE_FORMAT_QUERY) return MMSYSERR_NOERROR;
+        if (!out) return MMSYSERR_INVALPARAM;
+        auto* f = new FakeOut();
+        f->callback = callback;
+        f->instance = instance;
+        f->kind = flags;
+        f->bytesPerSec = fmt->nAvgBytesPerSec ? static_cast<double>(fmt->nAvgBytesPerSec) : 176400.0;
+        f->samplesPerSec = fmt->nSamplesPerSec ? static_cast<double>(fmt->nSamplesPerSec) : 44100.0;
+        {
+            std::lock_guard<std::mutex> lk(g_foLock);
+            f->clockBase = FoNow();
+            g_fakeOuts.push_back(f);
+            if (!g_foThread) {
+                if (HANDLE t = CreateThread(nullptr, 0, FoThread, nullptr, 0, nullptr)) {
+                    CloseHandle(t);
+                    g_foThread = true;
+                }
+            }
+        }
+        *out = reinterpret_cast<HANDLE>(f);
+        (void)dev;
+        FoNotify(flags, callback, instance, *out, WOM_OPEN, 0);
+        return MMSYSERR_NOERROR;
+    }
+
+    UINT WINAPI Fo_waveOutClose(HANDLE h) {
+        DWORD kind = 0;
+        DWORD_PTR cb = 0, inst = 0;
+        {
+            std::lock_guard<std::mutex> lk(g_foLock);
+            FakeOut* f = FoFind(h);
+            if (!f) return reinterpret_cast<PFN_WaveOut1>(g_realWave[kClose])(h);
+            if (!f->queue.empty()) return WAVERR_STILLPLAYING;
+            kind = f->kind;
+            cb = f->callback;
+            inst = f->instance;
+            g_fakeOuts.erase(std::find(g_fakeOuts.begin(), g_fakeOuts.end(), f));
+            delete f;
+        }
+        FoNotify(kind, cb, inst, h, WOM_CLOSE, 0);
+        return MMSYSERR_NOERROR;
+    }
+
+    UINT WINAPI Fo_waveOutPrepareHeader(HANDLE h, WAVEHDR* hdr, UINT size) {
+        {
+            std::lock_guard<std::mutex> lk(g_foLock);
+            if (!FoFind(h)) return reinterpret_cast<PFN_WaveOutHdr>(g_realWave[kPrepare])(h, hdr, size);
+        }
+        if (!hdr || size < sizeof(WAVEHDR)) return MMSYSERR_INVALPARAM;
+        hdr->dwFlags |= WHDR_PREPARED;
+        return MMSYSERR_NOERROR;
+    }
+
+    UINT WINAPI Fo_waveOutUnprepareHeader(HANDLE h, WAVEHDR* hdr, UINT size) {
+        {
+            std::lock_guard<std::mutex> lk(g_foLock);
+            if (!FoFind(h)) return reinterpret_cast<PFN_WaveOutHdr>(g_realWave[kUnprepare])(h, hdr, size);
+        }
+        if (!hdr || size < sizeof(WAVEHDR)) return MMSYSERR_INVALPARAM;
+        if (hdr->dwFlags & WHDR_INQUEUE) return WAVERR_STILLPLAYING;
+        hdr->dwFlags &= ~static_cast<DWORD>(WHDR_PREPARED);
+        return MMSYSERR_NOERROR;
+    }
+
+    UINT WINAPI Fo_waveOutWrite(HANDLE h, WAVEHDR* hdr, UINT size) {
+        std::lock_guard<std::mutex> lk(g_foLock);
+        FakeOut* f = FoFind(h);
+        if (!f) return reinterpret_cast<PFN_WaveOutHdr>(g_realWave[kWrite])(h, hdr, size);
+        if (!hdr || size < sizeof(WAVEHDR)) return MMSYSERR_INVALPARAM;
+        if (!(hdr->dwFlags & WHDR_PREPARED)) return WAVERR_UNPREPARED;
+        const double now = FoNow();
+        if (f->pausedAt < 0.0 && now - f->clockBase >= f->queuedEnd) f->clockBase = now - f->queuedEnd;   // ran dry: on from here
+        double length = static_cast<double>(hdr->dwBufferLength) / f->bytesPerSec;
+        if ((hdr->dwFlags & WHDR_BEGINLOOP) && (hdr->dwFlags & WHDR_ENDLOOP)) {
+            length *= (std::max)(1.0, static_cast<double>(hdr->dwLoops));
+        }
+        f->queuedEnd += length;
+        hdr->dwFlags = (hdr->dwFlags | WHDR_INQUEUE) & ~static_cast<DWORD>(WHDR_DONE);
+        f->queue.emplace_back(hdr, f->queuedEnd);
+        return MMSYSERR_NOERROR;
+    }
+
+    UINT WINAPI Fo_waveOutPause(HANDLE h) {
+        std::lock_guard<std::mutex> lk(g_foLock);
+        FakeOut* f = FoFind(h);
+        if (!f) return reinterpret_cast<PFN_WaveOut1>(g_realWave[kPause])(h);
+        if (f->pausedAt < 0.0) f->pausedAt = FoPosition(f, FoNow());
+        return MMSYSERR_NOERROR;
+    }
+
+    UINT WINAPI Fo_waveOutRestart(HANDLE h) {
+        std::lock_guard<std::mutex> lk(g_foLock);
+        FakeOut* f = FoFind(h);
+        if (!f) return reinterpret_cast<PFN_WaveOut1>(g_realWave[kRestart])(h);
+        if (f->pausedAt >= 0.0) {
+            f->clockBase = FoNow() - f->pausedAt;
+            f->pausedAt = -1.0;
+        }
+        return MMSYSERR_NOERROR;
+    }
+
+    UINT WINAPI Fo_waveOutReset(HANDLE h) {
+        std::vector<WAVEHDR*> done;
+        DWORD kind = 0;
+        DWORD_PTR cb = 0, inst = 0;
+        {
+            std::lock_guard<std::mutex> lk(g_foLock);
+            FakeOut* f = FoFind(h);
+            if (!f) return reinterpret_cast<PFN_WaveOut1>(g_realWave[kReset])(h);
+            for (auto& q : f->queue) {
+                q.first->dwFlags = (q.first->dwFlags | WHDR_DONE) & ~static_cast<DWORD>(WHDR_INQUEUE);
+                done.push_back(q.first);
+            }
+            f->queue.clear();
+            f->queuedEnd = 0.0;
+            f->clockBase = FoNow();
+            f->pausedAt = -1.0;
+            kind = f->kind;
+            cb = f->callback;
+            inst = f->instance;
+        }
+        for (WAVEHDR* hdr : done) FoNotify(kind, cb, inst, h, WOM_DONE, reinterpret_cast<DWORD_PTR>(hdr));
+        return MMSYSERR_NOERROR;
+    }
+
+    UINT WINAPI Fo_waveOutBreakLoop(HANDLE h) {
+        std::lock_guard<std::mutex> lk(g_foLock);
+        FakeOut* f = FoFind(h);
+        if (!f) return reinterpret_cast<PFN_WaveOut1>(g_realWave[kBreakLoop])(h);
+        // a looping buffer ends with its current pass
+        const double pos = FoPosition(f, FoNow());
+        for (auto& q : f->queue) {
+            if ((q.first->dwFlags & WHDR_BEGINLOOP) && q.second > pos) {
+                const double one = static_cast<double>(q.first->dwBufferLength) / f->bytesPerSec;
+                const double cut = q.second - (std::ceil((q.second - pos) / one) - 1.0) * one;
+                const double shift = q.second - cut;
+                for (auto& r : f->queue) {
+                    if (r.second >= q.second) r.second -= shift;
+                }
+                f->queuedEnd -= shift;
+                break;
+            }
+        }
+        return MMSYSERR_NOERROR;
+    }
+
+    UINT WINAPI Fo_waveOutGetPosition(HANDLE h, MMTIME* t, UINT size) {
+        std::lock_guard<std::mutex> lk(g_foLock);
+        FakeOut* f = FoFind(h);
+        if (!f) return reinterpret_cast<UINT(WINAPI*)(HANDLE, MMTIME*, UINT)>(g_realWave[kGetPosition])(h, t, size);
+        if (!t || size < sizeof(MMTIME)) return MMSYSERR_INVALPARAM;
+        const double pos = FoPosition(f, FoNow());
+        switch (t->wType) {
+            case TIME_SAMPLES: t->u.sample = static_cast<DWORD>(pos * f->samplesPerSec); break;
+            case TIME_MS: t->u.ms = static_cast<DWORD>(pos * 1000.0); break;
+            default: t->wType = TIME_BYTES; t->u.cb = static_cast<DWORD>(pos * f->bytesPerSec) & ~3u; break;
+        }
+        return MMSYSERR_NOERROR;
+    }
+
+    // volume, pitch, rate: kept by nobody (in test mode no device's or program's setting is changed either)
+    UINT WINAPI Fo_waveOutGetVolume(HANDLE h, DWORD* v) {
+        if (v) *v = 0xFFFFFFFFu;
+        (void)h;
+        return MMSYSERR_NOERROR;
+    }
+    UINT WINAPI Fo_waveOutSetVolume(HANDLE, DWORD) { return MMSYSERR_NOERROR; }
+    UINT WINAPI Fo_waveOutGetPitch(HANDLE, DWORD* v) { if (v) *v = 0x10000; return MMSYSERR_NOERROR; }
+    UINT WINAPI Fo_waveOutSetPitch(HANDLE, DWORD) { return MMSYSERR_NOERROR; }
+    UINT WINAPI Fo_waveOutGetPlaybackRate(HANDLE, DWORD* v) { if (v) *v = 0x10000; return MMSYSERR_NOERROR; }
+    UINT WINAPI Fo_waveOutSetPlaybackRate(HANDLE, DWORD) { return MMSYSERR_NOERROR; }
+
+    UINT WINAPI Fo_waveOutGetID(HANDLE h, UINT* id) {
+        {
+            std::lock_guard<std::mutex> lk(g_foLock);
+            if (!FoFind(h)) return reinterpret_cast<UINT(WINAPI*)(HANDLE, UINT*)>(g_realWave[kGetID])(h, id);
+        }
+        if (id) *id = 0;
+        return MMSYSERR_NOERROR;
+    }
+
+    UINT WINAPI Fo_waveOutMessage(HANDLE h, UINT msg, DWORD_PTR a, DWORD_PTR b) {
+        {
+            std::lock_guard<std::mutex> lk(g_foLock);
+            if (!FoFind(h)) return reinterpret_cast<UINT(WINAPI*)(HANDLE, UINT, DWORD_PTR, DWORD_PTR)>(g_realWave[kMessage])(h, msg, a, b);
+        }
+        return MMSYSERR_NOTSUPPORTED;
     }
 }
 
 bool SilenceWaveOut() {
-    if (g_realWaveOutWrite) return true;
-    for (size_t i = 0; i < 192; ++i) {
-        if (std::strcmp(g_szProcNames[i], "waveOutWrite") != 0) continue;
-        if (!g_pProcs[i]) return false;
-        g_realWaveOutWrite = reinterpret_cast<PFN_waveOutWrite>(g_pProcs[i]);
-        g_pProcs[i] = reinterpret_cast<FARPROC>(&Silent_waveOutWrite);    // Proxy_waveOutWrite jumps through it
-        return true;
+    static bool done = false;
+    if (done) return true;
+    struct Entry { const char* name; int idx; FARPROC fn; };
+    const Entry entries[] = {
+        { "waveOutOpen", kOpen, reinterpret_cast<FARPROC>(&Fo_waveOutOpen) },
+        { "waveOutClose", kClose, reinterpret_cast<FARPROC>(&Fo_waveOutClose) },
+        { "waveOutPrepareHeader", kPrepare, reinterpret_cast<FARPROC>(&Fo_waveOutPrepareHeader) },
+        { "waveOutUnprepareHeader", kUnprepare, reinterpret_cast<FARPROC>(&Fo_waveOutUnprepareHeader) },
+        { "waveOutWrite", kWrite, reinterpret_cast<FARPROC>(&Fo_waveOutWrite) },
+        { "waveOutPause", kPause, reinterpret_cast<FARPROC>(&Fo_waveOutPause) },
+        { "waveOutRestart", kRestart, reinterpret_cast<FARPROC>(&Fo_waveOutRestart) },
+        { "waveOutReset", kReset, reinterpret_cast<FARPROC>(&Fo_waveOutReset) },
+        { "waveOutBreakLoop", kBreakLoop, reinterpret_cast<FARPROC>(&Fo_waveOutBreakLoop) },
+        { "waveOutGetPosition", kGetPosition, reinterpret_cast<FARPROC>(&Fo_waveOutGetPosition) },
+        { "waveOutGetVolume", kGetVolume, reinterpret_cast<FARPROC>(&Fo_waveOutGetVolume) },
+        { "waveOutSetVolume", kSetVolume, reinterpret_cast<FARPROC>(&Fo_waveOutSetVolume) },
+        { "waveOutGetPitch", kGetPitch, reinterpret_cast<FARPROC>(&Fo_waveOutGetPitch) },
+        { "waveOutSetPitch", kSetPitch, reinterpret_cast<FARPROC>(&Fo_waveOutSetPitch) },
+        { "waveOutGetPlaybackRate", kGetRate, reinterpret_cast<FARPROC>(&Fo_waveOutGetPlaybackRate) },
+        { "waveOutSetPlaybackRate", kSetRate, reinterpret_cast<FARPROC>(&Fo_waveOutSetPlaybackRate) },
+        { "waveOutGetID", kGetID, reinterpret_cast<FARPROC>(&Fo_waveOutGetID) },
+        { "waveOutMessage", kMessage, reinterpret_cast<FARPROC>(&Fo_waveOutMessage) },
+    };
+    // all or nothing: a device half emulated would mix handles
+    size_t slots[kWaveCount] = {};
+    for (const Entry& e : entries) {
+        size_t found = 192;
+        for (size_t i = 0; i < 192; ++i) {
+            if (std::strcmp(g_szProcNames[i], e.name) == 0) found = i;
+        }
+        if (found == 192 || !g_pProcs[found]) return false;
+        slots[e.idx] = found;
     }
-    return false;
+    QueryPerformanceFrequency(&g_foFreq);
+    for (const Entry& e : entries) {
+        g_realWave[e.idx] = g_pProcs[slots[e.idx]];
+        g_pProcs[slots[e.idx]] = e.fn;      // Proxy_waveOut* jump through these
+    }
+    done = true;
+    return true;
 }
 
 extern "C" {

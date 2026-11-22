@@ -313,6 +313,11 @@ namespace {
                 Sleep(400); // the switch and the redraw happen at the next game ticks
             }
             Ack(seq, "ok hd=%s", DDM::HD::CurrentVariantName());
+        } else if (!std::strcmp(cmd, "cursor")) {
+            // the mission cursor's own picture drawn last (which one the game chose: walk, can't walk, attack ...)
+            const uint64_t k = DDM::LastCursorKey();
+            Ack(seq, "ok cursor=%ux%u key=%08x", static_cast<unsigned>(k >> 48), static_cast<unsigned>((k >> 32) & 0xFFFF),
+                static_cast<unsigned>(k & 0xFFFFFFFFu));
         } else if (!std::strcmp(cmd, "pause")) {
             // the game's pause - the input translator's flag (singleton [0x006C0C4C] + 0x1B; RHGame::Run then skips
             // the engine's tick and the frame limiter): pause 1 | pause 0 | pause (state)
@@ -561,13 +566,15 @@ namespace {
 
     // No sound in a test run. Not FSOUND_OUTPUT_NOSOUND (2026-11-22): with it a sound stream never ends and
     // FSOUND_Stream_Close waits for that for ever - the hidden game hung when Robin aimed his bow (a voice stream
-    // closed). FMOD plays through its WINMM output, whose buffers this DLL makes silence (SilenceWaveOut) - a muted
-    // audio session would be kept by Windows for the program (see UndoTestMute). Only if that fails, NOSOUND.
+    // closed). FMOD plays through its WINMM output into a waveOut device this DLL emulates (SilenceWaveOut: buffers
+    // "played" in real time, nothing sent to Windows - zeroing the buffers at waveOutWrite was not enough, FMOD keeps
+    // mixing into them: the player heard the hidden game, 2026-11-22). A muted audio session would be kept by Windows
+    // for the program (see UndoTestMute). Only if the emulation cannot be set up, NOSOUND.
     signed char __stdcall Stub_SetOutput(int /*outputType*/) {
         static int silent = -1;
         if (silent < 0) {
             silent = SilenceWaveOut() ? 1 : 0;
-            Logger::Info("TEST MODE: sound %s.", silent ? "through FMOD's WINMM output with silent buffers" :
+            Logger::Info("TEST MODE: sound %s.", silent ? "through FMOD's WINMM output into an emulated device (nothing reaches Windows)" :
                                                           "without FMOD output (a voice stream may hang it)");
             if (silent) UndoTestMute();
         }

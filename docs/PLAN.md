@@ -405,6 +405,25 @@ wczytaniu (11:56:21, 11:56:26) i jedna bez przypisanej przyczyny (11:56:52–57;
 jednym rdzeniu — przez wcześniejsze 45 s eksportu gra szła równo). Do obserwacji. Klawisze F6/F7/F8 nadal
 niepotwierdzone (w logu brak „background variant switched").
 
+### 1.3.3 (2026-11-22) — korony drzew z obrazu HD poziomu
+- **Korony drzew** (zgłoszenie: „na mapie liście wyglądają dobrze, a to, co gra rysuje na nich, jest złe”): gra
+  rysuje korony drugi raz nad poziomem jako sprite z „sitem” — co drugi piksel kluczem (szachownica), reszta to
+  lekko poruszona kopia liści z obrazu poziomu (postać za drzewem prześwituje, liście drgają). W 2× sito dawało
+  klocki 2×2, a skalowanie AI dziurawych klatek — kanciaste liście (zrzuty 1× i różnice: `dbg 65536` →
+  `tools\out\harness\cutout_*.raw`, `tools\hd\analyse_cutouts.py`: 1–5 % pikseli identycznych z poziomem, 55–97 %
+  blisko, 150–180 % „dziur szachownicy”). Rozpoznanie (`OverlayAt`, ddm_hd.cpp): na siatce poziomu, ≥ 55 % pikseli
+  blisko obrazu poziomu, ≥ 40 % dziur; pokrycie z sąsiedztwa (szachownica = ½, pełne = 1), kolor z obrazu HD poziomu
+  (2×, `LevelOverlay2x`) albo z obrazu poziomu (1×, `LevelOverlay1x` w procedurze 1× `0x00622550` — warstwa poziomu
+  prezentera pokazuje tam HD). Nad gołą ziemią korona = mapa (przy 4× też), postać za drzewem prześwituje gładko.
+  Piksele, gdzie klatka już ma obraz HD, pomijane po 8 (SSE2): koszt ok. 0,7 ms na klatkę. `dbg 32768` wyłącza.
+- **Ciche testy w tle naprawdę ciche**: FMOD dopisywał dźwięk do już oddanych buforów (zerowanie przy waveOutWrite nie
+  wystarczało — gracz słyszał ukrytą grę). Teraz urządzenie waveOut jest w trybie testowym udawane (proxy: bufory
+  „grane” w czasie rzeczywistym, nic nie idzie do Windows). Sprawdzenie: `tools\audio_check.ps1` (sesje audio procesu
+  i ich szczyt — dla testu: brak sesji).
+- Narzędzia: polecenie testu `cursor` (który obrazek kursora gra narysowała), `tools\probe_walk.ps1` (siatka punktów:
+  gdzie postać może iść). Róg mapy wozu: pas pod bramką (poziom ok. x 1470–1792, y ≥ 1065) niedostępny dla gracza,
+  a żołnierze tamtędy chodzą; podgląd krzaków jako przeszkody: `tools\hd\mock_corner_bushes.py`.
+
 ### 1.3.2 (2026-11-22) — celownik łuku, skalowanie w dół
 - **Celownik łuku** (zgłoszenie: „lupa łuku nie pokazuje postaci”, potem „czarne kółko”): to kursor gry —
   pierścień ze strzałkami i duży cień w środku. Gra kopiuje tło spod kursora, rysuje w kopii kursor i oddaje ją

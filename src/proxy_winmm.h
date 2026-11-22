@@ -5,6 +5,6 @@
 bool InitWinMMProxy();
 void ShutdownWinMMProxy();
 HMODULE GetRealWinMMModule();
-// Test mode (test_harness.cpp): every buffer handed to waveOutWrite (FMOD's WINMM output) is made silence first -
-// the device plays, nothing is heard, nothing of the Windows sound settings changes. False: not possible.
+// Test mode (test_harness.cpp): waveOut devices are emulated (FMOD's WINMM output) - buffers taken and "played" in
+// real time, nothing sent to Windows: no sound, no audio session, no Windows sound setting changed. False: not possible.
 bool SilenceWaveOut();

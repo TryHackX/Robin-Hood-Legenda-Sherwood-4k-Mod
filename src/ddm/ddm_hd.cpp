@@ -22,6 +22,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <deque>
+#include <unordered_map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -605,11 +606,283 @@ namespace {
         return true;
     }
 
+    // Tree crowns (and similar pieces) the game draws over the level (2026-11-22, user: "the leaves on the map look
+    // good, so what is drawn over them is wrong"). They are a screen-door overlay: every other pixel left out (the
+    // colour key in a checkerboard), the rest a slightly moving copy of the foliage the level picture already has - a
+    // figure behind the tree shows half through the leaves, and the leaves shimmer. At 2x the checkerboard became 2x2
+    // blocks, and its upscaled frames (made from the holed picture) blocky leaves. Recognised by content: the sprite lies
+    // on the level's own pixel grid, mostly holed like a checkerboard, and its pixels are close to the level picture's
+    // there. It is then laid over what is drawn with the coverage of its pixels (a checkerboard = half, solid = whole),
+    // its colour the level's HD picture: over the bare level that is the HD picture itself (the presenter's level
+    // layer finds its pixel there and shows the 4x one), a figure behind it shows half through, without the blocks.
+    // The leaves' shimmer goes (the HD picture is still).
+    struct OverlaySeen {
+        uint32_t probe = 0;
+        bool overlay = false;
+        bool shadow = false;                // has shadow pixels (the marker colour): every pixel is visited
+        std::vector<uint8_t> alpha;         // cols x rows coverage, 0..255
+        uint32_t cols = 0, rows = 0;
+    };
+    std::unordered_map<uint64_t, OverlaySeen> g_overlays;      // main thread
+    unsigned g_overlaysDrawn = 0, g_overlaysLogged = 0;
+
+    // the sprite at level pixel (lx, ly): such an overlay? (the decision per sprite and place, again when its pixels
+    // change - a probe of 32 of them); nullptr = no
+    const OverlaySeen* OverlayAt(const uint16_t* src, uint32_t cols, uint32_t rows, int srcPitch, int lx, int ly, uint32_t marker) {
+        if (g_srcW <= 0 || g_srcH <= 0 || cols < 16 || rows < 16 || g_base.size() != static_cast<size_t>(g_srcW) * g_srcH ||
+            srcPitch <= 0 || (srcPitch & 1) || lx < 0 || ly < 0 || lx + static_cast<int>(cols) > g_srcW ||
+            ly + static_cast<int>(rows) > g_srcH) {
+            return nullptr;
+        }
+        auto px = [&](uint32_t x, uint32_t y) {
+            return reinterpret_cast<const uint16_t*>(reinterpret_cast<const uint8_t*>(src) + static_cast<size_t>(y) * srcPitch)[x];
+        };
+        // the decision per sprite and place, again when its pixels change (a probe of 32 of them)
+        uint32_t probe = 2166136261u;
+        for (uint32_t k = 0; k < 32; ++k) probe = (probe ^ px((k * 37u) % cols, (k * 53u) % rows)) * 16777619u;
+        // one entry per place and frame: the crowns cycle through their frames (their shimmer), each is looked at once
+        const uint64_t id = (reinterpret_cast<uintptr_t>(src) * 0x9E3779B97F4A7C15ull) ^ (static_cast<uint64_t>(lx) << 40) ^
+                            (static_cast<uint64_t>(ly) << 20) ^ (static_cast<uint64_t>(cols) << 10) ^ rows ^
+                            (static_cast<uint64_t>(probe) * 0xC2B2AE3D27D4EB4Full);
+        if (g_overlays.size() > 256 && g_overlays.find(id) == g_overlays.end()) g_overlays.clear();
+        OverlaySeen& seen = g_overlays[id];
+        if (seen.probe != probe || seen.cols != cols || seen.rows != rows || probe == 0) {
+            seen.probe = probe;
+            seen.cols = cols;
+            seen.rows = rows;
+            seen.overlay = false;
+            seen.shadow = false;
+            std::vector<uint8_t> solid(static_cast<size_t>(cols) * rows);
+            uint32_t opaque = 0, close = 0;
+            for (uint32_t y = 0; y < rows; ++y) {
+                const uint16_t* lv = g_base.data() + static_cast<size_t>(ly + static_cast<int>(y)) * g_srcW + lx;
+                for (uint32_t x = 0; x < cols; ++x) {
+                    const uint32_t p = px(x, y);
+                    const bool o = p != 0x07C0 && p != marker;
+                    if (p == marker && marker != 0x07C0) seen.shadow = true;
+                    solid[static_cast<size_t>(y) * cols + x] = o ? 1 : 0;
+                    if (!o) continue;
+                    ++opaque;
+                    const uint32_t q = lv[x];
+                    const int dr = static_cast<int>(p >> 11) - static_cast<int>(q >> 11);
+                    const int dg = static_cast<int>((p >> 5) & 63) - static_cast<int>((q >> 5) & 63);
+                    const int dbl = static_cast<int>(p & 31) - static_cast<int>(q & 31);
+                    if (dr >= -4 && dr <= 4 && dg >= -8 && dg <= 8 && dbl >= -4 && dbl <= 4) ++close;   // within 32 of 255
+                }
+            }
+            // holes of a checkerboard: a key pixel between four drawn ones, a drawn one between four key ones
+            uint32_t holes = 0;
+            for (uint32_t y = 1; y + 1 < rows; ++y) {
+                const uint8_t* r0 = solid.data() + static_cast<size_t>(y - 1) * cols;
+                const uint8_t* r1 = r0 + cols;
+                const uint8_t* r2 = r1 + cols;
+                for (uint32_t x = 1; x + 1 < cols; ++x) {
+                    const int n = r0[x] + r2[x] + r1[x - 1] + r1[x + 1];
+                    if ((r1[x] == 0 && n == 4) || (r1[x] == 1 && n == 0)) ++holes;
+                }
+            }
+            seen.overlay = opaque >= 256 && close * 100 >= opaque * 55 && holes * 100 >= opaque * 40;
+            if (seen.overlay) {
+                // coverage: the pixel itself counts 4, its four neighbours 1 each (checkerboard 1/2, solid 1, outside 0)
+                seen.alpha.assign(static_cast<size_t>(cols) * rows, 0);
+                for (uint32_t y = 0; y < rows; ++y) {
+                    for (uint32_t x = 0; x < cols; ++x) {
+                        auto at = [&](int xx, int yy) {
+                            if (xx < 0 || yy < 0 || xx >= static_cast<int>(cols) || yy >= static_cast<int>(rows)) return 0;
+                            return static_cast<int>(solid[static_cast<size_t>(yy) * cols + xx]);
+                        };
+                        const int sum = 4 * at(x, y) + at(x - 1, y) + at(x + 1, y) + at(x, y - 1) + at(x, y + 1);
+                        seen.alpha[static_cast<size_t>(y) * cols + x] = static_cast<uint8_t>((sum * 255 + 4) / 8);
+                    }
+                }
+            } else {
+                seen.alpha.clear();
+            }
+            if (TestHarness::Enabled() && (g_debugFlags.load(std::memory_order_relaxed) & 65536u) && opaque >= 256) {
+                // test: the sprite and the level picture under it -> tools\out\harness\cutout_<n>.raw (u32 w, h, lx, ly,
+                // marker; w*h sprite pixels; w*h level pixels) for tools\hd\analyse_cutouts.py
+                static unsigned s_dumps = 0;
+                char name[96];
+                std::snprintf(name, sizeof(name), "tools\\out\\harness\\cutout_%02u.raw", s_dumps++ % 40);
+                if (FILE* f = std::fopen((GameDir() + name).c_str(), "wb")) {
+                    const uint32_t hdr[5] = { cols, rows, static_cast<uint32_t>(lx), static_cast<uint32_t>(ly), marker };
+                    std::fwrite(hdr, sizeof(hdr), 1, f);
+                    for (uint32_t y = 0; y < rows; ++y) std::fwrite(reinterpret_cast<const uint8_t*>(src) + static_cast<size_t>(y) * srcPitch, 2, cols, f);
+                    for (uint32_t y = 0; y < rows; ++y) std::fwrite(g_base.data() + static_cast<size_t>(ly + static_cast<int>(y)) * g_srcW + lx, 2, cols, f);
+                    std::fclose(f);
+                }
+            }
+            if (g_overlaysLogged < 16 && opaque >= 256) {
+                ++g_overlaysLogged;
+                Logger::Info("HD: sprite %ux%u at level %d,%d - %u %% close to the level picture, %u %% holed like a checkerboard%s.",
+                             cols, rows, lx, ly, close * 100 / opaque, holes * 100 / opaque,
+                             seen.overlay ? " - laid over smoothly, its colour from the level's HD picture" : "");
+            }
+        }
+        return seen.overlay ? &seen : nullptr;
+    }
+
+    // RGB565 a -> b by t of 255, exact where both are the same (over the bare level the level's own pixel stays)
+    inline uint16_t Mix565(uint32_t under, uint32_t over, uint32_t t) {
+        if (under == over) return static_cast<uint16_t>(under);
+        const uint32_t r = ((under >> 11) * (255 - t) + (over >> 11) * t + 127) / 255;
+        const uint32_t g = (((under >> 5) & 63) * (255 - t) + ((over >> 5) & 63) * t + 127) / 255;
+        const uint32_t b = ((under & 31) * (255 - t) + (over & 31) * t + 127) / 255;
+        return static_cast<uint16_t>((r << 11) | (g << 5) | b);
+    }
+
+    // the engine's 2.0 (the game's 2x sprite routine): the colour from the level's HD picture
+    template <bool Keyed>
+    bool LevelOverlay2x(const uint16_t* src, uint16_t* dst, uint32_t cols, uint32_t rows, int srcPitch, int dstPitch,
+                        uint32_t factor, uint32_t marker) {
+        if (!Keyed) return false;
+        const HdMap* hd = g_current;
+        if (!hd || !hd->px || !g_originValid || g_baseMap != hd || hd->w != 2 * g_srcW || hd->h != 2 * g_srcH || dstPitch <= 0 ||
+            (dstPitch & 1)) {
+            return false;
+        }
+        Buf db{};
+        if (!FindLockedBuf(dst, db) || db.pitch != dstPitch) return false;
+        const size_t dOff = static_cast<size_t>(reinterpret_cast<const uint8_t*>(dst) - db.bits);
+        const int hx = g_originX + static_cast<int>((dOff % static_cast<size_t>(db.pitch)) / 2);   // HD pixel of dst
+        const int hy = g_originY + static_cast<int>(dOff / static_cast<size_t>(db.pitch));
+        if ((hx | hy) & 1) return false;                        // not on the level's own pixel grid
+        const OverlaySeen* seen = OverlayAt(src, cols, rows, srcPitch, hx / 2, hy / 2, marker);
+        if (!seen) return false;
+        auto px = [&](uint32_t x, uint32_t y) {
+            return reinterpret_cast<const uint16_t*>(reinterpret_cast<const uint8_t*>(src) + static_cast<size_t>(y) * srcPitch)[x];
+        };
+        const auto* mask = reinterpret_cast<const uint16_t*>(kAddrSpanMask);
+        const uint32_t mB = mask[0], mG = mask[1], mR = mask[2];
+        const int32_t mul = static_cast<int16_t>(static_cast<uint16_t>(factor << 6));
+        for (uint32_t y = 0; y < rows; ++y) {
+            auto* d0 = reinterpret_cast<uint16_t*>(reinterpret_cast<uint8_t*>(dst) + static_cast<size_t>(2 * y) * dstPitch);
+            auto* d1 = reinterpret_cast<uint16_t*>(reinterpret_cast<uint8_t*>(d0) + dstPitch);
+            const uint16_t* h0 = hd->px + static_cast<size_t>(hy + 2 * static_cast<int>(y)) * hd->w + hx;
+            const uint16_t* h1 = h0 + hd->w;
+            const uint8_t* al = seen->alpha.data() + static_cast<size_t>(y) * cols;
+            if (!seen->shadow) {
+                // Over the bare level the frame already holds the HD picture and the overlay gives the same: only the
+                // pixels where something else lies under the crown (a figure, an object) are worked on.
+                for (int r = 0; r < 2; ++r) {
+                    uint16_t* d = r ? d1 : d0;
+                    const uint16_t* h = r ? h1 : h0;
+                    const uint32_t n = cols * 2;
+                    uint32_t X = 0;
+                    for (; X + 8 <= n; X += 8) {
+                        const __m128i dv = _mm_loadu_si128(reinterpret_cast<const __m128i*>(d + X));
+                        const __m128i hv = _mm_loadu_si128(reinterpret_cast<const __m128i*>(h + X));
+                        if (_mm_movemask_epi8(_mm_cmpeq_epi16(dv, hv)) == 0xFFFF) continue;
+                        for (uint32_t k = X; k < X + 8; ++k) {
+                            const uint32_t a = al[k >> 1];
+                            if (a && d[k] != h[k]) d[k] = a >= 255 ? h[k] : Mix565(d[k], h[k], a);
+                        }
+                    }
+                    for (; X < n; ++X) {
+                        const uint32_t a = al[X >> 1];
+                        if (a && d[X] != h[X]) d[X] = a >= 255 ? h[X] : Mix565(d[X], h[X], a);
+                    }
+                }
+                continue;
+            }
+            for (uint32_t x = 0; x < cols; ++x) {
+                const uint32_t a = al[x];
+                if (px(x, y) == marker && marker != 0x07C0) {      // a shadow pixel: darkened as the game does
+                    for (uint16_t* o : { d0 + 2 * x, d0 + 2 * x + 1, d1 + 2 * x, d1 + 2 * x + 1 }) *o = Darken565(*o, mul, mB, mG, mR);
+                    continue;
+                }
+                if (a == 0) continue;
+                if (a >= 255) {
+                    d0[2 * x] = h0[2 * x];
+                    d0[2 * x + 1] = h0[2 * x + 1];
+                    d1[2 * x] = h1[2 * x];
+                    d1[2 * x + 1] = h1[2 * x + 1];
+                    continue;
+                }
+                d0[2 * x] = Mix565(d0[2 * x], h0[2 * x], a);
+                d0[2 * x + 1] = Mix565(d0[2 * x + 1], h0[2 * x + 1], a);
+                d1[2 * x] = Mix565(d1[2 * x], h1[2 * x], a);
+                d1[2 * x + 1] = Mix565(d1[2 * x + 1], h1[2 * x + 1], a);
+            }
+        }
+        ++g_overlaysDrawn;
+        return true;
+    }
+
+    // the engine's 1.0 (below 2.0 with the smooth zoom; the game's 1x routine): the colour from the level picture
+    // itself - over the bare level its own pixel, which the presenter's level layer then shows from the HD picture
+    template <bool Keyed>
+    bool LevelOverlay1x(const uint16_t* src, uint16_t* dst, uint32_t cols, uint32_t rows, int srcSkip, int dstSkip,
+                        uint32_t factor, uint32_t marker) {
+        if (!Keyed || g_variant < 0 || !SherwoodConfig::Get().hdBackgrounds) return false;
+        const uint8_t* e = Engine();
+        if (!e) return false;
+        float camX = 0.0f, camY = 0.0f, zoom = 0.0f;
+        __try {
+            camX = *reinterpret_cast<const float*>(e + 0x4738);
+            camY = *reinterpret_cast<const float*>(e + 0x473C);
+            zoom = *reinterpret_cast<const float*>(e + 0x475C);
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            return false;
+        }
+        if (zoom < 0.99f || zoom > 1.01f) return false;
+        const int srcPitch = static_cast<int>(cols) * 2 + srcSkip, dstPitch = static_cast<int>(cols) * 2 + dstSkip;
+        if (dstPitch <= 0 || (dstPitch & 1)) return false;
+        Buf db{};
+        if (!FindLockedBuf(dst, db) || db.pitch != dstPitch) return false;
+        const size_t dOff = static_cast<size_t>(reinterpret_cast<const uint8_t*>(dst) - db.bits);
+        const int lx = static_cast<int>(std::floor(camX + 0.5f)) + static_cast<int>((dOff % static_cast<size_t>(db.pitch)) / 2);
+        const int ly = static_cast<int>(std::floor(camY + 0.5f)) + static_cast<int>(dOff / static_cast<size_t>(db.pitch));
+        const OverlaySeen* seen = OverlayAt(src, cols, rows, srcPitch, lx, ly, marker);
+        if (!seen) return false;
+        const auto* mask = reinterpret_cast<const uint16_t*>(kAddrSpanMask);
+        const uint32_t mB = mask[0], mG = mask[1], mR = mask[2];
+        const int32_t mul = static_cast<int16_t>(static_cast<uint16_t>(factor << 6));
+        for (uint32_t y = 0; y < rows; ++y) {
+            const auto* s = reinterpret_cast<const uint16_t*>(reinterpret_cast<const uint8_t*>(src) + static_cast<size_t>(y) * srcPitch);
+            auto* o = reinterpret_cast<uint16_t*>(reinterpret_cast<uint8_t*>(dst) + static_cast<size_t>(y) * dstPitch);
+            const uint16_t* lv = g_base.data() + static_cast<size_t>(ly + static_cast<int>(y)) * g_srcW + lx;
+            const uint8_t* al = seen->alpha.data() + static_cast<size_t>(y) * cols;
+            if (!seen->shadow) {
+                uint32_t x = 0;
+                for (; x + 8 <= cols; x += 8) {
+                    const __m128i dv = _mm_loadu_si128(reinterpret_cast<const __m128i*>(o + x));
+                    const __m128i lvv = _mm_loadu_si128(reinterpret_cast<const __m128i*>(lv + x));
+                    if (_mm_movemask_epi8(_mm_cmpeq_epi16(dv, lvv)) == 0xFFFF) continue;
+                    for (uint32_t k = x; k < x + 8; ++k) {
+                        const uint32_t a = al[k];
+                        if (a && o[k] != lv[k]) o[k] = a >= 255 ? lv[k] : Mix565(o[k], lv[k], a);
+                    }
+                }
+                for (; x < cols; ++x) {
+                    const uint32_t a = al[x];
+                    if (a && o[x] != lv[x]) o[x] = a >= 255 ? lv[x] : Mix565(o[x], lv[x], a);
+                }
+                continue;
+            }
+            for (uint32_t x = 0; x < cols; ++x) {
+                if (s[x] == marker && marker != 0x07C0) {
+                    o[x] = Darken565(o[x], mul, mB, mG, mR);
+                    continue;
+                }
+                const uint32_t a = al[x];
+                if (a == 0) continue;
+                o[x] = a >= 255 ? lv[x] : Mix565(o[x], lv[x], a);
+            }
+        }
+        ++g_overlaysDrawn;
+        return true;
+    }
+
     template <bool Keyed>
     void Sprite2x(const uint16_t* src, uint16_t* dst, uint32_t dstW, uint32_t dstH,
                   int srcPitch, int dstPitch, uint32_t factor, uint32_t marker) {
         const uint32_t cols = dstW >> 1, rows = dstH >> 1;
         if (cols == 0 || rows == 0) return;
+        if (!(g_debugFlags.load(std::memory_order_relaxed) & 32768u) &&
+            LevelOverlay2x<Keyed>(src, dst, cols, rows, srcPitch, dstPitch, factor, marker)) {
+            return; // a screen-door overlay of the level (tree crowns): smooth, from the level's HD picture
+        }
         if (Sprites::TryShadowBlit(src, dst, cols, rows, srcPitch, dstPitch, factor, marker, Keyed)) {
             return; // the upscaled frame was drawn
         }
@@ -818,6 +1091,10 @@ namespace {
         if (w && h && w < 4096 && h < 4096 && Diag::IsMainThread()) {
             op.Clear();
             patch = Patch::BeginShadowPicture(src, dst, static_cast<int>(w), static_cast<int>(h), factor, marker, Keyed, op);
+        }
+        if (!patch && !(g_debugFlags.load(std::memory_order_relaxed) & 32768u) &&
+            LevelOverlay1x<Keyed>(src, dst, w, h, srcSkip, dstSkip, factor, marker)) {
+            return;     // a screen-door overlay of the level (tree crowns) at the engine's 1.0: smooth
         }
         (Keyed ? o_Shadow1xKeyed : o_Shadow1xPlain)(src, dst, w, h, srcSkip, dstSkip, factor, marker);
         if (patch) Patch::End(op);

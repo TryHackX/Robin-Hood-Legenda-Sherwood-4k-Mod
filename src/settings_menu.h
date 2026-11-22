@@ -11,8 +11,6 @@
 namespace SettingsMenu {
     void Install();     // DllMain, after MinHook is initialised (keyboard filter)
 
-    bool IsOpen();      // any thread
-
     // Main thread, before every presented frame: hot key, navigation, clicks.
     void Poll();
 

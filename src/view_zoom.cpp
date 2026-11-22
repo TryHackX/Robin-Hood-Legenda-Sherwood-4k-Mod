@@ -75,7 +75,6 @@ namespace {
     bool  g_hudDirty = false;
     float g_pushX = 0.0f, g_pushY = 0.0f;   // scrolling the camera could not do (world pixels)
     LARGE_INTEGER g_freq{}, g_last{};
-    std::atomic<int> g_wheel{ 0 };          // input thread -> main thread
     std::atomic<float> g_testZoom{ 0.0f };  // test harness -> main thread
     std::atomic<int>   g_testGameZoom{ 0 }; // test harness: the engine's own zoom animation (+1 in, -1 out)
     std::atomic<DWORD> g_wheelTime{ 0 };    // input thread: when the mouse wheel turned last
@@ -332,12 +331,6 @@ void OnGameTick(uint8_t* e) {
         g_anchor = false;
         g_shown.on = false;
         g_hudDirty = true;
-        // wheel turns from before the level (the question that started the mission, the loading) are not
-        // for it: one such notch took a level 64 ms after its start from 2.0 to 1.74, the first briefing
-        // was drawn at the engine's 1.0 with a black band beside the level (YouTuber's video, 2026-11-18)
-        if (const int dropped = g_wheel.exchange(0)) {
-            Logger::Info("ViewZoom: %d mouse wheel step(s) from before the level ignored.", dropped);
-        }
         Logger::Info("ViewZoom: level %.0fx%.0f - zoom %.2f (from %.2f to %.2f).", F(e, kLevelSize), F(e, kLevelSize + 4),
                      g_zTarget, zMin, zMax);
     }
@@ -360,9 +353,6 @@ void OnGameTick(uint8_t* e) {
         }
         g_lastEngineZoom = ez;
         g_gameZooming = false;
-    }
-    for (int n = g_wheel.exchange(0); n != 0; n += n > 0 ? -1 : 1) {
-        Step(n > 0 ? +1 : -1, true);
     }
     const float test = g_testZoom.exchange(0.0f);
     if (test > 0.0f) {
@@ -526,6 +516,12 @@ void OnWorldDrawn() {
     }
 }
 
+bool FrameZoom(float& zoom) {
+    if (!g_installed || !g_enabled || g_shown.zoom < 0.01f) return false;
+    zoom = g_shown.zoom;
+    return true;
+}
+
 bool TakeView(View& out) {
     if (!g_viewPending) return false;
     g_viewPending = false;
@@ -534,6 +530,9 @@ bool TakeView(View& out) {
     out.cropX = g_shown.cropX;
     out.cropY = g_shown.cropY;
     out.worldH = g_shown.worldH;
+    out.camX = g_shown.camX;
+    out.camY = g_shown.camY;
+    out.zoom = g_shown.zoom;
     out.snap = nullptr;                 // already in the presenter's texture
     out.w = g_worldW;
     out.h = g_worldH;
@@ -639,10 +638,6 @@ void OnScrollClamped(float dx, float dy) {
 
 bool CanZoomOut() {
     return CanZoomOutNow(Engine());
-}
-
-void OnWheel(int notches) {
-    if (HandlesZoom()) g_wheel.fetch_add(notches);
 }
 
 void NoteWheel() {

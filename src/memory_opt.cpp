@@ -35,37 +35,11 @@ namespace {
         GlobalMemoryStatusEx(&memStatus);
         const uint32_t totalVirtualMB = static_cast<uint32_t>(memStatus.ullTotalVirtual / (1024ULL * 1024ULL));
 
+        // Only reported. Until 2026-11-22 a missing flag made every start copy Game.exe to Game.exe.bak and try to
+        // write the flag into the running exe - which Windows refuses (audit): the GOG exe stays as it is, the mod
+        // keeps its large pictures out of the 2 GB address space (strips, textures on the graphics card).
         Logger::Info("MemoryOpt: LARGE_ADDRESS_AWARE=%s | Virtual Address Space=%u MB.",
                      laaHeaderSet ? "ENABLED" : "DISABLED", totalVirtualMB);
-
-        if (!laaHeaderSet) {
-            // Self-patch Game.exe on disk for subsequent launches if needed
-            char exePath[MAX_PATH]{};
-            if (GetModuleFileNameA(nullptr, exePath, MAX_PATH) > 0) {
-                std::string bakPath = std::string(exePath) + ".bak";
-                CopyFileA(exePath, bakPath.c_str(), TRUE); // Only if .bak doesn't already exist
-                HANDLE hFile = CreateFileA(exePath, GENERIC_READ | GENERIC_WRITE,
-                                           FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
-                                           OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-                if (hFile != INVALID_HANDLE_VALUE) {
-                    IMAGE_DOS_HEADER dosHdr{};
-                    DWORD bytesRead = 0;
-                    if (ReadFile(hFile, &dosHdr, sizeof(dosHdr), &bytesRead, nullptr) &&
-                        dosHdr.e_magic == IMAGE_DOS_SIGNATURE) {
-                        SetFilePointer(hFile, dosHdr.e_lfanew + 4 + 18, nullptr, FILE_BEGIN);
-                        WORD chars = 0;
-                        if (ReadFile(hFile, &chars, sizeof(chars), &bytesRead, nullptr)) {
-                            chars |= IMAGE_FILE_LARGE_ADDRESS_AWARE;
-                            SetFilePointer(hFile, dosHdr.e_lfanew + 4 + 18, nullptr, FILE_BEGIN);
-                            DWORD bytesWritten = 0;
-                            WriteFile(hFile, &chars, sizeof(chars), &bytesWritten, nullptr);
-                            Logger::Info("MemoryOpt: Patched IMAGE_FILE_LARGE_ADDRESS_AWARE into Game.exe on disk.");
-                        }
-                    }
-                    CloseHandle(hFile);
-                }
-            }
-        }
     }
 
     // SSE2-accelerated Fog of War rectangle clear (fills rows with 0xFFFFFFFF)

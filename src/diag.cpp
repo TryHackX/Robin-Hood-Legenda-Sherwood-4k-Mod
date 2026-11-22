@@ -368,10 +368,6 @@ bool IsMainThread() {
     return GetCurrentThreadId() == g_mainTid;
 }
 
-DWORD MainThreadId() {
-    return g_mainTid;
-}
-
 void Add(Counter c, uint64_t ticks) {
     g_cnt[c].fetch_add(1, std::memory_order_relaxed);
     if (ticks) {

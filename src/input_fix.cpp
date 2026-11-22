@@ -660,4 +660,8 @@ void Shutdown() {
     RestoreGameKeys();
 }
 
+void RestoreQuickKeys() {
+    RestoreGameKeys();
+}
+
 } // namespace InputFix

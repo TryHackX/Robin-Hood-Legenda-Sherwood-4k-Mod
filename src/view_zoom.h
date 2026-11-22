@@ -48,10 +48,14 @@ namespace ViewZoom {
         float m = 1.0f;                 // magnification of the world (> 1)
         float cropX = 0.0f, cropY = 0.0f;   // frame position shown at the output's top-left corner
         float worldH = 0.0f;            // frame rows that hold the world (below them: HUD strip)
+        float camX = 0.0f, camY = 0.0f; // the engine's camera for this frame (level pixel at world pixel 0, 0)
+        float zoom = 0.0f;              // ... and its zoom (1 world pixel = zoom frame pixels)
         const uint16_t* snap = nullptr; // the world before the windows were drawn, RGB565, w x h
         int   w = 0, h = 0;
     };
     bool TakeView(View& out);
+    // the engine's zoom of the last drawn world (also when nothing is magnified); false = not known
+    bool FrameZoom(float& zoom);
 
     // the frame position whose world a screen position shows (false: no magnification)
     bool ScreenToFrame(float& x, float& y);
@@ -74,8 +78,6 @@ namespace ViewZoom {
     // widescreen_patch.cpp: the hook of CanZoomOut 0x004C7CF0 asks this while HandlesZoom()
     bool CanZoomOut();
 
-    // input thread: mouse wheel notches (+ = closer)
-    void OnWheel(int notches);
     // input thread: the wheel turned (the game's zoom actions that follow zoom about the cursor)
     void NoteWheel();
 

@@ -4,6 +4,10 @@ Ustawienia moda (grafika HD, interfejs, menu, VSync, filtr...) zmienia się w gr
 TEGO UŻYWA GRA
   maps\<wariant>\*.hdmap    Mapy HD: 20 map w każdym z 4 wariantów AI (aomr, dat2, sgi, ultrasharp).
                             Własny format, nazwy plików to klucze treści - przeglądarka zdjęć ich nie otworzy.
+  maps4k\<wariant>\*.hdm4   Mapy w natywnym 4K (4x oryginał, tylko wariant dat2, 3,3 GB). Gra używa ich przy zbliżeniu
+                            powyżej 2,0 (na monitorze 2560x1440 od ok. 2,2; na 4K od 2,0), HDMaps4k=1 w SherwoodFix.ini.
+                            Opcjonalne, w paczkach SherwoodHD-5-mapy-4k-a i -b. Robi je: tools/hd/upscale_4k.py,
+                            potem tools/hd/make_maps4k.py
   sprites\<wariant>\        Dachy, drzewa, obiekty w HD (osobno dla każdego wariantu).
   sprites\_common\          Postacie i wszystkie animacje w HD (wspólne dla wariantów).
   sprites\_icons\           Ikony i znaczniki w HD: portret nad wybranym bohaterem, "Z" nad śpiącym, gwiazdki,

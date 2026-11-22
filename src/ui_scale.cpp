@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <utility>
 #include <intrin.h>
 #include <vector>
 
@@ -892,7 +893,8 @@ namespace {
             DDM::TraceMark(text);
         }
         static std::vector<uint64_t> seen;          // main thread
-        if (seen.size() < 24) {
+        static unsigned s_calls = 0;                // the stack is captured for the first 20000 lines only (a game
+        if (seen.size() < 24 && ++s_calls <= 20000) {   // that draws fewer than 24 kinds paid it for every line)
             void* frames[4] = {};
             const USHORT n = RtlCaptureStackBackTrace(1, 4, frames, nullptr);
             uint64_t key = static_cast<uint64_t>(a4 & 0xFFFF) << 48;
@@ -1583,6 +1585,10 @@ bool DialogLoopRunning() {
     return g_dialogLoopDepth > 0;
 }
 
+bool EngineAlive() {
+    return InMission();
+}
+
 bool OnMapScrollEnd(float x, float y) {
     if (!g_mapShown.load(std::memory_order_relaxed)) return false;
     const float l = g_mapShownRect[0].load(std::memory_order_relaxed);
@@ -1695,10 +1701,6 @@ void ScaleRect(RECT& rc) {
 
 bool LastScaledWasMap() {
     return g_lastWasMap;
-}
-
-float MapFactor() {
-    return MapF();
 }
 
 void SetMapScale(int percent) {
@@ -1858,6 +1860,21 @@ void Install() {
                     Hook(0x004C8140, kMoney, sizeof(kMoney), reinterpret_cast<void*>(&Hook_Money), reinterpret_cast<void**>(&o_Money)) &&
                     Hook(0x00511B90, kClock, sizeof(kClock), reinterpret_cast<void*>(&Hook_Clock), reinterpret_cast<void**>(&o_Clock)) &&
                     Hook(0x005F1CA0, kCursor, sizeof(kCursor), reinterpret_cast<void*>(&Hook_Cursor), reinterpret_cast<void**>(&o_Cursor));
+    if (!ok) {
+        // Half a chain is worse than none: the menu zoom with no pointer hook puts the dialogs' clicks away from the
+        // cursor (audit 2026-11-22). The hooks that went in are taken out again.
+        const std::pair<uintptr_t, void**> chain[] = {
+            { 0x006189E0, reinterpret_cast<void**>(&o_Draw) },        { 0x005C84A0, reinterpret_cast<void**>(&o_Message) },
+            { 0x00628210, reinterpret_cast<void**>(&o_PointerUpdate) }, { 0x00618A34, &o_WindowLoop },
+            { 0x00618A3F, &o_WindowDone },                              { 0x005ECDC0, reinterpret_cast<void**>(&o_DrawRect) },
+            { 0x005EC5F0, reinterpret_cast<void**>(&o_BlendBlit) },   { 0x004C8140, reinterpret_cast<void**>(&o_Money) },
+            { 0x00511B90, reinterpret_cast<void**>(&o_Clock) },       { 0x005F1CA0, reinterpret_cast<void**>(&o_Cursor) } };
+        for (const auto& [addr, orig] : chain) {
+            if (!*orig) continue;
+            MH_DisableHook(reinterpret_cast<LPVOID>(addr));
+            *orig = nullptr;
+        }
+    }
     finishMenuZoom();
     {
         static const uint8_t kLine[] = { 0x6A, 0xFF, 0x68, 0x78, 0x29, 0x67, 0x00, 0x64, 0xA1, 0x00, 0x00, 0x00, 0x00, 0x50 };

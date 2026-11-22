@@ -21,6 +21,9 @@ struct SherwoodConfig {
     bool allowTearing = false; // with VSync=0: present immediately even if that tears
     bool fullHeightView = true;  // draw the world in the bottom 80 rows too (HUD corners on top of it)
     bool hdBackgrounds = true;   // at zoom 2.0 take the background from hd\maps\<variant>\*.hdmap when present
+    bool hdLevelLayer = true;    // zoomed out below 2.0: the level's picture straight from its HD picture (presenter)
+    int  hdMaps4k = 1;           // the level's 4x picture (hd\maps4k): 0 off, 1 where the output shows the level larger
+                                 // than its HD picture (zoom beyond 2.0, 4K screens), 2 also below that (supersampled)
     std::string hdVariant;       // folder under hd\maps shown at start ("" = first one, "off" = original pixels)
     int hdKeyToggle = 0x77;      // virtual key: original <-> HD background (F8); 0 = none
     int hdKeyNext = 0x76;        // next HD variant (F7)
@@ -63,9 +66,9 @@ struct SherwoodConfig {
     bool forceSystemMemorySurfaces = true;
 
     // [Input]
-    bool rawMouseInput = true;
+    bool rawMouseInput = true;       // unused (kept so old INI files still read)
     bool windowsKey = true;      // the Windows key works while the game is in front (no DISCL_NOWINKEY)
-    bool lockCursorToWindow = true;
+    bool lockCursorToWindow = true;  // unused (kept so old INI files still read)
     int edgeScrollSpeed = 0; // map scroll speed in percent; 0 = scale with the internal width (width / 1024)
     int mouseReportRateHz = 125; // max mouse movement reports/s handed to the game (0 = unlimited/original)
     int mouseSensitivity = 0;    // cursor speed in percent; 0 = internal width / window width (same speed on screen)

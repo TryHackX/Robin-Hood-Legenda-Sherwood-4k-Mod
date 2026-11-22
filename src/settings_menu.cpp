@@ -333,6 +333,7 @@ namespace {
                 const int next = ((state + (dir < 0 ? 1 : 2)) % 3);
                 cfg.hdMenu = next != 0;
                 cfg.hdMenuRemake = next == 2;
+                DDM::DropScaledPictures();      // the HUD's kept 2x pictures made anew (hedge, frames never change)
                 WriteIni("Display", "HDMenu", cfg.hdMenu ? 1 : 0);
                 WriteIni("Display", "HDMenuRemake", cfg.hdMenuRemake ? 1 : 0);
                 break;
@@ -697,10 +698,6 @@ void Install() {
         o_ProcessInputEvent = nullptr;
         Logger::Warn("Settings: input event code not recognised - the game also sees keys pressed in the panel.");
     }
-}
-
-bool IsOpen() {
-    return g_open.load(std::memory_order_relaxed);
 }
 
 void Poll() {

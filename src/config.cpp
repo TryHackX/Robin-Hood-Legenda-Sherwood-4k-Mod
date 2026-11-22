@@ -1,4 +1,5 @@
 #include "config.h"
+#include "logger.h"
 #include <windows.h>
 #include <algorithm>
 #include <cstdio>
@@ -31,45 +32,8 @@ namespace {
             }
         }
 
-        FILE* f = nullptr;
-        fopen_s(&f, path.c_str(), "w");
-        if (!f) return;
-
-        fprintf(f,
-            "; ============================================================\n"
-            "; SherwoodEngineFix - Configuration File\n"
-            "; Robin Hood: The Legend of Sherwood (2002) Windows 11 Patch\n"
-            "; ============================================================\n\n"
-            "[Display]\n"
-            "; Internal resolution (HD mode needs a width of 2048 or more; the picture is scaled to the monitor)\n"
-            "Width=2560\n"
-            "Height=1440\n"
-            "Replace1024x768=1\n"
-            "WindowedBorderless=1\n"
-            "VSync=0\n"
-            "MaxFPS=120\n"
-            "ShaderFilter=1\n"
-            "FixAspectRatio=1\n\n"
-            "[Performance]\n"
-            "HighResolutionTimer=1\n"
-            "SmoothCameraScroll=1\n"
-            "OptimizeFogOfWar=1\n"
-            "ThreadOptimization=1\n"
-            "UseSSE2Blit=1\n"
-            "ForceSystemMemorySurfaces=1\n\n"
-            "[Input]\n"
-            "RawMouseInput=0\n"
-            "LockCursorToWindow=1\n"
-            "EdgeScrollSpeed=100\n"
-            "; Max mouse movement reports per second handed to the game (0 = unlimited)\n"
-            "MouseReportRateHz=125\n\n"
-            "[Debug]\n"
-            "EnableLogging=1\n"
-            "ShowFPSOverlay=0\n"
-            "PerfLog=1\n"
-            "Profiler=0\n"
-        );
-        fclose(f);
+        // The embedded INI could not be loaded or written: nothing is written, the built-in defaults apply.
+        Logger::Warn("Config: no default INI could be written (%s).", path.c_str());
     }
 
     bool ReadBool(const char* section, const char* key, bool defVal, const char* path) {
@@ -169,6 +133,8 @@ void SherwoodConfig::Load(const std::string& iniPath) {
     allowTearing       = ReadBool("Display", "AllowTearing", allowTearing, p);
     fullHeightView     = ReadBool("Display", "FullHeightView", fullHeightView, p);
     hdBackgrounds      = ReadBool("Display", "HDBackgrounds", hdBackgrounds, p);
+    hdLevelLayer       = ReadBool("Display", "HDLevelLayer", hdLevelLayer, p);
+    hdMaps4k           = (std::min)((std::max)(ReadInt("Display", "HDMaps4k", hdMaps4k, p), 0), 2);
     {
         char name[64]{};
         GetPrivateProfileStringA("Display", "HDVariant", "", name, sizeof(name), p);

@@ -93,8 +93,6 @@ bool HdCursor(const Buf& dst, const RECT& d, const RECT& clip, const Buf& src, c
 
 struct State {
     std::recursive_mutex lock;   // surface list, display mode, primary chain
-    HWND  hwnd = nullptr;
-    DWORD coopFlags = 0;
     int   modeW = 0, modeH = 0;
     bool  modeSet = false;
     Surface* primary = nullptr;
@@ -177,6 +175,7 @@ struct Storage {            // the part of a surface that Flip exchanges
     HBITMAP  dib = nullptr; // set once GetDC was used: bits then live inside the DIB section
     HDC      dc = nullptr;
     HGDIOBJ  oldBmp = nullptr;
+    HANDLE   section = nullptr; // ... the DIB's memory (with the margins), seen through our own view `base`
 };
 
 void PresentPrimary();
@@ -317,12 +316,21 @@ public:
     }
 
     void FreeStorage() {
+        if (st.bits) {
+            // nothing may take the freed pixels for this surface's any more (a new one can get the address)
+            for (LockRecord& rec : g_lastLocks) {
+                if (rec.bits == st.bits) rec = LockRecord{};
+            }
+            if (Diag::IsMainThread()) HD::Sprites::OnSurfaceWritten(st.bits);
+        }
         if (st.dib) {
             if (st.dc) {
                 SelectObject(st.dc, st.oldBmp);
                 DeleteDC(st.dc);
             }
             DeleteObject(st.dib);
+            if (st.base) UnmapViewOfFile(st.base);
+            if (st.section) CloseHandle(st.section);
         } else if (st.base) {
             if (st.virt) {
                 VirtualFree(st.base, 0, MEM_RELEASE);
@@ -341,9 +349,14 @@ public:
         Alloc();
     }
 
-    // GDI needs a real bitmap: move the pixels into a 16-bit 565 DIB section (same stride).
+    // GDI needs a real bitmap: move the pixels into a 16-bit 565 DIB section (same stride). Its memory is a section
+    // of our own with the zeroed margin rows before and after (Alloc): GDI draws through its view, the game through
+    // ours - a bare DIB took the margins away from the screen surface at the game's first GetDC (audit 2026-11-22).
     bool PromoteToDib() {
         if (st.dib) return true;
+        const size_t body = static_cast<size_t>(pitch) * static_cast<size_t>(h);
+        const size_t margin = (static_cast<size_t>(pitch) * kMarginRows + 4096 + 65535) & ~static_cast<size_t>(65535);
+        const size_t size = margin + body + margin;
         struct {
             BITMAPINFOHEADER hdr;
             DWORD masks[3];
@@ -357,22 +370,26 @@ public:
         bmi.masks[0] = 0xF800;
         bmi.masks[1] = 0x07E0;
         bmi.masks[2] = 0x001F;
+        HANDLE section = CreateFileMappingA(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0, static_cast<DWORD>(size), nullptr);
+        auto* view = section ? static_cast<uint8_t*>(MapViewOfFile(section, FILE_MAP_ALL_ACCESS, 0, 0, size)) : nullptr;  // zeroed
         void* dibBits = nullptr;
-        HBITMAP dib = CreateDIBSection(nullptr, reinterpret_cast<const BITMAPINFO*>(&bmi), DIB_RGB_COLORS, &dibBits, nullptr, 0);
-        if (!dib || !dibBits) {
-            if (dib) DeleteObject(dib);
-            return false;
-        }
-        HDC dc = CreateCompatibleDC(nullptr);
+        HBITMAP dib = view ? CreateDIBSection(nullptr, reinterpret_cast<const BITMAPINFO*>(&bmi), DIB_RGB_COLORS, &dibBits, section,
+                                              static_cast<DWORD>(margin))
+                           : nullptr;
+        HDC dc = (dib && dibBits) ? CreateCompatibleDC(nullptr) : nullptr;
         if (!dc) {
-            DeleteObject(dib);
+            if (dib) DeleteObject(dib);
+            if (view) UnmapViewOfFile(view);
+            if (section) CloseHandle(section);
             return false;
         }
         if (st.bits) {
-            std::memcpy(dibBits, st.bits, static_cast<size_t>(pitch) * h);
+            std::memcpy(view + margin, st.bits, body);
         }
         FreeStorage();
-        st.bits = static_cast<uint8_t*>(dibBits);
+        st.base = view;
+        st.bits = view + margin;
+        st.section = section;
         st.dib = dib;
         st.dc = dc;
         st.oldBmp = SelectObject(dc, dib);
@@ -552,8 +569,9 @@ public:
         return DD_OK;
     }
     STDMETHOD(GetSurfaceDesc)(LPDDSURFACEDESC2 out) override {
-        if (!out) return DDERR_INVALIDPARAMS;
-        FillDesc(out, out->dwSize >= sizeof(DDSURFACEDESC) ? out->dwSize : sizeof(DDSURFACEDESC2), false);
+        // as DirectDraw: a descriptor of neither known size is refused (not filled with 124 bytes it may not have)
+        if (!out || (out->dwSize != sizeof(DDSURFACEDESC) && out->dwSize != sizeof(DDSURFACEDESC2))) return DDERR_INVALIDPARAMS;
+        FillDesc(out, out->dwSize, false);
         return DD_OK;
     }
     STDMETHOD(Initialize)(LPDIRECTDRAW, LPDDSURFACEDESC2) override { return DDERR_ALREADYINITIALIZED; }
@@ -562,9 +580,16 @@ public:
     STDMETHOD(Lock)(LPRECT rect, LPDDSURFACEDESC2 desc, DWORD, HANDLE) override {
         Diag::Scope scope(Diag::C_DD_LOCK);
         if (!desc) return DDERR_INVALIDPARAMS;
+        if (desc->dwSize != sizeof(DDSURFACEDESC) && desc->dwSize != sizeof(DDSURFACEDESC2)) {
+            static bool once = false;
+            if (!once) {
+                once = true;
+                Logger::Warn("DDM: Lock with a descriptor of %lu bytes refused (as DirectDraw does).", desc->dwSize);
+            }
+            return DDERR_INVALIDPARAMS;
+        }
         if (!st.bits) return DDERR_SURFACELOST;
-        const DWORD size = (desc->dwSize == sizeof(DDSURFACEDESC)) ? sizeof(DDSURFACEDESC) : sizeof(DDSURFACEDESC2);
-        FillDesc(desc, size, true);
+        FillDesc(desc, desc->dwSize, true);
         if (rect) {
             const LONG x = std::clamp<LONG>(rect->left, 0, w);
             const LONG y = std::clamp<LONG>(rect->top, 0, h);
@@ -809,6 +834,7 @@ HRESULT Surface::DoBlt(const RECT* dstRect, Surface* src, const RECT* srcRect, D
     // background (see the uiScaled branch below).
     static unsigned s_cursorSerial = 0;
     static const Surface* s_cursorBg = nullptr;
+    static unsigned s_cursorBgId = 0;           // its serial: the object may be gone, its address reused (audit 2026-11-22)
     static RECT s_cursorBgRect{};
     if (UiScale::CursorDrawing()) {
         if (s_cursorSerial != UiScale::CursorSerial()) {
@@ -818,6 +844,7 @@ HRESULT Surface::DoBlt(const RECT* dstRect, Surface* src, const RECT* srcRect, D
         if (!s_cursorBg && g.primary && (src == g.primary || src == g.primary->back) && this != g.primary && this != g.primary->back &&
             sw == dw && sh == dh) {
             s_cursorBg = this;
+            s_cursorBgId = serial;
             s_cursorBgRect = d;
         }
     }
@@ -919,7 +946,9 @@ HRESULT Surface::DoBlt(const RECT* dstRect, Surface* src, const RECT* srcRect, D
         if (ClipToBounds(clip, w, h)) {
             const bool inside = s.left >= 0 && s.top >= 0 && s.right <= src->w && s.bottom <= src->h;
             const bool cursor = UiScale::CursorDrawing() && keyed && inside && s_cursorSerial == UiScale::CursorSerial() &&
-                                s_cursorBg && s_cursorBg != src && s_cursorBg->st.bits &&
+                                s_cursorBg && s_cursorBg != src &&
+                                std::find(g.surfaces.begin(), g.surfaces.end(), s_cursorBg) != g.surfaces.end() &&
+                                s_cursorBg->serial == s_cursorBgId && s_cursorBg->st.bits &&
                                 s_cursorBgRect.right - s_cursorBgRect.left == sw && s_cursorBgRect.bottom - s_cursorBgRect.top == sh &&
                                 s_cursorBgRect.left >= 0 && s_cursorBgRect.top >= 0 &&
                                 s_cursorBgRect.right <= s_cursorBg->w && s_cursorBgRect.bottom <= s_cursorBg->h;
@@ -945,8 +974,17 @@ HRESULT Surface::DoBlt(const RECT* dstRect, Surface* src, const RECT* srcRect, D
                 const Buf tb{ reinterpret_cast<uint8_t*>(tmp.data()), sw * 2, sw, sh };
                 const RECT ts{ 0, 0, sw, sh };
                 // its HD picture when the cursor is one of the collected pictures (2026-11-22, user: "even the
-                // cursor ... has that outline" - it was the 1x picture smoothed, the HD files never asked)
-                if (!HdCursor(buf(), d, clip, tb, ts)) {
+                // cursor ... has that outline" - it was the 1x picture smoothed, the HD files never asked).
+                // A cursor without one (its shadow over the moving level makes a new key at almost every draw,
+                // each a file look-up): after 8 misses in a row only every 30th draw asks (audit 2026-11-22).
+                static int s_misses = 0, s_skipped = 0;
+                bool hd = false;
+                if (s_misses < 8 || ++s_skipped >= 30) {
+                    s_skipped = 0;
+                    hd = HdCursor(buf(), d, clip, tb, ts);
+                    s_misses = hd ? 0 : (std::min)(s_misses + 1, 8);
+                }
+                if (!hd) {
                     SmoothSprite2x16(buf(), d, tb, ts, clip, kGreenKey, kNoColor, 256, nullptr, false, false);
                 }
             } else if (keyed && dw == sw * 2 && dh == sh * 2 && !mirrorX && !mirrorY && inside &&
@@ -1161,9 +1199,7 @@ void FillCaps(LPDDCAPS out) {
 HRESULT SetCooperativeLevelImpl(HWND hwnd, DWORD flags) {
     std::lock_guard<std::recursive_mutex> lock(g.lock);
     Logger::Info("DDM: SetCooperativeLevel(hwnd=0x%08X, flags=0x%08X)", reinterpret_cast<uintptr_t>(hwnd), flags);
-    g.coopFlags = flags;
     if (hwnd) {
-        g.hwnd = hwnd;
         // Only the real game window is made fullscreen; the game first sets a normal
         // cooperative level on a helper window while it probes the hardware.
         if ((flags & DDSCL_FULLSCREEN) || hwnd == WindowManager::GetGameWindow()) {
@@ -1613,9 +1649,6 @@ HRESULT WINAPI Hook_DirectDrawEnumerateA(LPDDENUMCALLBACKA cb, LPVOID ctx) {
 }
 
 void* g_origCreate = nullptr;
-void* g_origCreateEx = nullptr;
-void* g_origEnumExA = nullptr;
-void* g_origEnumA = nullptr;
 
 } // namespace
 
@@ -1637,9 +1670,9 @@ bool Install() {
         }
     };
     hook("DirectDrawCreate",       reinterpret_cast<LPVOID>(&Hook_DirectDrawCreate),       &g_origCreate);
-    hook("DirectDrawCreateEx",     reinterpret_cast<LPVOID>(&Hook_DirectDrawCreateEx),     &g_origCreateEx);
-    hook("DirectDrawEnumerateExA", reinterpret_cast<LPVOID>(&Hook_DirectDrawEnumerateExA), &g_origEnumExA);
-    hook("DirectDrawEnumerateA",   reinterpret_cast<LPVOID>(&Hook_DirectDrawEnumerateA),   &g_origEnumA);
+    hook("DirectDrawCreateEx",     reinterpret_cast<LPVOID>(&Hook_DirectDrawCreateEx),     nullptr);
+    hook("DirectDrawEnumerateExA", reinterpret_cast<LPVOID>(&Hook_DirectDrawEnumerateExA), nullptr);
+    hook("DirectDrawEnumerateA",   reinterpret_cast<LPVOID>(&Hook_DirectDrawEnumerateA),   nullptr);
     g.active = (g_origCreate != nullptr);
     Logger::Info("DDM: in-memory DirectDraw installed (%d ddraw.dll exports redirected).", hooked);
     return g.active;
@@ -1649,7 +1682,7 @@ void Shutdown() {
     if (!g.active) return;
     Logger::Info("DDM: shutdown - %u surfaces were created, %zu still alive, presenter: %s.",
                  g.created, g.surfaces.size(), Present::BackendName());
-    // Deliberately no Present::Shutdown(): this runs inside DllMain(PROCESS_DETACH) under the
+    // Deliberately the presenter is not released: this runs inside DllMain(PROCESS_DETACH) under the
     // loader lock, where releasing a DXGI swap chain can deadlock. The process is ending anyway.
 }
 

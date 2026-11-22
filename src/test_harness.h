@@ -12,7 +12,8 @@
 //   * the game window is created hidden and never activated (no taskbar button either);
 //   * the game is told it is active although it is not in front (watchdog.cpp), and
 //     deactivation messages are swallowed;
-//   * sound output is FMOD's "no sound" device and the intro videos get no sound system;
+//   * FMOD plays through its WINMM output, whose buffers this DLL turns into silence (proxy_winmm.h
+//     SilenceWaveOut; no Windows sound setting changes), and the intro videos get no sound system;
 //   * mouse and keyboard records come from the command file instead of DirectInput (the devices
 //     cannot be acquired without the foreground) and enter the game exactly where real records
 //     do: SBInputThreadProc -> ProcessInputEvent (0x005F0C20);

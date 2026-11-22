@@ -527,9 +527,9 @@ namespace {
         burst = (now - lastNew < 1000) ? burst + 1 : 0;
         lastNew = now;
         if (burst >= 2) return;
+        if (DDM::HD::WorkFolder().empty()) return;     // a player's game: nothing is collected
         g_written.insert(key);
-        const std::string dir = GameDir() + "hd\\work\\menu_frames";
-        CreateDirectoryA((GameDir() + "hd\\work").c_str(), nullptr);
+        const std::string dir = DDM::HD::WorkFolder() + "menu_frames";
         CreateDirectoryA(dir.c_str(), nullptr);
         char name[64];
         std::snprintf(name, sizeof(name), "\\%016llx.mnf", static_cast<unsigned long long>(key));

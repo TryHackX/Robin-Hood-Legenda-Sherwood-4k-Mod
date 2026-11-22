@@ -1,5 +1,7 @@
 #include "proxy_winmm.h"
 #include <windows.h>
+#include <mmsystem.h>
+#include <cstring>
 
 namespace {
     HMODULE g_hRealWinMM = nullptr;
@@ -222,6 +224,30 @@ void ShutdownWinMMProxy() {
 
 HMODULE GetRealWinMMModule() {
     return g_hRealWinMM;
+}
+
+namespace {
+    using PFN_waveOutWrite = UINT(WINAPI*)(HANDLE, WAVEHDR*, UINT);
+    PFN_waveOutWrite g_realWaveOutWrite = nullptr;
+
+    UINT WINAPI Silent_waveOutWrite(HANDLE hwo, WAVEHDR* hdr, UINT size) {
+        if (hdr && size >= sizeof(WAVEHDR) && hdr->lpData && hdr->dwBufferLength) {
+            std::memset(hdr->lpData, 0, hdr->dwBufferLength);   // FMOD mixes 16-bit samples: 0 = silence
+        }
+        return g_realWaveOutWrite(hwo, hdr, size);
+    }
+}
+
+bool SilenceWaveOut() {
+    if (g_realWaveOutWrite) return true;
+    for (size_t i = 0; i < 192; ++i) {
+        if (std::strcmp(g_szProcNames[i], "waveOutWrite") != 0) continue;
+        if (!g_pProcs[i]) return false;
+        g_realWaveOutWrite = reinterpret_cast<PFN_waveOutWrite>(g_pProcs[i]);
+        g_pProcs[i] = reinterpret_cast<FARPROC>(&Silent_waveOutWrite);    // Proxy_waveOutWrite jumps through it
+        return true;
+    }
+    return false;
 }
 
 extern "C" {

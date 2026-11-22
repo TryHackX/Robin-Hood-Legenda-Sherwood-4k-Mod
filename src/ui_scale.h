@@ -22,7 +22,6 @@ namespace UiScale {
     // ... the last of them belonged to the opened map: drawn at the map's own size ([Display] MapScale,
     // 150..500 %, a tall map no larger than fits above the hedge), its pictures through DDM::ScaledPicture16
     bool LastScaledWasMap();
-    float MapFactor();                  // the opened map's factor (MapScale / 100 with the interface x2, else 1)
     void SetMapScale(int percent);      // settings panel, main thread
 
     // The game is drawing its mouse cursor (enlarged about its hot spot); the serial changes with
@@ -51,6 +50,7 @@ namespace UiScale {
     // WindowManager::Draw hook (interface scale or menu zoom possible).
     bool DialogShown();
     bool DialogLoopRunning();     // main thread: the game's dialog loop runs (from its first instruction)
+bool EngineAlive();           // the mission engine object exists (it also stays set in the main menu after a mission)
 
     // Input thread: the screen point lies on a rolled-up end of the opened (enlarged) map - a
     // left click there closes the map like a right click.

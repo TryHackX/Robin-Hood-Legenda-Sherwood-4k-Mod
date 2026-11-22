@@ -48,7 +48,6 @@ namespace Diag {
     uint64_t Now();                       // raw QPC ticks
     double   TicksToMs(uint64_t ticks);
     bool     IsMainThread();
-    DWORD    MainThreadId();
 
     void Add(Counter c, uint64_t ticks = 0);
     void AddValue(Counter c, uint64_t value); // accumulates `value` without counting a call

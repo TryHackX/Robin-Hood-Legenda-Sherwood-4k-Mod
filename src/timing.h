@@ -27,11 +27,6 @@ namespace Timing {
     // 1 = its end. -1 when no extra frames are drawn between ticks (every tick is one picture).
     float RenderPhase();
 
-    // High-precision monotonic clock in milliseconds & microseconds (QPC-backed)
-    double GetElapsedMilliseconds();
+    // High-precision monotonic clock in microseconds (QPC-backed)
     uint64_t GetElapsedMicroseconds();
-    double GetCurrentFPS();
-
-    // Hybrid QPC frame limiter (Sleep + _mm_pause spin-wait)
-    void FrameLimitStep(double targetFPS);
 }

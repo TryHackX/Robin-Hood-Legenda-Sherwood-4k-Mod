@@ -12,8 +12,12 @@
 #include "ddm/ddm_hd_menu.h"
 #include "ddm/ddm_hd_patch.h"
 #include "ddm/ddm_hd_sprites.h"
+#include "ddm/ddm_present.h"
+#include "proxy_winmm.h"
 
 #include <MinHook.h>
+#include <audiopolicy.h>
+#include <mmdeviceapi.h>
 #include <share.h>
 #include <algorithm>
 #include <atomic>
@@ -309,6 +313,18 @@ namespace {
                 Sleep(400); // the switch and the redraw happen at the next game ticks
             }
             Ack(seq, "ok hd=%s", DDM::HD::CurrentVariantName());
+        } else if (!std::strcmp(cmd, "pause")) {
+            // the game's pause - the input translator's flag (singleton [0x006C0C4C] + 0x1B; RHGame::Run then skips
+            // the engine's tick and the frame limiter): pause 1 | pause 0 | pause (state)
+            int v = -1;
+            std::sscanf(args, "%d", &v);
+            auto* tr = *reinterpret_cast<uint8_t* volatile*>(0x006C0C4C);
+            if (!tr) {
+                Ack(seq, "err no input translator (no level)");
+            } else {
+                if (v == 0 || v == 1) tr[0x1B] = static_cast<uint8_t>(v);
+                Ack(seq, "ok pause=%u", static_cast<unsigned>(tr[0x1B]));
+            }
         } else if (!std::strcmp(cmd, "frames")) {
             // which bank frame every sprite surface holds right now -> text file (for upscale_sprites.py --ids-file)
             char name[128]{};
@@ -411,6 +427,12 @@ namespace {
             const DWORD limit = static_cast<DWORD>(ticks) * 60 + 5000;
             while (DDM::HD::Sprites::MissReportPending() && GetTickCount() - t0 < limit) Sleep(10);
             Ack(seq, "%s %s", DDM::HD::Sprites::MissReportPending() ? "err the game did not tick long enough" : "ok", path.c_str());
+        } else if (!std::strcmp(cmd, "presentlog")) {
+            // the next N presented frames: how each was composed, into the log (a wrong frame too short for a shot)
+            int count = 0;
+            if (std::sscanf(args, "%d", &count) != 1 || count <= 0) { Ack(seq, "err usage: presentlog N"); return; }
+            DDM::Present::LogNextFrames(count);
+            Ack(seq, "ok");
         } else if (!std::strcmp(cmd, "dbg")) {
             // leave out drawing routines (bit mask, see DDM::HD::SetDebugFlags); dbg 0 = everything on
             unsigned flags = 0;
@@ -505,8 +527,51 @@ namespace {
 
     using PFN_SetOutput = signed char(__stdcall*)(int);
     PFN_SetOutput o_SetOutput = nullptr;
+
+    // A test build of 2026-11-22 muted this process's audio session in the Windows mixer - Windows keeps that for the
+    // program, so the player's next start of Game.exe had no sound. The marker file tools\out\harness\unmute_once.txt
+    // asks a test run to undo it once (only a mute a test left; the player's own mixer settings are not touched).
+    void UndoTestMute() {
+        char exe[MAX_PATH]{};
+        GetModuleFileNameA(nullptr, exe, MAX_PATH);
+        std::string marker(exe);
+        marker.erase(marker.find_last_of("\\/") + 1);
+        marker += "tools\\out\\harness\\unmute_once.txt";     // also for a QUIET run (g_dir is set in test mode only)
+        if (GetFileAttributesA(marker.c_str()) == INVALID_FILE_ATTRIBUTES) return;
+        const HRESULT init = CoInitializeEx(nullptr, COINIT_MULTITHREADED);   // RPC_E_CHANGED_MODE: COM is there
+        IMMDeviceEnumerator* en = nullptr;
+        IMMDevice* dev = nullptr;
+        IAudioSessionManager* mgr = nullptr;
+        ISimpleAudioVolume* vol = nullptr;
+        BOOL muted = FALSE;
+        const bool ok = SUCCEEDED(CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, __uuidof(IMMDeviceEnumerator),
+                                                   reinterpret_cast<void**>(&en))) &&
+                        SUCCEEDED(en->GetDefaultAudioEndpoint(eRender, eConsole, &dev)) &&
+                        SUCCEEDED(dev->Activate(__uuidof(IAudioSessionManager), CLSCTX_ALL, nullptr, reinterpret_cast<void**>(&mgr))) &&
+                        SUCCEEDED(mgr->GetSimpleAudioVolume(nullptr, FALSE, &vol)) && SUCCEEDED(vol->GetMute(&muted)) &&
+                        (!muted || SUCCEEDED(vol->SetMute(FALSE, nullptr)));
+        if (vol) vol->Release();
+        if (mgr) mgr->Release();
+        if (dev) dev->Release();
+        if (en) en->Release();
+        (void)init;     // left initialised: the game's thread may use COM later
+        if (ok) DeleteFileA(marker.c_str());
+        Logger::Info("TEST MODE: mute left by an earlier test: %s.", !ok ? "could not be checked" : (muted ? "undone" : "none"));
+    }
+
+    // No sound in a test run. Not FSOUND_OUTPUT_NOSOUND (2026-11-22): with it a sound stream never ends and
+    // FSOUND_Stream_Close waits for that for ever - the hidden game hung when Robin aimed his bow (a voice stream
+    // closed). FMOD plays through its WINMM output, whose buffers this DLL makes silence (SilenceWaveOut) - a muted
+    // audio session would be kept by Windows for the program (see UndoTestMute). Only if that fails, NOSOUND.
     signed char __stdcall Stub_SetOutput(int /*outputType*/) {
-        return o_SetOutput ? o_SetOutput(0 /* FSOUND_OUTPUT_NOSOUND */) : 1;
+        static int silent = -1;
+        if (silent < 0) {
+            silent = SilenceWaveOut() ? 1 : 0;
+            Logger::Info("TEST MODE: sound %s.", silent ? "through FMOD's WINMM output with silent buffers" :
+                                                          "without FMOD output (a voice stream may hang it)");
+            if (silent) UndoTestMute();
+        }
+        return o_SetOutput ? o_SetOutput(silent ? 1 /* FSOUND_OUTPUT_WINMM */ : 0 /* FSOUND_OUTPUT_NOSOUND */) : 1;
     }
     int __stdcall Stub_BinkSetSoundSystem(void* /*open*/, uint32_t /*param*/) {
         return 1; // no sound system: the videos play silently

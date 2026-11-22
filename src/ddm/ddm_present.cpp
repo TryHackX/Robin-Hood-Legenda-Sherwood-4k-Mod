@@ -14,6 +14,9 @@
 #include <d3d11.h>
 #include <dxgi1_6.h>
 #include <d3dcompiler.h>
+#include <algorithm>
+#include <atomic>
+#include <condition_variable>
 #include <cstdio>
 #include <cstring>
 #include <mutex>
@@ -42,10 +45,12 @@ namespace {
     ID3D11Texture2D*        g_tex = nullptr;
     ID3D11ShaderResourceView* g_srv = nullptr;
     int  g_texW = 0, g_texH = 0;
-    bool g_tex565 = false;
     bool g_has565 = false;
     bool g_tearing = false;
     UINT g_bbW = 0, g_bbH = 0;
+
+    std::atomic<int> g_logFrames{ 0 };    // test harness: frames left to describe in the log (LogNextFrames)
+    int g_heldFrames = 0;                  // transitional frames not shown in a row (FrameD3D11)
 
     struct ShaderConsts {
         float texW, texH;
@@ -60,7 +65,23 @@ namespace {
         float lupaX, lupaY;                  // layer 3: frame position at the output's top-left corner
         float patchOn, pad0, pad1, pad2;     // menus: HD patches (t6 frame pixel it belongs to, t7 HD) over the layers
         float cursorX, cursorY, cursorW, cursorH;   // menus: the game's cursor (texture pixels; W 0 = none), t8 its HD picture
+        float lvlOriginX, lvlOriginY, lvlScale, lvlMode;   // level layer (LevelUse): t10 pixel at world pixel (0, 0); t9 pixels
+                                                           // per t10 pixel; 0 off, 1 through the world copy, 2 straight from the frame
+        float lvlSrcW, lvlSrcH, lvlRefW, lvlRefH;          // ... t9 the picture shown, t10 the one the engine drew the world from
+        float lvlTap, lvlWorldH, lvlTint, pad3;            // ... the four taps' distance (t9 pixels); frame rows of the world
+                                                           // (mode 2); test harness: those pixels tinted
     };
+
+    // The level layer (HDLevelLayer, 2026-11-22, user: "zoomed all the way out the quality is not HD"): below 2.0 the
+    // engine draws the level at 1.0 in the original pixels and the smooth zoom magnified them. Where the world copy
+    // still shows the level's own pixel (no figure, shadow or effect over it) the output takes the level's HD picture
+    // at that place instead - the HD module's picture (2x) and the level picture it was made from, as textures.
+    ID3D11Texture2D*          g_lvlHdTex = nullptr;
+    ID3D11ShaderResourceView* g_lvlHdSrv = nullptr;
+    ID3D11Texture2D*          g_lvl1xTex = nullptr;
+    ID3D11ShaderResourceView* g_lvl1xSrv = nullptr;
+    unsigned g_lvlSerial = 0;
+    int g_lvlHdW = 0, g_lvlHdH = 0, g_lvlW = 0, g_lvlH = 0;
 
     // the game's cursor in menus and dialogs, drawn from its HD picture over the output (ddm_hd_patch.h GetCursor)
     ID3D11Texture2D*          g_cursorTex = nullptr;
@@ -118,9 +139,11 @@ namespace {
         "Texture2D<uint> patchRef : register(t6);\n"
         "Texture2D patchHd : register(t7);\n"
         "Texture2D cursorTex : register(t8);\n"
+        "Texture2D lvlSrc : register(t9);\n"
+        "Texture2D lvlRef : register(t10);\n"
         "SamplerState smpPoint : register(s0);\n"
         "SamplerState smpLinear : register(s1);\n"
-        "cbuffer C : register(b0) { float2 texSize; float2 outSize; float mode; float layer; float2 cropOrigin; float4 full; float4 lupa; float4 extra; float4 cursor; };\n"
+        "cbuffer C : register(b0) { float2 texSize; float2 outSize; float mode; float layer; float2 cropOrigin; float4 full; float4 lupa; float4 extra; float4 cursor; float4 lvl0; float4 lvl1; float4 lvl2; };\n"
         "uint Pack565(float3 c) {\n"
         "  return ((((uint)(c.r * 255.0 + 0.5)) >> 3) << 11) | ((((uint)(c.g * 255.0 + 0.5)) >> 2) << 5) | (((uint)(c.b * 255.0 + 0.5)) >> 3);\n"
         "}\n"
@@ -186,6 +209,30 @@ namespace {
         "    acc += t.Load(int3(q, 0)).rgb * (wx[x] * wy[y]); } }\n"
         "  return saturate(acc);\n"
         "}\n"
+        // level layer: world pixel w shows pixel origin + w of the picture the engine drew the world from (t10: the
+        // level picture at 1.0, its HD picture at 2.0) - still that pixel there (world copy, or the frame in mode 2)?
+        "int2 LvlOrigin() { return int2(floor(lvl0.xy + 0.5)); }\n"
+        "bool LevelAt(int2 w) {\n"
+        "  int2 lp = LvlOrigin() + w;\n"
+        "  if (lp.x < 0 || lp.y < 0 || lp.x >= (int)lvl1.z || lp.y >= (int)lvl1.w) return false;\n"
+        "  w = clamp(w, int2(0, 0), int2(texSize) - 1);\n"
+        "  float3 s = lvl0.w > 1.5 ? tex.Load(int3(w, 0)).rgb : world.Load(int3(w, 0)).rgb;\n"
+        "  return Pack565(s) == Pack565(lvlRef.Load(int3(lp, 0)).rgb);\n"
+        "}\n"
+        "int CountNot_LevelAt(int2 t) { int n = 0; [unroll] for (int dy = -1; dy <= 1; ++dy) [unroll] for (int dx = -1; dx <= 1; ++dx) if ((dx != 0 || dy != 0) && !LevelAt(t + int2(dx, dy))) ++n; return n; }\n"
+        // ... then the picture shown (t9: HD or 4x) at world position wp, four taps a quarter output pixel apart
+        "bool LevelHd(float2 wp, out float3 c) {\n"
+        "  c = float3(0.0, 0.0, 0.0);\n"
+        "  int2 w = int2(floor(wp));\n"
+        "  if (!LevelAt(w) || CountNot_LevelAt(w) > 3) return false;\n"
+        "  float2 hp = (float2(LvlOrigin()) + wp) * lvl0.z;\n"
+        "  float d = lvl2.x;\n"
+        "  float2 inv = 1.0 / lvl1.xy;\n"
+        "  c = 0.25 * (lvlSrc.Sample(smpLinear, (hp + float2(-d, -d)) * inv).rgb + lvlSrc.Sample(smpLinear, (hp + float2(d, -d)) * inv).rgb +\n"
+        "              lvlSrc.Sample(smpLinear, (hp + float2(-d, d)) * inv).rgb + lvlSrc.Sample(smpLinear, (hp + float2(d, d)) * inv).rgb);\n"
+        "  if (lvl2.z > 0.5) c = lerp(c, float3(1.0, 0.0, 1.0), 0.3);\n"
+        "  return true;\n"
+        "}\n"
         "float3 WorldMagnified(float2 texel, float m) {\n"
         "  if (mode >= 0.5 && m > 1.001 && m < 1.999) return CatRom(world, texel);\n"
         "  return Filtered(world, texel, outSize / texSize * m);\n"
@@ -205,6 +252,7 @@ namespace {
         "      int2 t = int2(min(floor(fp), texSize - 1.0));\n"
         "      if (WorldAt(t) && FEW_OTHERS(WorldAt, t)) {\n"
         "        float2 wp = lupa.zw + fp / lupa.x;\n"
+        "        if (lvl0.w > 0.5) { float3 lc; if (LevelHd(wp, lc)) return float4(lc, 1.0); }\n"
         "        return float4(WorldMagnified(wp, lupa.x), 1.0);\n"
         "      }\n"
         "    }\n"
@@ -218,6 +266,11 @@ namespace {
         "  } else if (layer > 0.5) {\n"
         "    int2 t = int2(min(floor(uv * texSize), texSize - 1.0));\n"
         "    if (PictureAt(t) && FEW_OTHERS(PictureAt, t)) return float4(layerHd.Sample(smpLinear, uv).rgb, 1.0);\n"
+        "  } else if (lvl0.w > 1.5) {\n"
+        // the world not magnified, the engine at 2.0: the level from its 4x picture where the frame shows its HD pixel
+        "    float2 fp = uv * texSize;\n"
+        "    float3 lc;\n"
+        "    if (fp.y < lvl2.y && LevelHd(fp, lc)) return float4(lc, 1.0);\n"
         "  }\n"
         "  if (mode < 0.5) return float4(tex.Sample(smpPoint, uv).rgb, 1.0);\n"
         "  if (mode > 1.5) return float4(tex.Sample(smpLinear, uv).rgb, 1.0);\n"
@@ -562,6 +615,340 @@ namespace {
         g_cursorGen = 0;
     }
 
+    void ReleaseLevel() {
+        SafeRelease(g_lvlHdSrv);
+        SafeRelease(g_lvlHdTex);
+        SafeRelease(g_lvl1xSrv);
+        SafeRelease(g_lvl1xTex);
+        g_lvlSerial = 0;
+        g_lvlHdW = g_lvlHdH = g_lvlW = g_lvlH = 0;
+    }
+
+    // the level layer's two pictures (t9, t10) for the level in use: made when another one comes
+    bool PrepareLevel() {
+        DDM::HD::LevelPictures lp;
+        if (!g_has565 || !DDM::HD::LevelPicturesNow(lp) || lp.hdW > 16384 || lp.hdH > 16384) return false;
+        if (g_lvlHdTex && g_lvl1xTex && lp.serial == g_lvlSerial && lp.hdW == g_lvlHdW && lp.hdH == g_lvlHdH &&
+            lp.levelW == g_lvlW && lp.levelH == g_lvlH) {
+            return true;
+        }
+        ReleaseLevel();
+        LARGE_INTEGER t0{}, t1{}, f{};
+        QueryPerformanceCounter(&t0);
+        D3D11_TEXTURE2D_DESC td{};
+        td.MipLevels = 1;
+        td.ArraySize = 1;
+        td.Format = DXGI_FORMAT_B5G6R5_UNORM;
+        td.SampleDesc.Count = 1;
+        td.Usage = D3D11_USAGE_IMMUTABLE;
+        td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        D3D11_SUBRESOURCE_DATA sd{};
+        td.Width = static_cast<UINT>(lp.hdW);
+        td.Height = static_cast<UINT>(lp.hdH);
+        sd.pSysMem = lp.hd;
+        sd.SysMemPitch = static_cast<UINT>(lp.hdW * 2);
+        bool ok = SUCCEEDED(g_dev->CreateTexture2D(&td, &sd, &g_lvlHdTex)) &&
+                  SUCCEEDED(g_dev->CreateShaderResourceView(g_lvlHdTex, nullptr, &g_lvlHdSrv));
+        td.Width = static_cast<UINT>(lp.levelW);
+        td.Height = static_cast<UINT>(lp.levelH);
+        sd.pSysMem = lp.level;
+        sd.SysMemPitch = static_cast<UINT>(lp.levelW * 2);
+        ok = ok && SUCCEEDED(g_dev->CreateTexture2D(&td, &sd, &g_lvl1xTex)) &&
+             SUCCEEDED(g_dev->CreateShaderResourceView(g_lvl1xTex, nullptr, &g_lvl1xSrv));
+        if (!ok) {
+            ReleaseLevel();
+            static bool once = false;
+            if (!once) {
+                once = true;
+                Logger::Warn("Present: level layer textures could not be made (%dx%d) - zoomed out the level stays magnified.", lp.hdW, lp.hdH);
+            }
+            return false;
+        }
+        g_lvlSerial = lp.serial;
+        g_lvlHdW = lp.hdW;
+        g_lvlHdH = lp.hdH;
+        g_lvlW = lp.levelW;
+        g_lvlH = lp.levelH;
+        QueryPerformanceCounter(&t1);
+        QueryPerformanceFrequency(&f);
+        Logger::Info("Present: level layer - HD picture %dx%d and level picture %dx%d on the card (%.1f ms).", lp.hdW, lp.hdH,
+                     lp.levelW, lp.levelH, static_cast<double>(t1.QuadPart - t0.QuadPart) * 1000.0 / static_cast<double>(f.QuadPart));
+        return true;
+    }
+
+    // ---- the level's 4x picture (HDMaps4k, 2026-11-22, user: "do the same for the other classic maps so that it is
+    // native 4K"): hd\maps4k\<variant>\<key>.hdm4 (tools\hd\make_maps4k.py; "HDM4", u32 1, width, height, 0, RGB565
+    // rows). 40-250 MB: too much to read at once on the main thread or to hold in this 32-bit process. A reader thread
+    // reads it in strips into two buffers; every presented frame puts at most one strip on the card; used once whole.
+    constexpr size_t kStrip4kBytes = 4u << 20;
+    struct Strip4k {
+        std::vector<uint16_t> px;
+        int y0 = 0, rows = 0;
+        bool full = false;          // read, not yet on the card (only the reader fills, only the presenter empties)
+    };
+    struct Reader4k {
+        std::mutex lock;
+        std::condition_variable cv;
+        std::string path;           // presenter: the file wanted ("" = none)
+        unsigned request = 0;       // ... changes with every wish
+        unsigned answered = 0;      // reader: the wish the size and the strips belong to
+        int w = 0, h = 0;           // -1 = no usable file
+        Strip4k strips[2];
+    };
+    Reader4k g_r4;
+    bool g_r4Thread = false;
+
+    ID3D11Texture2D*          g_l4Tex = nullptr;
+    ID3D11ShaderResourceView* g_l4Srv = nullptr;
+    std::string g_l4Path;           // the file the texture is filled from
+    unsigned g_l4Request = 0;
+    int  g_l4W = 0, g_l4H = 0, g_l4Rows = 0;
+    bool g_l4Bad = true;            // nothing to fill from (no file, a broken one, no texture)
+    LARGE_INTEGER g_l4Start{};
+
+    DWORD WINAPI Reader4kThread(void*) {
+        std::unique_lock<std::mutex> lk(g_r4.lock);
+        unsigned done = 0;
+        for (;;) {
+            g_r4.cv.wait(lk, [&] { return g_r4.request != done; });
+            const unsigned req = g_r4.request;
+            const std::string path = g_r4.path;
+            done = req;
+            lk.unlock();
+            HANDLE f = path.empty() ? INVALID_HANDLE_VALUE
+                                    : CreateFileA(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
+            int w = -1, h = -1;
+            if (f != INVALID_HANDLE_VALUE) {
+                uint32_t hdr[5]{};
+                DWORD got = 0;
+                LARGE_INTEGER size{};
+                if (ReadFile(f, hdr, sizeof(hdr), &got, nullptr) && got == sizeof(hdr) && std::memcmp(hdr, "HDM4", 4) == 0 && hdr[1] == 1 &&
+                    hdr[2] >= 1 && hdr[3] >= 1 && hdr[2] <= 16384 && hdr[3] <= 16384 && GetFileSizeEx(f, &size) &&
+                    size.QuadPart >= static_cast<LONGLONG>(sizeof(hdr)) + static_cast<LONGLONG>(hdr[2]) * hdr[3] * 2) {
+                    w = static_cast<int>(hdr[2]);
+                    h = static_cast<int>(hdr[3]);
+                }
+            }
+            lk.lock();
+            if (g_r4.request == req) {
+                g_r4.answered = req;
+                g_r4.w = w;
+                g_r4.h = h;
+                for (auto& s : g_r4.strips) s.full = false;
+                const int rowsPer = w > 0 ? (std::max)(1, static_cast<int>(kStrip4kBytes / (static_cast<size_t>(w) * 2))) : 0;
+                for (int y = 0; w > 0 && y < h;) {
+                    g_r4.cv.wait(lk, [&] { return g_r4.request != req || !g_r4.strips[0].full || !g_r4.strips[1].full; });
+                    if (g_r4.request != req) break;
+                    Strip4k& s = !g_r4.strips[0].full ? g_r4.strips[0] : g_r4.strips[1];
+                    const int rows = (std::min)(rowsPer, h - y);
+                    lk.unlock();
+                    bool ok = true;
+                    try {
+                        s.px.resize(static_cast<size_t>(rows) * static_cast<size_t>(w));
+                    } catch (...) {
+                        ok = false;
+                    }
+                    DWORD got = 0;
+                    const DWORD want = static_cast<DWORD>(rows) * static_cast<DWORD>(w) * 2u;
+                    ok = ok && ReadFile(f, s.px.data(), want, &got, nullptr) && got == want;
+                    lk.lock();
+                    if (g_r4.request != req) break;
+                    if (!ok) {
+                        g_r4.w = g_r4.h = -1;
+                        break;
+                    }
+                    s.y0 = y;
+                    s.rows = rows;
+                    s.full = true;
+                    y += rows;
+                }
+            }
+            lk.unlock();
+            if (f != INVALID_HANDLE_VALUE) CloseHandle(f);
+            lk.lock();
+        }
+    }
+
+    void Release4k() {
+        SafeRelease(g_l4Srv);
+        SafeRelease(g_l4Tex);
+        g_l4W = g_l4H = g_l4Rows = 0;
+    }
+
+    // the reader is to fill the texture from `path` ("" = nothing); the same wish again changes nothing
+    void Want4k(const std::string& path) {
+        if (g_l4Request && path == g_l4Path) return;
+        Release4k();
+        g_l4Path = path;
+        g_l4Bad = path.empty();
+        {
+            std::lock_guard<std::mutex> lk(g_r4.lock);
+            g_r4.path = path;
+            g_l4Request = ++g_r4.request;
+        }
+        g_r4.cv.notify_all();
+        if (!g_r4Thread && !path.empty()) {
+            if (HANDLE t = CreateThread(nullptr, 0, Reader4kThread, nullptr, 0, nullptr)) {
+                CloseHandle(t);
+                g_r4Thread = true;
+            } else {
+                g_l4Bad = true;
+            }
+        }
+        QueryPerformanceCounter(&g_l4Start);
+    }
+
+    // after the device was released: the next wish reads the file again
+    void Forget4k() {
+        Release4k();
+        g_l4Path.clear();
+        g_l4Request = 0;
+        g_l4Bad = true;
+    }
+
+    // hd\maps4k\<variant>\<key>.hdm4 of the level in use ("" = none; only the variant shown - its 2x picture is what
+    // the player chose, F6/F7 compare variants)
+    const std::string& Path4k(const DDM::HD::LevelPictures& lp) {
+        static uint64_t key = 0;
+        static std::string variant;
+        static std::string found;
+        static bool known = false;
+        if (known && key == lp.key && variant == lp.variant) return found;
+        known = true;
+        key = lp.key;
+        variant = lp.variant;
+        found.clear();
+        char name[48];
+        std::snprintf(name, sizeof(name), "\\%016llx.hdm4", static_cast<unsigned long long>(lp.key));
+        const std::string path = DDM::HD::GameFolder() + "hd\\maps4k\\" + variant + name;
+        const DWORD a = variant.empty() ? INVALID_FILE_ATTRIBUTES : GetFileAttributesA(path.c_str());
+        if (a != INVALID_FILE_ATTRIBUTES && !(a & FILE_ATTRIBUTE_DIRECTORY)) found = path;
+        return found;
+    }
+
+    // one more strip of the wished 4x picture on the card; true once all of it is there
+    bool Step4k() {
+        if (g_l4Bad) return false;
+        if (g_l4Tex && g_l4Rows >= g_l4H) return true;
+        std::unique_lock<std::mutex> lk(g_r4.lock);
+        if (g_r4.answered != g_l4Request || g_r4.w == 0) return false;    // the reader has not opened it yet
+        if (g_r4.w < 0) {
+            g_l4Bad = true;
+            Release4k();
+            Logger::Warn("Present: the 4x level picture %s cannot be read - the HD picture stays.", g_l4Path.c_str());
+            return false;
+        }
+        if (!g_l4Tex) {
+            D3D11_TEXTURE2D_DESC td{};
+            td.Width = static_cast<UINT>(g_r4.w);
+            td.Height = static_cast<UINT>(g_r4.h);
+            td.MipLevels = 1;
+            td.ArraySize = 1;
+            td.Format = DXGI_FORMAT_B5G6R5_UNORM;
+            td.SampleDesc.Count = 1;
+            td.Usage = D3D11_USAGE_DEFAULT;
+            td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+            if (FAILED(g_dev->CreateTexture2D(&td, nullptr, &g_l4Tex)) || FAILED(g_dev->CreateShaderResourceView(g_l4Tex, nullptr, &g_l4Srv))) {
+                Release4k();
+                g_l4Bad = true;
+                g_r4.path.clear();          // the reader stops
+                g_l4Request = ++g_r4.request;
+                lk.unlock();
+                g_r4.cv.notify_all();
+                Logger::Warn("Present: no texture of %ux%u for the 4x level picture - the HD picture stays.", td.Width, td.Height);
+                return false;
+            }
+            g_l4W = g_r4.w;
+            g_l4H = g_r4.h;
+            g_l4Rows = 0;
+            QueryPerformanceCounter(&g_l4Start);    // (a dialog may have held the first strip back for a while)
+        }
+        for (Strip4k& s : g_r4.strips) {
+            if (!s.full) continue;
+            const D3D11_BOX box{ 0, static_cast<UINT>(s.y0), 0, static_cast<UINT>(g_l4W), static_cast<UINT>(s.y0 + s.rows), 1 };
+            g_ctx->UpdateSubresource(g_l4Tex, 0, &box, s.px.data(), static_cast<UINT>(g_l4W * 2), 0);
+            g_l4Rows += s.rows;
+            s.full = false;
+            break;
+        }
+        lk.unlock();
+        g_r4.cv.notify_all();
+        if (g_l4Rows < g_l4H) return false;
+        LARGE_INTEGER t1{}, f{};
+        QueryPerformanceCounter(&t1);
+        QueryPerformanceFrequency(&f);
+        // (the time includes frames without the level - a dialog - in which no strip went up)
+        Logger::Info("Present: 4x level picture %dx%d on the card (%s, %.0f ms after the first strip).", g_l4W, g_l4H, g_l4Path.c_str(),
+                     static_cast<double>(t1.QuadPart - g_l4Start.QuadPart) * 1000.0 / static_cast<double>(f.QuadPart));
+        return true;
+    }
+
+    // Where the output shows the level from a picture of its own instead of the world the engine drew (the shader's
+    // LevelAt / LevelHd): t10 the picture the engine drew the world from, t9 the one shown.
+    //   engine 1.0, smooth zoom: t10 the level picture, t9 its HD picture (HDLevelLayer) or the 4x one;
+    //   engine 2.0, smooth zoom beyond 2.0: t10 the HD picture, t9 the 4x one;
+    //   engine 2.0, not magnified (larger output than the frame - 4K screens): the same, tested on the frame itself.
+    // The 4x picture where an HD pixel would cover more than one output pixel (HDMaps4k=2: wherever it is there).
+    struct LevelUse {
+        int mode = 0;                                   // 0 none, 1 through the world copy, 2 straight from the frame
+        ID3D11ShaderResourceView* src = nullptr;
+        ID3D11ShaderResourceView* ref = nullptr;
+        float originX = 0.0f, originY = 0.0f;           // t10 pixel at world pixel (0, 0)
+        float scale = 2.0f;                             // t9 pixels per t10 pixel
+        float srcW = 0.0f, srcH = 0.0f, refW = 0.0f, refH = 0.0f;
+        float tap = 0.0f;
+        bool is4k = false;
+    };
+
+    LevelUse ChooseLevel(bool cropOn, bool lupaOn, const ViewZoom::View& lupa, float outPerFrame) {
+        LevelUse u;
+        const auto& cfg = SherwoodConfig::Get();
+        DDM::HD::LevelPictures lp;
+        const bool have = DDM::HD::LevelPicturesNow(lp);
+        if (cfg.hdMaps4k > 0 && have) Want4k(Path4k(lp));     // read in the background whatever the zoom
+        if (cropOn || !have || (DDM::HD::DebugFlags() & 2048u) || outPerFrame <= 0.0f) return u;
+        const bool ready4k = cfg.hdMaps4k > 0 && Step4k();
+        float zoom = lupa.zoom;
+        if (!lupaOn && !ViewZoom::FrameZoom(zoom)) return u;
+        const float m = lupaOn ? lupa.m : 1.0f;
+        const bool at1 = zoom > 0.99f && zoom < 1.01f, at2 = zoom > 1.99f && zoom < 2.01f;
+        // output pixels per pixel of the picture the engine drew the world from
+        const float outPerRef = m * outPerFrame;
+        int ox = 0, oy = 0;
+        if (at1 && lupaOn) {
+            const bool use4k = ready4k && (cfg.hdMaps4k == 2 || 2.0f / outPerRef < 0.9f);
+            if (!use4k && !cfg.hdLevelLayer) return u;
+            u.originX = lupa.camX;
+            u.originY = lupa.camY;
+            u.scale = use4k ? 4.0f : 2.0f;
+            u.is4k = use4k;
+            u.mode = 1;
+        } else if (at2 && DDM::HD::LevelOrigin(ox, oy)) {
+            if (!ready4k || !(cfg.hdMaps4k == 2 || 1.0f / outPerRef < 0.9f)) return u;
+            u.originX = static_cast<float>(ox);
+            u.originY = static_cast<float>(oy);
+            u.scale = 2.0f;
+            u.is4k = true;
+            u.mode = lupaOn ? 1 : 2;
+        } else {
+            return u;
+        }
+        if (!PrepareLevel()) return LevelUse{};
+        u.ref = at1 ? g_lvl1xSrv : g_lvlHdSrv;
+        u.refW = static_cast<float>(at1 ? g_lvlW : g_lvlHdW);
+        u.refH = static_cast<float>(at1 ? g_lvlH : g_lvlHdH);
+        u.src = u.is4k ? g_l4Srv : g_lvlHdSrv;
+        u.srcW = static_cast<float>(u.is4k ? g_l4W : g_lvlHdW);
+        u.srcH = static_cast<float>(u.is4k ? g_l4H : g_lvlHdH);
+        if (u.is4k && (static_cast<int>(u.srcW) != static_cast<int>(u.refW * u.scale) ||
+                       static_cast<int>(u.srcH) != static_cast<int>(u.refH * u.scale))) {
+            return LevelUse{};      // another level's picture (the reader has not caught up)
+        }
+        // four taps a quarter of an output pixel's footprint apart (at most a 4-pixel footprint)
+        u.tap = 0.25f * (std::min)(u.scale / outPerRef, 4.0f);
+        return u;
+    }
+
     // the HD picture of the game's cursor (GetCursor) in t8: a texture of its size, uploaded when it changes
     bool PrepareCursor(const DDM::HD::Patch::Cursor& c) {
         const int tw = c.w * 2 + 2, th = c.h * 2 + 2;
@@ -594,6 +981,8 @@ namespace {
 
     void ReleaseD3D() {
         ReleaseCursor();
+        ReleaseLevel();
+        Forget4k();
         ReleasePatch(g_patch[0]);
         ReleasePatch(g_patch[1]);
         ReleaseLayer();
@@ -931,7 +1320,6 @@ namespace {
         slot->lastUse = g_frameUse;
         g_tex = slot->tex;
         g_srv = slot->srv;
-        g_tex565 = g_has565;
         g_texW = w;
         g_texH = h;
         return true;
@@ -999,6 +1387,33 @@ namespace {
         } else if (lupaFrame && g_snapValid && g_snapTex && g_snapW == w && g_snapH == h) {
             lupaOn = true;      // the world went to its texture before the windows were drawn
         }
+        // the level from a picture of its own where the world shows its pixels (LevelUse: HD at 1.0, 4x beyond)
+        int vx, vy, vw, vh;
+        FitRect(w, h, static_cast<int>(g_bbW), static_cast<int>(g_bbH), vx, vy, vw, vh);
+        const LevelUse level = ChooseLevel(crop.right > crop.left, lupaOn, lupa, w > 0 ? static_cast<float>(vw) / static_cast<float>(w) : 0.0f);
+        const bool levelOn = level.mode != 0;
+        // A frame between two states of a dialog in a mission is not shown - the previous one stays, at most
+        // kHoldFrames in a row (2026-11-22, user: at the end of a raid "for a split second the scroll cut off on
+        // the right, the level bright, then the right one"; the presenter's log showed the two frames): the menu
+        // zoom still on after the question's dialog loop ended, nothing of a dialog in the frame - the bright level
+        // magnified 1.875x; and the next dialog's first frame drawn before the smooth zoom's copy of the world -
+        // the level at the engine's 1.0, not magnified.
+        {
+            constexpr int kHoldFrames = 6;
+            const bool bareCrop = crop.right > crop.left && !backdropOn && !layerOn && !patch && !UiScale::DialogLoopRunning();
+            const bool bareWorld = crop.right <= crop.left && !lupaOn && ViewZoom::Magnifying();
+            const bool bare = UiScale::EngineAlive() && (bareCrop || bareWorld);
+            if (bare && g_heldFrames < kHoldFrames) {
+                ++g_heldFrames;
+                if (g_logFrames.load(std::memory_order_relaxed) > 0) {
+                    g_logFrames.fetch_sub(1, std::memory_order_relaxed);
+                    Logger::Info("Present frame: held (%s) - the previous one stays", bareCrop ? "menu zoom without a dialog" : "world not magnified");
+                }
+                return true;
+            }
+            // only a normal frame starts the count again: a state that stays is shown after kHoldFrames, not 1 in 7
+            if (!bare) g_heldFrames = 0;
+        }
         if (!EnsureTexture(w, h)) {
             return false;
         }
@@ -1032,7 +1447,7 @@ namespace {
                 }
             }
         };
-        if (g_tex565) {
+        if (g_has565) {
             const size_t rowBytes = static_cast<size_t>(w) * 2;
             for (int y = 0; y < h; ++y) {
                 std::memcpy(dst + static_cast<size_t>(y) * map.RowPitch, bits + static_cast<size_t>(y) * pitch, rowBytes);
@@ -1041,15 +1456,19 @@ namespace {
             RenderDDraw::DrawOverlayRGB565(dst, static_cast<LONG>(map.RowPitch), w, h, bits, pitch);
             SettingsMenu::Draw(dst, static_cast<LONG>(map.RowPitch), false, w, h, crop.left, crop.top, bits, pitch);
         } else {
-            RenderDDraw::ConvertRGB565ToXRGB8888_SSE2(reinterpret_cast<const uint16_t*>(bits), pitch,
+            // the FPS line and notices exist for RGB565 only: drawn into a copy first
+            static std::vector<uint16_t> s_copy;
+            s_copy.resize(static_cast<size_t>(w) * static_cast<size_t>(h));
+            for (int y = 0; y < h; ++y) {
+                std::memcpy(s_copy.data() + static_cast<size_t>(y) * w, bits + static_cast<size_t>(y) * pitch, static_cast<size_t>(w) * 2);
+            }
+            RenderDDraw::DrawOverlayRGB565(reinterpret_cast<uint8_t*>(s_copy.data()), w * 2, w, h, bits, pitch);
+            RenderDDraw::ConvertRGB565ToXRGB8888_SSE2(s_copy.data(), w * 2,
                                                       reinterpret_cast<uint32_t*>(dst), static_cast<int>(map.RowPitch), w, h);
             uncover(false);
             SettingsMenu::Draw(dst, static_cast<LONG>(map.RowPitch), true, w, h, crop.left, crop.top, bits, pitch);
         }
         g_ctx->Unmap(g_tex, 0);
-
-        int vx, vy, vw, vh;
-        FitRect(w, h, static_cast<int>(g_bbW), static_cast<int>(g_bbH), vx, vy, vw, vh);
 
         if (SUCCEEDED(g_ctx->Map(g_cb, 0, D3D11_MAP_WRITE_DISCARD, 0, &map))) {
             ShaderConsts c{};
@@ -1073,6 +1492,20 @@ namespace {
             c.cropX = static_cast<float>(crop.left);
             c.cropY = static_cast<float>(crop.top);
             c.patchOn = patch ? 1.0f : 0.0f;
+            if (levelOn) {
+                c.lvlOriginX = level.originX;
+                c.lvlOriginY = level.originY;
+                c.lvlScale = level.scale;
+                c.lvlMode = static_cast<float>(level.mode);
+                c.lvlSrcW = level.srcW;
+                c.lvlSrcH = level.srcH;
+                c.lvlRefW = level.refW;
+                c.lvlRefH = level.refH;
+                c.lvlTap = level.tap;
+                // mode 2: the frame's rows above the interface (the hedge strip along the bottom: ddm.cpp HedgeStrip)
+                c.lvlWorldH = (hudBand > 0 && hudBand < h) ? static_cast<float>(hudBand) : static_cast<float>(h);
+                c.lvlTint = (DDM::HD::DebugFlags() & 4096u) ? 1.0f : 0.0f;
+            }
             if (cursorOn) {
                 c.cursorX = static_cast<float>(cursor.x - crop.left);
                 c.cursorY = static_cast<float>(cursor.y - crop.top);
@@ -1089,6 +1522,15 @@ namespace {
             g_ctx->Unmap(g_cb, 0);
         }
 
+        if (g_logFrames.load(std::memory_order_relaxed) > 0) {
+            g_logFrames.fetch_sub(1, std::memory_order_relaxed);
+            Logger::Info("Present frame: crop=%s(%ld,%ld-%ld,%ld) backdrop=%d layer=%d patch=%d lupa=%d cursor=%d dialog=%d "
+                         "level=%d%s (origin %.1f,%.1f x%.0f tap %.2f; zoom %.3f m %.3f out/frame %.3f)",
+                         crop.right > crop.left ? "" : "none ", crop.left, crop.top, crop.right, crop.bottom, backdropOn ? 1 : 0,
+                         layerOn ? 1 : 0, patch ? 1 : 0, lupaOn ? 1 : 0, cursorOn ? 1 : 0, UiScale::DialogLoopRunning() ? 1 : 0,
+                         level.mode, level.is4k ? " 4x" : "", level.originX, level.originY, level.scale, level.tap,
+                         lupaOn ? lupa.zoom : 0.0f, lupaOn ? lupa.m : 1.0f, w > 0 ? static_cast<float>(vw) / static_cast<float>(w) : 0.0f);
+        }
         const float black[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
         g_ctx->OMSetRenderTargets(1, &g_rtv, nullptr);
         g_ctx->ClearRenderTargetView(g_rtv, black);
@@ -1104,12 +1546,13 @@ namespace {
         g_ctx->VSSetShader(g_vs, nullptr, 0);
         g_ctx->PSSetShader(g_ps, nullptr, 0);
         g_ctx->PSSetConstantBuffers(0, 1, &g_cb);
-        ID3D11ShaderResourceView* srvs[9] = { g_srv, layerOn ? g_layerOrigSrv : nullptr, layerOn ? g_layerHdSrv : nullptr,
-                                              backdropOn ? g_backdropSrv : nullptr, lupaOn ? g_snapSrv : nullptr,
-                                              (backdropOn && g_backShowOn) ? g_backShowSrv : nullptr,
-                                              patch ? patch->refSrv : nullptr, patch ? patch->hdSrv : nullptr,
-                                              cursorOn ? g_cursorSrv : nullptr };
-        g_ctx->PSSetShaderResources(0, 9, srvs);
+        ID3D11ShaderResourceView* srvs[11] = { g_srv, layerOn ? g_layerOrigSrv : nullptr, layerOn ? g_layerHdSrv : nullptr,
+                                               backdropOn ? g_backdropSrv : nullptr, lupaOn ? g_snapSrv : nullptr,
+                                               (backdropOn && g_backShowOn) ? g_backShowSrv : nullptr,
+                                               patch ? patch->refSrv : nullptr, patch ? patch->hdSrv : nullptr,
+                                               cursorOn ? g_cursorSrv : nullptr,
+                                               levelOn ? level.src : nullptr, levelOn ? level.ref : nullptr };
+        g_ctx->PSSetShaderResources(0, 11, srvs);
         ID3D11SamplerState* samplers[2] = { g_smpPoint, g_smpLinear };
         g_ctx->PSSetSamplers(0, 2, samplers);
         g_ctx->Draw(3, 0);
@@ -1149,12 +1592,20 @@ namespace {
         bmi.masks[1] = 0x07E0;
         bmi.masks[2] = 0x001F;
 
+        // the FPS line, notices and the F10 panel go into a copy of the frame (audit 2026-11-22: here F10 opened a
+        // panel nobody could see, and it took the clicks)
+        static std::vector<uint8_t> s_copy;
+        s_copy.resize(static_cast<size_t>(pitch) * static_cast<size_t>(h));
+        std::memcpy(s_copy.data(), bits, s_copy.size());
+        RenderDDraw::DrawOverlayRGB565(s_copy.data(), pitch, w, h, bits, pitch);
+        SettingsMenu::Draw(s_copy.data(), pitch, false, w, h, 0, 0, bits, pitch);
+
         int x, y, cw, ch;
         FitRect(w, h, outW, outH, x, y, cw, ch);
         HDC dc = GetDC(g_hwnd);
         if (!dc) return;
         SetStretchBltMode(dc, COLORONCOLOR);
-        StretchDIBits(dc, x, y, cw, ch, 0, 0, w, h, bits, reinterpret_cast<const BITMAPINFO*>(&bmi), DIB_RGB_COLORS, SRCCOPY);
+        StretchDIBits(dc, x, y, cw, ch, 0, 0, w, h, s_copy.data(), reinterpret_cast<const BITMAPINFO*>(&bmi), DIB_RGB_COLORS, SRCCOPY);
         ReleaseDC(g_hwnd, dc);
     }
 
@@ -1180,13 +1631,6 @@ void SetWindow(HWND hwnd) {
     g_backend = Backend::None;
     g_initTried = false;
     g_hwnd = hwnd;
-}
-
-void Shutdown() {
-    std::lock_guard<std::mutex> lock(g_lock);
-    ReleaseD3D();
-    g_backend = Backend::None;
-    g_hwnd = nullptr;
 }
 
 void Frame(const uint8_t* bits, int pitch, int w, int h) {
@@ -1302,6 +1746,10 @@ const char* BackendName() {
         case Backend::GDI:   return "GDI";
         default:             return "none";
     }
+}
+
+void LogNextFrames(int count) {
+    g_logFrames.store(count < 0 ? 0 : (count > 600 ? 600 : count));
 }
 
 } // namespace DDM::Present

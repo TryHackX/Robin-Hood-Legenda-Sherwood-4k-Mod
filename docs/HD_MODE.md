@@ -1,4 +1,4 @@
-# Tryb HD — jak działa i jak go budować (stan 2026-11-14)
+# Tryb HD — jak działa i jak go budować (stan 2026-11-22, wersja 1.3.0)
 
 Legenda: [Z] = zweryfikowane pomiarem/testem w tle, [K] = z kodu gry (dezasemblacja), [N] = niesprawdzone.
 
@@ -109,7 +109,7 @@ od mapy pod spodem średnio o <25/255 — „zamalowuje ziemię”. Pomiar: woda
   ~12×12 punktów: kształt (przezroczystość) i **kolory** (średnia różnica na kanał ≤ 36/255; w teście na Nottingham
   największa wśród przyjętych klatek: 9,5). Niezgodność → rysowanie po staremu (raz w logu na klatkę). To jest też
   bezpiecznik dla wszystkiego, czego nie znam (inne palety, efekty): zły kolor nigdy nie trafi na ekran.
-- **Noc i mgła** [K, NIE sprawdzone w grze]: tryb barwienia 1/2 z dekodera. Mod barwi klatkę HD tym samym wzorem co
+- **Noc i mgła** [K; sprawdzone w grze 2026-11-15, v1.1.6 — patrz §5f]: tryb barwienia 1/2 z dekodera. Mod barwi klatkę HD tym samym wzorem co
   `0x5046E0`: `kanał = kanał*p/100 + kolor*(100-p)/100` (zieleń liczona na 5 bitach, klucz i kolor cienia bez zmian),
   noc p=50 z kolorem `0x00E7` (= `0x5EF320(0,0x1E,0x3C)`), mgła p=60 z bielą. Dla klatek blokowych gra używa
   gotowych zestawów palet 1/2 (`bank+0x2C/+0x3C`), budowanych tymi samymi parametrami: `0x506930(paleta, wzór, tryb)`
@@ -133,8 +133,8 @@ od mapy pod spodem średnio o <25/255 — „zamalowuje ziemię”. Pomiar: woda
   partie** (20 000 px): przy 280 000 px DAT2 zapchał 12 GB karty i przestał się posuwać.
 - **Nie uruchamiać generatora podczas gry**: zajęta karta wydłuża `Present` (pomiar: przy zapchanej pamięci karty gra
   spadła z 25 do ~8 tików/s; po zwolnieniu wróciła do 25).
-- **Nie zrobione / nie sprawdzone**: poziomy nocne i mgła w praktyce (patrz wyżej), sprite'y rysowane lustrzanie przez
-  DirectDraw (idą po staremu), animacja wody w HD, interfejs, pozostałe 8 lokacji (test tylko na Nottingham w dzień).
+- **Nie zrobione / nie sprawdzone** (stan z 2026-11-14; noc i mgła, interfejs i animacja wody są już zrobione, patrz §4, §5f, §7): sprite'y rysowane lustrzanie przez
+  DirectDraw (idą po staremu), pozostałe lokacje (test wtedy tylko na Nottingham w dzień).
 
 ### Ikony i znaczniki — klatki tworzone przez grę w locie (2026-11-14) [Z]
 Zgłoszenie użytkownika: „ikonka nad głową Robina jest pixeloza, gdy ma kaptur". Przyczyna: portret w kółku nad wybranym
@@ -447,6 +447,30 @@ odrzuconych”; kolejka na kartę graficzną `tools\hd\queue_between.ps1` (czeka
 - Wydanie: oba magazyny w archiwum `SherwoodHD-4-klatki-posrednie-2.zip` wydania `hd-pack-1` (`tools\make_hd_packs.py
   --only 4`) — dane zmieniają się rzadko, archiwum moda zostaje ~150 MB. Bez niego mod działa jak w 1.2.8.
 
+## 5h. Warstwa poziomu poniżej zoomu 2,0 (1.3.0, 2026-11-22, `[Display] HDLevelLayer=1`; `src\ddm\ddm_present.cpp`)
+- Życzenie użytkownika: „oddalone do końca jakość nie jest HD”. Poniżej 2,0 silnik rysuje poziom w 1,0 w oryginalnych pikselach, a płynny zoom go powiększał [Z].
+- Teraz tam, gdzie kopia świata nadal pokazuje własny piksel obrazu poziomu (kamera + piksel świata), wyjście pokazuje obraz HD poziomu (przy `HDMaps4k=2` lub silnym powiększeniu — obraz 4K, §5i). Postacie i obiekty zostają takie, jak silnik rysuje je w 1,0 (powiększone) — silnik zna tylko 0,5 / 1 / 2 [K].
+- `HD::LevelOrigin` = piksel HD w pikselu (0,0) powierzchni świata = 2 × kamera.
+
+## 5i. Natywne mapy 4K (1.3.0, `[Display] HDMaps4k`, `hd\maps4k\<wariant>\<klucz>.hdm4`)
+- **Format** `.hdm4`: „HDM4”, u32 wersja 1, u32 szerokość, u32 wysokość, u32 0, potem wiersze RGB565 od góry do dołu (z ditheringiem). Klucz = ten sam 64-bitowy FNV-1a obrazu poziomu co w `.hdmap` (§3).
+- **Wytwarzanie**: `tools\hd\upscale_4k.py` (4× model 4xNomos2_hq_dat2 + dopasowanie kolorów do oryginału → `hd\maps_png\4k\<mapa>_<wariant>.png`) i `tools\hd\make_maps4k.py`. Wszystkie 20 map, tylko wariant dat2, 3,3 GB.
+- **Kiedy**: `HDMaps4k=1` (domyślnie) — tam, gdzie ekran pokazuje poziom większy niż jego obraz HD (2×): zoom powyżej ok. 2,2 na 2560×1440 (`ZoomMax` = 400 %), na monitorze 4K już od 2,0. `2` = także poniżej (obraz 4K zmniejszony, do porównań). `0` = wyłączone.
+- **Wczytywanie**: prezenter czyta plik w tle (wątek czytający, dwa bufory) paskami po 4 MB, najwyżej jeden pasek na prezentowaną klatkę, do tekstury DEFAULT B5G6R5; ok. 1 s po starcie poziomu. Tylko pokazywany wariant (F6/F7 porównują warianty; 4K ma tylko dat2).
+- **Gdzie widać 4K**: tam, gdzie świat nadal pokazuje własny piksel tła HD (dokładne porównanie RGB565 z obrazem HD poziomu w `HD::LevelOrigin` + piksel świata; reguła sąsiadów: różni się najwyżej 3 z 8) — wyjście próbkuje obraz 4K (4 próbki dwuliniowe co ćwierć stopy piksela wyjścia). Postacie, drzewa (to sprite'y), cienie, stożki widzenia i interfejs zostają takie, jak rysuje gra.
+- **Test** [Z, w tle]: mapa powozu (Croisement02): zoom 3,0 i 4,0 wyraźnie więcej szczegółu (źdźbła trawy); wnętrze 2048×1152 z wyjściem 2560×1440 (jak ekran 4K) przy zoomie 2,0 prosto z klatki. Harness: `dbg 4096` barwi piksele z warstwy poziomu, `dbg 2048` wyłącza warstwę poziomu.
+- **Wydanie**: `SherwoodHD-5-mapy-4k-a.zip` (skrzyżowanie, obóz w Sherwood, Derby, Leicester, Lincoln; 1,16 GB) i `SherwoodHD-5-mapy-4k-b.zip` (Nottingham, York; 1,19 GB) w wydaniu `hd-pack-1`, opcjonalne; `tools\make_hd_packs.py` pakuje 5 / 5b; `tools\upload_hd_pack.ps1 -Only <nazwy>` wysyła tylko nowe paczki.
+- **Zmiana wariantu przy zmienionym obrazie poziomu**: misja powozu rysuje powóz w obrazie poziomu; po F6/F7 poziom zostawał w oryginalnych pikselach (klucz zmienionego obrazu nie ma pliku). Teraz wariant szukany po kluczu własnego obrazu poziomu; kopia oryginału zostaje (zmieniona część pokazana z obrazu gry).
+
+## 5j. Przytrzymanie klatek przejściowych przy dialogach (1.3.0)
+- Zgłoszenie: na końcu rajdu zwój pojawiał się na ułamek sekundy ucięty z prawej, z jasnym poziomem, potem cały.
+- Dziennik prezentera (`presentlog N` — nowa komenda harnessu, loguje następne N prezentowanych klatek) pokazał dwie klatki przejściowe [Z]: lupa menu nadal włączona po końcu pętli dialogu pytania, bez dialogu w klatce (jasny poziom powiększony 1,875×), oraz pierwsza klatka następnego dialogu narysowana przed kopią świata płynnego zoomu (poziom 1,0, niepowiększony).
+- Takie klatki nie są prezentowane — zostaje poprzednia, najwyżej 6 pod rząd.
+
+## 5k. Pauza (1.3.0)
+- W pauzie (flaga translatora wejścia, singleton `[0x006C0C4C]` + 0x1B) `RHGame::Run` pomija tik silnika, przeskakuje ogranicznik klatek (`0x005100DB..0x005100E0` → `0x00510126`) i nie rysuje żadnej klatki: pętla kręciła ok. 47 000 przebiegów na sekundę na pełnym rdzeniu (także przy `VSync=1`) [Z].
+- Teraz hak w tym miejscu robi najwyżej jeden przebieg na odświeżenie i wykonuje pracę moda na tik: F6–F9 i przełączniki panelu F10, przełączenie poziomu silnika przez płynny zoom, watchdog. Klatka liczy się jako tik gry tylko gdy zmienił się licznik tików silnika `[silnik + 0x4A94]` (zwiększany w `0x004C7254`). Harness: `pause 1 | 0`. Szczegóły adresów: `docs\RE_NOTES.md`.
+
 ## 6. Tryb testowy w tle (żeby nie zabierać użytkownikowi ekranu)
 - `tools\htest.ps1 [-Ini plik] [-MenuOnly]` — start ukrytej gry (`SHERWOODFIX_TEST=1`), pominięcie filmów, „Graj!".
 - `tools\hctl.ps1 -Cmd "a; b" [-Shot nazwa | -ShotOut nazwa] [-Crop x,y,w,h] [-MaxWidth n] [-Wait ms]`.
@@ -623,9 +647,8 @@ w górę), resztę powiększa prezenter — **tylko świat**:
 - **Filtr powiększenia** (2026-11-16, v1.1.7; zgłoszenie: „na oddaleniu robi się blur… na murze, śwince, płaszczu
   Robina”): poniżej zoomu 2 silnik rysuje świat w 1,0 (bez grafiki HD), a lupa powiększała go dwuliniowo. Dla
   powiększenia 1 < m < 2 (także zoom 2–4 na klatce HD) shader bierze Catmull-Rom z 16 tekseli (`WorldMagnified`,
-  przycięte przeregulowanie); m ≥ 2 jak dotąd. Porównanie `hd\compare\lupa15_bilinear_vs_catrom.png`. ☐ Prawdziwe HD
-  poniżej zoomu 2: tło mapy w HD w prezenterze (mapa 1× i HD jako tekstury, test „piksel klatki = piksel mapy 1×” jak
-  przy warstwach menu) — sprite'y zostałyby 1×.
+  przycięte przeregulowanie); m ≥ 2 jak dotąd. Porównanie `hd\compare\lupa15_bilinear_vs_catrom.png`. ✔ Prawdziwe HD
+  poniżej zoomu 2: zrobione w 1.3.0 jako warstwa poziomu (§5h); sprite'y zostają 1× (powiększone).
 - **Linia zamachu — przyczyna i poprawka** (2026-11-17, v1.2.0; youtuber: „rysowanie walki zależy od zoomu”). Gest:
   przytrzymany lewy przycisk = flaga wskaźnika `0x40` (`Pointer::Update 0x00628210`: 1 = kliknięcie przy puszczeniu,
   8 = podwójne, 0x40 = trzymany; prawy 2/0x10/0x80) → menedżer zdarzeń `[0x6C0C4C]` (= `RHEngine+0x68`) zaczyna zapis
@@ -901,10 +924,10 @@ w górę), resztę powiększa prezenter — **tylko świat**:
     dat2 → sgi → ultrasharp zmienia się ~40 % pikseli świata (różnica > 12/255), głównie faktura ziemi i dróg — budynki
     wychodzą z modeli bardzo podobnie, postacie widać bardziej. Minimapa się nie zmienia (gotowe obrazy z dat2).
     Porównanie: `tools\out\var_compare.png`.
-  - „4K to 4K, a nie 1440p?”: tryb HD liczy obraz w 2560×1440; grafika HD ma 2× piksele oryginału (np. Nottingham
+  - „4K to 4K, a nie 1440p?” (stan sprzed 1.3.0, uzupełnienie niżej): tryb HD liczy obraz w 2560×1440; grafika HD ma 2× piksele oryginału (np. Nottingham
     4608×7040 dla poziomu 2304×3520), czyli przy domyślnym zoomie 1:1 na 1440p; na monitorze 4K prezenter skaluje
-    ×1,5 (sharp-bilinear). Prawdziwe 4K przy tym samym kadrze = grafika HD ×3 (tła, postacie, interfejs) — kilka
-    razy więcej danych i generowania.
+    ×1,5 (sharp-bilinear). Od 1.3.0 tło mapy może być w natywnym 4K (mapy 4× oryginału, §5i); postacie, obiekty i interfejs
+    nadal są z klatki 2× (prawdziwe 4K także dla nich = grafika HD ×3, kilka razy więcej danych i generowania).
   - Ptaki (pytanie użytkownika 2026-11-22: „czy są w HD i mają klatki pośrednie, nie wyglądają płynnie”): to animacje
     otoczenia z `DATA\Animations\<pora>\` (`not_birds.rhs` gołębie Nottingham, `York_crow` / `York_pigeon`,
     `Lei_duck` kaczki, `der_henns` kury). HD — tak: klatki są w magazynach (`_common`: gołębie Nottingham 191/199,

@@ -21,7 +21,4 @@ namespace RenderDDraw {
     // A short message from the mod (5x7 font: letters, digits, . : | ( ) -), drawn into the frame
     // for `seconds`, independent of ShowFPSOverlay. Main thread.
     void ShowNotice(const char* text, double seconds);
-
-    uint64_t GetTotalFramesPresented();
-    uint64_t GetSurfaceLocksThisFrame();
 }

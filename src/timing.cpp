@@ -46,12 +46,7 @@ namespace Timing {
     namespace {
         LARGE_INTEGER g_qpcFreq{};
         LARGE_INTEGER g_qpcStart{};
-        LARGE_INTEGER g_lastFrameQpc{};
         DWORD g_baseTickCount = 0;
-
-        double g_currentFPS = 0.0;
-        double g_fpsAccumTime = 0.0;
-        int g_fpsFrameCount = 0;
 
         using PFN_timeBeginPeriod = DWORD(WINAPI*)( UINT);
         using PFN_timeEndPeriod   = DWORD(WINAPI*)(UINT);
@@ -291,18 +286,36 @@ namespace Timing {
             return (a >= 1.0) ? 1.0f : static_cast<float>(a);
         }
 
+        // RHEngine's tick counter: incremented by every engine tick (0x004C7254, [engine + 0x4A94])
+        uint32_t EngineTicks(void* pGame) {
+            const auto* e = pGame ? *reinterpret_cast<uint8_t* const*>(reinterpret_cast<uintptr_t>(pGame) + 0x18) : nullptr;
+            return e ? *reinterpret_cast<const uint32_t*>(e + 0x4A94) : 0u;
+        }
+        uint32_t g_tickFrameTicks = 0xFFFFFFFFu;    // the counter at the last frame counted as a tick's own
+
         void __fastcall Hook_RenderFrame(void* pGame, void* edx, int showCursor, int doPresent) {
-            const bool fromTick = !g_inExtraFrame &&
-                                  reinterpret_cast<uintptr_t>(_ReturnAddress()) == kAddrTickRenderRet;
+            const bool fromTickSite = !g_inExtraFrame &&
+                                      reinterpret_cast<uintptr_t>(_ReturnAddress()) == kAddrTickRenderRet;
+            // While the game is paused RHGame::Run draws a frame from the same place on every pass, but the engine
+            // does not tick: only a frame after a tick is the tick's own (sprite animation steps, captured positions;
+            // audit 2026-11-22: every paused frame was counted as a tick)
+            bool fromTick = false;
+            if (fromTickSite) {
+                const uint32_t ticks = EngineTicks(pGame);
+                fromTick = ticks != g_tickFrameTicks;
+                g_tickFrameTicks = ticks;
+            }
             if (reinterpret_cast<uintptr_t>(_ReturnAddress()) == kAddrBackdropRenderRet) {
-                // a dialog's backdrop: drawn as the game draws it, nothing else of a frame here
+                // a dialog's backdrop: drawn as the game draws it, nothing else of a frame here.
+                // The objects go back to where they are first - also when the dialog comes from the tick's
+                // own frame ("mission won - leave the level?"): its answer may end the level, and the
+                // positions written back after the frame would then land in freed memory (audit 2026-11-22).
+                MotionSmooth::Restore();
                 if (g_inExtraFrame) {
                     // A window opens its dialog from its Draw - also in one of our extra frames, and
                     // the whole dialog then runs inside that frame's RenderFrame (camp of Sherwood,
                     // "start the chosen mission?", 2026-11-17: the backdrop render was taken for an
-                    // extra frame). The dialog is no extra frame: the objects go back to where they
-                    // are (its answer may end the level), animations and HUD timers run as usual.
-                    MotionSmooth::Restore();
+                    // extra frame). The dialog is no extra frame: animations and HUD timers run as usual.
                     g_inExtraFrame = false;
                     if (g_dialogInExtraFrames++ == 0) {
                         Logger::Info("Extra frames: a window opened a dialog during an extra frame - the dialog runs as a frame of the tick.");
@@ -323,7 +336,7 @@ namespace Timing {
                 return;
             }
             g_lastRenderBackdrop = false;
-            if (fromTick) ViewZoom::PrepareLevel();   // a new level's first frame: at the player's zoom
+            if (fromTickSite) ViewZoom::PrepareLevel();   // a new level's first frame (before its first tick): at the player's zoom
             bool overridden = false;
             if (MotionSmooth::IsEnabled() && (g_inExtraFrame || fromTick)) {
                 if (fromTick) {
@@ -402,32 +415,6 @@ namespace Timing {
             const uint8_t r = o_ClampScrollDelta(pEngine, edx);
             if (wantX != vel[0] || wantY != vel[1]) ViewZoom::OnScrollClamped(wantX - vel[0], wantY - vel[1]);
             return r;
-        }
-
-        // Precise hybrid wait for a given number of microseconds using Sleep(1) + _mm_pause()
-        void HybridWaitMicroseconds(int64_t waitUs) {
-            if (waitUs <= 0) return;
-
-            const uint64_t startTicks = ReadRawQPC();
-            const uint64_t targetTicks = startTicks + (static_cast<uint64_t>(waitUs) * g_qpcFreq.QuadPart) / 1000000ULL;
-
-            while (true) {
-                uint64_t now = ReadRawQPC();
-                if (now >= targetTicks) break;
-
-                uint64_t remTicks = targetTicks - now;
-                uint64_t remUs = (remTicks * 1000000ULL) / g_qpcFreq.QuadPart;
-
-                if (remUs > 2000) {
-                    if (o_Sleep) {
-                        o_Sleep(1);
-                    } else {
-                        Sleep(1);
-                    }
-                } else {
-                    _mm_pause();
-                }
-            }
         }
 
         DWORD WINAPI Hook_GetTickCount() {
@@ -612,9 +599,15 @@ namespace Timing {
 
                     const uint64_t dt = ReadRawQPC() - now;
                     const double dtUs = static_cast<double>(dt) * 1000000.0 / static_cast<double>(qpcFreq);
-                    g_avgExtraUs = (g_avgExtraUs <= 0.0) ? dtUs : (g_avgExtraUs * 0.8 + dtUs * 0.2);
+                    // A frame that held a dialog or a stall says nothing about the next one: such a sample (seconds)
+                    // stopped the extra frames for the rest of the session with VSync=0 (audit 2026-11-22).
+                    if (dtUs < static_cast<double>(targetMs) * 1000.0) {
+                        g_avgExtraUs = (g_avgExtraUs <= 0.0) ? dtUs : (g_avgExtraUs * 0.8 + dtUs * 0.2);
+                    }
                     Diag::Add(Diag::C_SUBFRAME, dt);
                 }
+                // no extra frame fitted: the estimate fades, so one that came out too high is tried again later
+                if (!ranExtra && !vsyncPaced && g_avgExtraUs > 0.0) g_avgExtraUs *= 0.9;
             }
 
             // Start the next tick: exactly on schedule, or - when the display paces us - with the
@@ -636,17 +629,6 @@ namespace Timing {
             AudioFix::OnGameTick();
             Diag::OnTickWorkBegin();
 
-            if (g_lastFrameQpc.QuadPart != 0) {
-                double dt = static_cast<double>(nowQpc - g_lastFrameQpc.QuadPart) / static_cast<double>(g_qpcFreq.QuadPart);
-                g_fpsAccumTime += dt;
-                g_fpsFrameCount++;
-                if (g_fpsAccumTime >= 0.5) {
-                    g_currentFPS = static_cast<double>(g_fpsFrameCount) / g_fpsAccumTime;
-                    g_fpsAccumTime = 0.0;
-                    g_fpsFrameCount = 0;
-                }
-            }
-            g_lastFrameQpc.QuadPart = static_cast<LONGLONG>(nowQpc);
         }
 
         uintptr_t g_gameLimiterResumeAddr = 0x00510126;
@@ -661,6 +643,45 @@ namespace Timing {
                 push esi            // frameStartTick
                 push ebp            // RHGame*
                 call PaceGameLoopTick
+                popad
+                popfd
+                jmp dword ptr [g_gameLimiterResumeAddr]
+            }
+        }
+
+        // The game paused ([ebx + 0x1B] in RHGame::Run, 0x005100DB): the loop jumps past the frame limiter, so the
+        // pacer's per-tick work never ran (audit 2026-11-22) - the HD variants' hot keys and the settings panel's
+        // switches, the smooth zoom's switch of the engine's level, the watchdog's beat. The paused loop draws no frame
+        // either: nothing paced it, it ran some 47,000 passes a second on a full core (hidden test 2026-11-22, VSync=1
+        // too). Done here on every paused pass, one pass per refresh at most.
+        uint64_t g_lastPausedPassQpc = 0;
+
+        void __stdcall PausedLoopPass(void* pGame) {
+            Watchdog::Beat();
+            InputFix::Poll();
+            TestHarness::OnGameTick();
+            DDM::HD::OnGameTick();
+            auto* pEngine = pGame ? *reinterpret_cast<uint8_t**>(reinterpret_cast<uintptr_t>(pGame) + 0x18) : nullptr;
+            ViewZoom::OnGameTick(pEngine);
+            const uint64_t next = g_lastPausedPassQpc + FramePeriodQpc();
+            if (ReadRawQPC() < next) WaitUntilQpc(next);
+            g_lastPausedPassQpc = ReadRawQPC();
+        }
+
+        uintptr_t g_pauseContinueAddr = 0x005100E2;
+
+        // replaces 0x005100DB..0x005100E1: mov al,[ebx+1Bh] / test al,al / jne 0x00510126
+        __declspec(naked) void PauseCheckDetour() {
+            __asm {
+                mov al, byte ptr [ebx + 0x1B]
+                test al, al
+                jne paused
+                jmp dword ptr [g_pauseContinueAddr]
+            paused:
+                pushfd
+                pushad
+                push ebp            // RHGame*
+                call PausedLoopPass
                 popad
                 popfd
                 jmp dword ptr [g_gameLimiterResumeAddr]
@@ -772,6 +793,17 @@ namespace Timing {
                     Logger::Info("Installed game loop pacer @ 0x%08X (extra frames: scroll=%d cursor=%d, VSync=%d, display %d Hz).",
                                  gameLoopLim, cfg.smoothCameraScroll ? 1 : 0, cfg.smoothCursor ? 1 : 0,
                                  cfg.vsync ? 1 : 0, g_displayHz);
+                    // 2b. the paused loop (see PausedLoopPass), only with the pacer at its known place
+                    static const uint8_t kPause[] = { 0x8A, 0x43, 0x1B, 0x84, 0xC0, 0x75, 0x44 };
+                    bool paused = false;
+                    if (gameLoopLim == 0x00510114 && std::memcmp(reinterpret_cast<const void*>(0x005100DB), kPause, sizeof(kPause)) == 0) {
+                        uint8_t jmp[7] = { 0xE9, 0, 0, 0, 0, 0x90, 0x90 };
+                        const int32_t prel = static_cast<int32_t>(reinterpret_cast<uintptr_t>(&PauseCheckDetour) - (0x005100DBu + 5u));
+                        std::memcpy(&jmp[1], &prel, sizeof(prel));
+                        paused = Memory::PatchBytes(0x005100DB, jmp, sizeof(jmp));
+                    }
+                    Logger::Info("Paused game loop @ 0x005100DB: hot keys, zoom switches and a frame cap while paused: %s.",
+                                 paused ? "on" : "NOT installed (bytes differ)");
                 }
             } else {
                 Logger::Warn("Main game loop limiter pattern (0x510114) not found.");
@@ -901,33 +933,8 @@ namespace Timing {
         return g_renderPhase;
     }
 
-    double GetElapsedMilliseconds() {
-        uint64_t ticks = ReadRawQPC() - static_cast<uint64_t>(g_qpcStart.QuadPart);
-        return (static_cast<double>(ticks) * 1000.0) / static_cast<double>(g_qpcFreq.QuadPart);
-    }
-
     uint64_t GetElapsedMicroseconds() {
         uint64_t ticks = ReadRawQPC() - static_cast<uint64_t>(g_qpcStart.QuadPart);
         return (ticks * 1000000ULL) / static_cast<uint64_t>(g_qpcFreq.QuadPart);
-    }
-
-    double GetCurrentFPS() {
-        return g_currentFPS;
-    }
-
-    void FrameLimitStep(double targetFPS) {
-        if (targetFPS <= 0.0) return;
-
-        const uint64_t frameDurationUs = static_cast<uint64_t>(1000000.0 / targetFPS);
-        uint64_t nowTicks = ReadRawQPC();
-
-        if (g_lastFrameQpc.QuadPart != 0) {
-            uint64_t elapsedUs = ((nowTicks - static_cast<uint64_t>(g_lastFrameQpc.QuadPart)) * 1000000ULL) /
-                                 static_cast<uint64_t>(g_qpcFreq.QuadPart);
-            if (elapsedUs < frameDurationUs) {
-                HybridWaitMicroseconds(static_cast<int64_t>(frameDurationUs - elapsedUs));
-            }
-        }
-        g_lastFrameQpc.QuadPart = static_cast<LONGLONG>(ReadRawQPC());
     }
 }

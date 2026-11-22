@@ -1,5 +1,6 @@
 #include "window_manager.h"
 #include "config.h"
+#include "input_fix.h"
 #include "logger.h"
 #include "pattern.h"
 #include "test_harness.h"
@@ -23,13 +24,6 @@ namespace WindowManager {
         int  g_savedMouseParams[3] = { 0, 0, 0 };
         bool g_mouseParamsSaved = false;
 
-        // The game reads the mouse through DirectInput relative data, which Windows pointer
-        // acceleration never touches. The previous implementation switched acceleration off
-        // system-wide with SPI_SETMOUSE and left it off for the whole desktop session whenever
-        // the game crashed or was killed, so it is now a no-op kept only for the call sites.
-        void ApplyRawMouseState(bool /*active*/) {
-        }
-
         using PFN_CreateWindowExA = HWND(WINAPI*)(DWORD, LPCSTR, LPCSTR, DWORD, int, int, int, int, HWND, HMENU, HINSTANCE, LPVOID);
         using PFN_SetWindowLongA  = LONG(WINAPI*)(HWND, int, LONG);
         using PFN_SetWindowPos    = BOOL(WINAPI*)(HWND, HWND, int, int, int, int, UINT);
@@ -51,7 +45,13 @@ namespace WindowManager {
         LRESULT CALLBACK GameWndProcHook(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             Watchdog::Beat();
             switch (msg) {
+                case WM_CLOSE:
+                    // Alt+F4 in a level: the game's own quick save / load keys back before it may write the profile
+                    // (the next tick of a level applies the mod's again if the game goes on; audit 2026-11-22)
+                    InputFix::RestoreQuickKeys();
+                    break;
                 case WM_DESTROY:
+                    InputFix::RestoreQuickKeys();
                     Watchdog::OnMainWindowDestroyed();
                     break;
                 case WM_NCDESTROY: {
@@ -187,7 +187,6 @@ namespace WindowManager {
 
             if (isMainGameWindow && hWnd) {
                 g_hGameWnd = hWnd;
-                ApplyRawMouseState(true);
                 if (cfg.windowedBorderless) {
                     InstallCursorHider(hWnd);
                 }
@@ -354,7 +353,6 @@ namespace WindowManager {
     }
 
     void ShutdownHooks() {
-        ApplyRawMouseState(false);
         ClipCursor(nullptr);
     }
 
@@ -465,10 +463,6 @@ namespace WindowManager {
         }
     }
 
-    bool IsAppActive() {
-        return g_isAppActive;
-    }
-
     bool IsReallyMinimised() {
         // the game itself is always told "no" (Hook_IsIconic); this asks Windows
         return g_hGameWnd && o_IsIconic && o_IsIconic(g_hGameWnd) != FALSE;
@@ -491,41 +485,5 @@ namespace WindowManager {
     void GetMonitorResolution(int& outWidth, int& outHeight) {
         outWidth  = g_monitorWidth;
         outHeight = g_monitorHeight;
-    }
-
-    RECT GetScaledViewportRect() {
-        auto& cfg = SherwoodConfig::Get();
-        RECT rc{ 0, 0, g_monitorWidth, g_monitorHeight };
-        if (!cfg.fixAspectRatio || g_internalWidth <= 0 || g_internalHeight <= 0) {
-            return rc;
-        }
-
-        double srcAspect = static_cast<double>(g_internalWidth) / static_cast<double>(g_internalHeight);
-        double dstAspect = static_cast<double>(g_monitorWidth)  / static_cast<double>(g_monitorHeight);
-
-        if (dstAspect > srcAspect) {
-            int scaledW = static_cast<int>(g_monitorHeight * srcAspect + 0.5);
-            int offsetX = (g_monitorWidth - scaledW) / 2;
-            rc.left  = offsetX;
-            rc.right = offsetX + scaledW;
-        } else if (dstAspect < srcAspect) {
-            int scaledH = static_cast<int>(g_monitorWidth / srcAspect + 0.5);
-            int offsetY = (g_monitorHeight - scaledH) / 2;
-            rc.top    = offsetY;
-            rc.bottom = offsetY + scaledH;
-        }
-        return rc;
-    }
-
-    void UpdateCursorClipping(bool active) {
-        ApplyRawMouseState(active);
-        auto& cfg = SherwoodConfig::Get();
-        if (!active || !cfg.lockCursorToWindow || !g_hGameWnd) {
-            ClipCursor(nullptr);
-            return;
-        }
-
-        RECT clipRect{ g_winX, g_winY, g_winX + g_monitorWidth, g_winY + g_monitorHeight };
-        ClipCursor(&clipRect);
     }
 }

@@ -435,6 +435,9 @@ bool EndLeftoverInstances() {
             }
             if (hasWindow || (ageSeconds < 15.0 && !testInstanceAlive)) {
                 otherRunning = true; // a real second copy (or one that is just starting)
+            } else if (WaitForSingleObject(h, 3000) == WAIT_OBJECT_0) {
+                // it was still ending (the game started again right after quitting): not killed mid-cleanup
+                Logger::Info("A Game.exe without a window (PID %lu) ended by itself.", pid);
             } else if (TerminateProcess(h, 0)) {
                 WaitForSingleObject(h, 3000);
                 Logger::Warn("Ended a leftover Game.exe (PID %lu, no window, started %.0f s ago) that kept the game's data files locked.",

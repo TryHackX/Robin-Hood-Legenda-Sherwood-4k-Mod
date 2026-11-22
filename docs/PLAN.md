@@ -1,6 +1,6 @@
 # Plan naprawy i odświeżenia — Robin Hood: Legenda Sherwood (GOG) na Windows 11
 
-Stan na 2026-11-13. Sprzęt testowy: 8-rdzeniowy procesor, karta graficzna 12 GB, monitor 2560×1440 / 144 Hz.
+Stan na 2026-11-22 (wersja 1.3.0). Sprzęt testowy: 8-rdzeniowy procesor, karta graficzna 12 GB, monitor 2560×1440 / 144 Hz.
 Szczegóły techniczne (adresy, ABI): [RE_NOTES.md](RE_NOTES.md). Narzędzia: `tools\rh.py`.
 
 ## 0. Wynik pomiaru z 2026-11-13 (test nr 1, wrapper GOG-a) — to on wyznacza kierunek
@@ -10,7 +10,7 @@ Szczegóły techniczne (adresy, ABI): [RE_NOTES.md](RE_NOTES.md). Narzędzia: `t
 - Tick 19 ms w spokoju: `Flip` 8,7 ms + `Blt` 2,7 ms we wrapperze. W walce `Blt` rośnie do **94 ms** na tick
   (o 14 wywołań więcej, każde czeka na GPU), przy przewijaniu kamery skoki `Blt` do ~50 ms.
 - Wniosek: wolny jest wrapper, nie gra. Naprawa = własny DirectDraw w pamięci (`src\ddm\`), zrobiony tego samego dnia;
-  gra startuje z nim do menu, obraz poprawny. **Czeka na test nr 2 w rozgrywce.**
+  gra startuje z nim do menu, obraz poprawny. **Czekało na test nr 2 w rozgrywce — nieaktualne: potwierdzone w kolejnych testach (2026-11-14 i dalej).**
 
 ### Test nr 2 (własny DirectDraw, 2026-11-13)
 - Relacja użytkownika: 24 kl./s, walka nie laguje jak wcześniej, przesuwanie mapy nadal „laguje".
@@ -51,7 +51,7 @@ Szczegóły techniczne (adresy, ABI): [RE_NOTES.md](RE_NOTES.md). Narzędzia: `t
 - Przy okazji naprawione dwa błędy klatek pośrednich znalezione w rozpoznaniu: animacje scenerii (dym, flagi) i licznik
   powidoku postaci gracza szły tyle razy szybciej, ile klatek przypadało na tick.
 - Sprawdzone tylko przy starcie gry: hooki założone (`animation step guarded=1`, `afterimage counter guarded=1`,
-  `MotionSmooth: ... enabled`). Test w rozgrywce się nie odbył — użytkownik pracował przy komputerze, a okno gry bez
+  `MotionSmooth: ... enabled`). Test w rozgrywce się nie odbył (potwierdzone 2026-11-14, nieaktualne) — użytkownik pracował przy komputerze, a okno gry bez
   fokusu nie przyjmuje sterowania.
 - Do obserwacji: drganie postaci, gdy kamera sama za nią podąża; kolejność rysowania nakładających się postaci
   (może się zamienić o jeden tick za późno); linia `smoothed objects/tick` w `Input(5s)`.
@@ -91,7 +91,7 @@ w locie; woda na tle HD wygląda słabo; wersja HD mapy jest „mniej ciepła, m
 | Start gry za innym oknem (29 s „zwiechy" 2026-11-14) | `BringToFrontAtStart` (4 metody + wysunięcie okna nad inne) — wdrożone; próba sprawdzenia nocą nieważna, bo komputer był ZABLOKOWANY (ekran blokady odrzuca każdą zmianę pierwszego planu). NIE sprawdzone w zwykłym starcie |
 | Klawisze F6/F7/F8 fizycznie, zwykłe uruchomienie na ekranie | NIE sprawdzone (ekran blokady) — do potwierdzenia przez użytkownika; przełączanie sprawdzone poleceniami testowymi, napis na ekranie widoczny na zrzucie |
 
-Jeszcze nie w HD (kolejność prac): 1) sprite'y na poziomach nocnych i we mgle (barwienie klatek HD tak jak robi to gra);
+Jeszcze nie w HD (kolejność prac; NIEAKTUALNE — stan z 2026-11-14, pozycje 1–4 zrobione do 2026-11-22, patrz Etap 5): 1) sprite'y na poziomach nocnych i we mgle (barwienie klatek HD tak jak robi to gra);
 2) animacja wody w HD (teraz woda stoi); 3) interfejs/menu ×2 (HUD w 1440p jest mały); 4) sprawdzenie pozostałych 8 lokacji
 (tła są rozpoznawane po zawartości — w logu ma być `HD: upscaled background ... in use`, a nie `no picture for this level`);
 5) klatki pośrednie animacji modelem neuronowym, jeśli tania metoda nie wystarczy.
@@ -100,8 +100,8 @@ Jeszcze nie w HD (kolejność prac): 1) sprite'y na poziomach nocnych i we mgle 
 
 | Objaw | Przyczyna | Status |
 |---|---|---|
-| Lagi w walce i przy przewijaniu kamery (tick 110–166 ms zamiast ~20 ms) | Wrapper DirectDraw GOG-a: `Blt` do 94 ms na tick, `Flip` 9–12 ms zawsze (patrz sekcja 0). | Własny DirectDraw w pamięci + D3D11 wdrożony (`Renderer=1`), **czeka na test w grze** |
-| Biały, zawieszony kursor Windows w menu | Gra działa w oknie, a chowa kursor (`ShowCursor(0)`) tylko w pętli rozgrywki; mysz trzyma DirectInput. | Poprawka wdrożona (okno nigdy nie ustawia kursora), czeka na potwierdzenie |
+| Lagi w walce i przy przewijaniu kamery (tick 110–166 ms zamiast ~20 ms) | Wrapper DirectDraw GOG-a: `Blt` do 94 ms na tick, `Flip` 9–12 ms zawsze (patrz sekcja 0). | Własny DirectDraw w pamięci + D3D11 wdrożony (`Renderer=1`), **przetestowane w grze (nieaktualne: „czeka na test")** |
+| Biały, zawieszony kursor Windows w menu | Gra działa w oknie, a chowa kursor (`ShowCursor(0)`) tylko w pętli rozgrywki; mysz trzyma DirectInput. | Poprawka wdrożona (okno nigdy nie ustawia kursora), potwierdzone (nieaktualne: „czeka") |
 | Mysz 1000 Hz+ | Pętla główna robi jeden przebieg na raport myszy, ale przebieg jest tani (0,01 ms). | Scalanie do 125 Hz zostaje jako zabezpieczenie; bez mierzalnego wpływu na wydajność |
 | „Animacje klatkują" | Silnik ma jedną pętlę 25 Hz na logikę i obraz. Animacje mają najwyżej 25 klatek/s z założenia. Rozdzielczość tego nie zmienia. | Wymaga interpolacji klatek (etap 3) |
 | „Topornie", kursor się ciągnie | Kursor jest rysowany tylko przez wątek główny, czyli 25 razy na sekundę, i staje razem z grą przy każdym przycięciu. | Etap 2 (kursor rysowany przez nasz renderer z częstotliwością monitora) |
@@ -203,7 +203,7 @@ Do sprawdzenia przy okazji: czy miganie ikon akcji ma teraz właściwe tempo; po
 3. ✔ Sprite'y HD: hak na dekoder klatek banku (`0x00504CD0`: klatka → powierzchnia), magazyny `hd\sprites\<wariant>\`
    (klatki bezstratne: dachy, drzewa, obiekty — modelem wariantu) i `hd\sprites\_common\` (postacie i animacje — SGI),
    podmiana w rozciąganiu z kluczem (DirectDraw) i w procedurach gry `0x0062261C/0x006220EC`, maski zasłaniania, cień.
-   ☐ poziomy nocne/mgła.
+   ✔ poziomy nocne/mgła (zrobione 2026-11-15, v1.1.6).
    ✔ 2026-11-14 (zgłoszenie użytkownika: „ikonka nad głową Robina jest pixeloza"): **ikony i znaczniki w HD** — klatki
    tworzone przez grę w locie rozpoznawane po treści, magazyn `hd\sprites\_icons\` (381 ikon, UltraSharp), pierścień
    zaznaczenia przez hak na `0x005E8B10`; brakujące ikony z innych misji mod sam zbiera do `hd\work\runtime_frames\`
@@ -229,10 +229,10 @@ Do sprawdzenia przy okazji: czy miganie ikon akcji ma teraz właściwe tempo; po
      dojechaniu kursorem do krawędzi kliknięcia w menu nie trafiały (rozjazd wskaźnika okna i kursora) — poprawiony.
    - ✔ **Tła menu w HD** (prośba „menu też upscalować", zgoda 2026-11-14): 5 teł menu zebranych w locie, 4 warianty AI,
      podmiana w prezenterze tam, gdzie piksel klatki jest oryginalnym pikselem tła (`docs\HD_MODE.md` §7).
-     ☐ Przyciski menu (168×39, `BlendBlit`) i pergamin odprawy nadal w oryginale (powiększone filtrem).
+     ✔ Przyciski menu (168×39) i pergamin odprawy — zrobione w v1.1.5.
    - Zgłoszenia z sesji 2026-11-14 ~18:30 i poprawki tej nocy: tło menu Esc/odprawy w misji ostre (bez powiększania
      tła), Robin na portrecie przy swoim marginesie, szwy przy ikonach akcji, wnętrza budynków (porównanie z obrazem
-     poziomu — ☐ niesprawdzone w budynku), ✔ **minimapa**: przeciąganie po obrazku przesuwa kamerę, okno za brzegi
+     poziomu — budynków gra nie pokazuje — pozycja nieaktualna), ✔ **minimapa**: przeciąganie po obrazku przesuwa kamerę, okno za brzegi
      lewym lub prawym, płynnie w każdej klatce (`MapDragCamera=1`, panel F10), ✔ odprawa z kilkoma stronami (pergamin
      zostawał mały od 2. strony), ✔ **opcje gry: prawdziwy procesor i pamięć** (pełna nazwa procesora
      i pamięć ponad 4 GB zamiast „GenuineIntel” i „4095 Mb”).
@@ -247,7 +247,7 @@ Do sprawdzenia przy okazji: czy miganie ikon akcji ma teraz właściwe tempo; po
      zoom gry), brak dymu z kominów (uznany za wodę → nakładka na obraz HD z płynnym przenikaniem klatek), spadki FPS
      (HUD ×2 filtrowany co klatkę → pamięć podręczna; klatka ~10 → ~4,5 ms), wywrotka przy wyjściu z misji (nieaktualny
      RHGame*). Woda: nowa opcja `HDWater=2` (obraz HD + migotanie z gry), domyślnie zostaje nieruchoma (wybór
-     użytkownika). Opis: `docs\HD_MODE.md` §4 i §7. ☐ czcionka HD zamiast ×2.
+     użytkownika). Opis: `docs\HD_MODE.md` §4 i §7. ✔ czcionka HD zamiast ×2 (zrobione w v1.1.4).
    - ✔ **v1.1.2 — woda z falami** (2026-11-15, „Tak, rób wodę”): `HDWater=2` (domyślnie) / `3` — woda z obrazu HD
      poruszana falami (przesuwana tylko gładka część obrazu, faktura zostaje ostra), pętla liczona w wątku w tle.
      Opis: `docs\HD_MODE.md` §4. ☐ Ocena użytkownika na prawdziwym stawie (test w tle ma tylko Lincoln, bez wody).
@@ -279,8 +279,7 @@ Do sprawdzenia przy okazji: czy miganie ikon akcji ma teraz właściwe tempo; po
      Catmull-Rom; ekran twórców nie zapisuje już każdej klatki (1 GB w `hd\work\menu_frames`); dziennik linii pod
      diagnozę linii zamachu; eksport tła twórców do remake'u (`06_tworcy`). Dźwięk: złe urządzenie wyjścia u gracza
      (nie mod). Opis: `docs\HD_MODE.md` §5c, §7.
-     ☐ Linia zamachu przy zoomie ≠ 2 (czeka na log z gry gracza: `Lines:`). ☐ HD poniżej zoomu 2 (tło mapy w
-     prezenterze).
+     ✔ Linia zamachu przy zoomie ≠ 2 (potwierdzona v1.2.3, przyczyna naprawiona v1.2.7). ✔ HD poniżej zoomu 2 — zrobione w 1.3.0 (warstwa poziomu).
    - ✔ **v1.1.8 — tło pod pytaniem o wyjście i twórcy w HD/remake** (2026-11-16, „Tak, rób”, „twórcy dodane, czekam aż
      dasz mi tło na wyjściu”): ekran bez własnego obrazu, który jest w większości ostatnim menu z czymś narysowanym na
      wierzchu, zostaje z obrazem HD/remake tego menu (pytanie o wyjście — tło menu głównego z remake'u; nowy obraz
@@ -300,7 +299,7 @@ Do sprawdzenia przy okazji: czy miganie ikon akcji ma teraz właściwe tempo; po
      okien), okno bez ramek mniejsze niż ekran (`WindowWidth/Height/X/Y`). Audyt: test ciągły 4 min z interfejsem —
      0 błędów, 0 ostrzeżeń, ~143 kl./s (długie „tiki” = okna gry otwarte w teście). Opis: `docs\HD_MODE.md` §7.
      ✔ Ekran „zamarza” po wyborze misji w obozie Sherwood (3.jpg) — v1.2.1.
-     ☐ Linia zamachu: potwierdzenie na prawdziwej myszy (w teście w tle pędzel nie rysuje). ☐ HD poniżej zoomu 2.
+     ✔ Linia zamachu na prawdziwej myszy (potwierdzone v1.2.3, przyczyna naprawiona v1.2.7). ✔ HD poniżej zoomu 2 (1.3.0).
    - ✔ **v1.2.1 — audyt kodu i gry** (2026-11-17, „zrób jeszcze raz audyt… chcemy mieć porządny remake”): dwa przeglądy
      kodu (renderer; haki/wejście/okno — wszystkie ~45 haków na `Game.exe` zgodne z konwencją i `ret N`) + kampania
      w tle do obozu komendą konsoli gry `win` (odtworzenie zgłoszenia youtubera). Poprawione: okna dialogowe otwierane
@@ -313,7 +312,7 @@ Do sprawdzenia przy okazji: czy miganie ikon akcji ma teraz właściwe tempo; po
      (limit i brak pamięci), rejestrator wyjątków (nie zużywa jedynego raportu na wyjątki obsłużone). Test ciągły 4 min
      z interfejsem: PASS, 0 błędów, 143,5 kl./s. Opis: `docs\HD_MODE.md` §7. Kopia stanu kampanii z obozu do testów:
      `backups\savegame_camp_test_2026-11-17\` (zapisy gracza przywrócone).
-     ☐ Pierwsza odprawa na poziomie mniejszym od ekranu: tło jeszcze bez lupy (czarne pasy). ☐ Pozostałe z przeglądu
+     ✔ Pierwsza odprawa bez lupy — naprawione w v1.2.3/v1.2.5. ☐ Pozostałe z przeglądu
      (niski priorytet): cienie łatek menu rozpoznawane tylko po adresie, stan lupy przy szybkim wczytaniu tego samego
      poziomu, panel F10 w menu głównym po misji uważa, że misja trwa.
    - ✔ **v1.2.2 — drugie zgłoszenie youtubera** (2026-11-17 wieczorem; zrzuty 1.1–1.3 i film z 1.2.0 —
@@ -386,7 +385,7 @@ Do sprawdzenia przy okazji: czy miganie ikon akcji ma teraz właściwe tempo; po
      `docs\COOP_PROBE.md`, adresy: `docs\RE_NOTES.md` („Co-op”). ☐ Decyzja użytkownika, czy robić.
    - ✔ **Wydanie na GitHubie** (2026-11-14): v1.0.0 (README po angielsku), paczki grafiki HD jako osobne wydanie
      (7 plików ZIP < 2 GB; magazyn postaci w dwóch częściach — mod czyta `sprites.dat` + `sprites.dat.2`).
-5. ◐ Klatki pośrednie animacji postaci (prośba użytkownika; „jak się nie uda, trudno"): eksperyment zakończony
+5. ✔ (zrobione 2026-11-22, poza własną oceną gracza) Klatki pośrednie animacji postaci (prośba użytkownika; „jak się nie uda, trudno"): eksperyment zakończony
    powodzeniem — RIFE v4.26 daje dobre klatki (`docs\HD_MODE.md` §5a). ☐ Wdrożenie w grze jako przełącznik
    (generowanie par + podmiana w klatkach między tikami) — po decyzji użytkownika. 2026-11-14 użytkownik zapytał, czy
    „będzie gorzej przez ghosty i blury w ruchu" → zaproponowana MAŁA PRÓBA zamiast całości: tylko animacje Robina,
@@ -405,6 +404,16 @@ i oba magazyny sprite'ów wczytane, woda pomijana. Przerwy 1,2–3,8 s: po starc
 wczytaniu (11:56:21, 11:56:26) i jedna bez przypisanej przyczyny (11:56:52–57; w tle kończył się wtedy eksport PNG na
 jednym rdzeniu — przez wcześniejsze 45 s eksportu gra szła równo). Do obserwacji. Klawisze F6/F7/F8 nadal
 niepotwierdzone (w logu brak „background variant switched").
+
+### 1.3.0 (2026-11-22) — natywne mapy 4K, warstwa poziomu, pauza
+- **Natywne mapy 4K** (`HDMaps4k=1`): `hd\maps4k\<wariant>\<klucz>.hdm4` (4× model 4xNomos2_hq_dat2 + dopasowanie kolorów; `tools\hd\upscale_4k.py`, `tools\hd\make_maps4k.py`). Wszystkie 20 map, wariant dat2, 3,3 GB. Używane przy zoomie powyżej ok. 2,2 na 2560×1440 i od 2,0 na monitorze 4K. Tylko tło mapy; postacie, drzewa, cienie, stożki widzenia i interfejs zostają takie, jak rysuje gra. Zweryfikowane [Z] w teście w tle (Croisement02). Paczki opcjonalne: `SherwoodHD-5-mapy-4k-a.zip` i `-b.zip` (wydanie `hd-pack-1`). Opis: `docs\HD_MODE.md`.
+- **Warstwa poziomu poniżej 2,0** (`HDLevelLayer=1`): zamiast powiększonych oryginalnych pikseli tło z obrazu HD poziomu.
+- **Błysk przy przejściu do dialogu** naprawiony: klatki przejściowe (lupa menu bez dialogu, pierwsza klatka dialogu przed kopią świata) nie są prezentowane (poprzednia zostaje, najwyżej 6 pod rząd). Nowa komenda `presentlog N`.
+- **Pauza**: w pauzie gra nie rysowała klatek i kręciła pętlę ok. 47 000 razy na sekundę na pełnym rdzeniu; teraz hak robi najwyżej jeden przebieg na odświeżenie (`pause 1|0` w teście).
+- **Zmiana wariantu przy zmienionym obrazie poziomu** (powóz): wariant szukany po kluczu własnego obrazu poziomu.
+- **Dźwięk w trybie testowym**: FMOD gra przez WINMM, a `waveOutWrite` w DLL zamienia bufory w ciszę; żadnych zmian ustawień Windows (test z 2026-11-22 wyciszył sesję audio Game.exe na stałe — cofnięte).
+- **Poprawki z przeglądu kodu**: pozycje obiektów przywracane przed każdym dialogiem; estymata czasu dodatkowych klatek ignoruje próbki dłuższe niż tik; log awarii obejmuje błędy w modzie; klawisze szybkiego zapisu przywracane przy WM_CLOSE/WM_DESTROY; brak kopii `Game.exe.bak` i zapisu flagi large-address do działającego exe; kolektory obrazów bez HD piszą tylko tam, gdzie istnieje `hd\work` (dwa tworzyły go u każdego gracza); prawdziwy LRU pamięci podręcznej sprite'ów HD; zapasowy prezenter GDI pokazuje FPS i panel F10; i inne.
+- **Odpowiedzi / znane ograniczenia**: postacie, obiekty i interfejs nie mogą być w natywnym 4K (gra rysuje je w klatce 2×). Niedostępny prawy dolny róg przy płocie na mapie skrzyżowania to dane nawigacji poziomu (chunk FACE pliku `.rhp`) — nie zmieniane (zbyt ryzykowne bez możliwości testu AI i zapisów). Białe tarcze na ekranie Esc to własne przyciemnienie gry. Koło lupy przy celowaniu łukiem niepokazujące postaci — jeszcze nie odtworzone.
 
 ## 4. Podział pracy (oszczędzanie tokenów: najwyżej 1–2 agentów naraz)
 

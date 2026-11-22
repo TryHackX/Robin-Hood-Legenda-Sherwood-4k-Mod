@@ -1,5 +1,6 @@
 #pragma once
 #include "ddm_blit.h"
+#include <string>
 #include <vector>
 
 // HD level backgrounds.
@@ -55,6 +56,26 @@ namespace DDM::HD {
     // false while no HD background was drawn in this frame.
     bool LevelOrigin(int& x, int& y);
 
+    // The presenter's level layer (2026-11-22): the HD picture of the level in use (2x, RGB565, mapped) and the
+    // game's level picture it was made from (1x, RGB565, the copy taken when it was found); `serial` changes with
+    // either (another level, another state of it, another variant). Main thread; false = none (variant off ...).
+    struct LevelPictures {
+        const uint16_t* hd = nullptr;
+        int hdW = 0, hdH = 0;
+        const uint16_t* level = nullptr;
+        int levelW = 0, levelH = 0;
+        unsigned serial = 0;
+        uint64_t key = 0;               // the level picture's key (hd\maps4k\<variant>\<key>.hdm4: its 4x picture)
+        const char* variant = "";       // the variant folder in use
+    };
+    bool LevelPicturesNow(LevelPictures& out);
+    // the game's folder (where Game.exe lies), with a trailing backslash
+    std::string GameFolder();
+    // hd\work\ (trailing backslash) if that folder and tools\hd exist - the machine the HD pictures are made on; ""
+    // for every player. The collectors of pictures without an HD version (fonts, menu parts, menu frames, sprite frames) write
+    // only there and never create it (audit 2026-11-22: two of them created it in every player's game folder).
+    const std::string& WorkFolder();
+
     // Main thread, once per game tick: hot keys, variant switches, the redraw they need.
     void OnGameTick();
 
@@ -82,10 +103,13 @@ namespace DDM::HD {
     // bit 1: plain 2x sprites, bit 2: tinted polygons, bit 3: DirectDraw keyed 2x stretch blits.
     // Bit 4 (16): every picture of a tick shows the in-between frame of a sprite that has one.
     // Bit 5 (32): ground overlays (chimney smoke) are drawn as animated water (HDWater=2/3).
+    // The presenter's bits: 64 HD patches off, 128 HD menu layer off, 256 dialog backdrop layer off,
+    // 512 HD menu cursor off, 1024 test: the vision-cone span clip sees a shorter level, 2048 level
+    // layer (HD / 4x) off, 4096 level layer pixels tinted (test).
+    void SetDebugFlags(unsigned flags);
+    unsigned DebugFlags();
+
     // Main thread: the colour table (RGB565 -> RGB565) of the game's last colouring of a dialog's
     // backdrop (0x0053B330, hue and factor as the game passed them), nullptr when none was made yet.
     const uint16_t* LastBackdropColouring();
-
-    void SetDebugFlags(unsigned flags);
-    unsigned DebugFlags();
 }

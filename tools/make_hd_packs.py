@@ -29,6 +29,17 @@ PACKS = [
     # 2026-11-22 (mod 1.2.9): the level's animations (birds, flags, smoke ...) and the second try of the characters'
     # rejected pairs - compacted by tools/hd/compact_between.py
     ("4", "SherwoodHD-4-klatki-posrednie-2.zip", ["hd/sprites/_between_more", "hd/sprites/_between_anim"]),
+    # 2026-11-22 (mod 1.3.0): the maps in native 4K (4x the original, dat2; tools/hd/make_maps4k.py) - 3.3 GB, two packs:
+    # a = crossroads, Sherwood camp, Derby, Leicester, Lincoln; b = Nottingham, York
+    ("5", "SherwoodHD-5-mapy-4k-a.zip", [f"hd/maps4k/dat2/{k}.hdm4" for k in (
+        "7eca0fd691643f04", "450c0ad1696a52aa", "40f626704a738ad6",                         # Croisement 01..03
+        "9b2a8382a5c927fe", "fda5b877cc13782d",                                             # Sherwood day / night
+        "a702fa9a13ba6dff", "2f19b01428dfa8fe", "459bc2fc54dc6b76",                         # Derby day / fog / night
+        "cfd16e074ca0d117", "d01c5a96dd7ac61d",                                             # Leicester day / night
+        "7d8592c1fe401703", "e319bb678a9b2d2e", "511ea802b2113319")]),                      # Lincoln day / fog / night
+    ("5b", "SherwoodHD-5-mapy-4k-b.zip", [f"hd/maps4k/dat2/{k}.hdm4" for k in (
+        "b0dd5dd8977d158b", "49d9e68652428bf2", "bc6c4a7382b6092a", "79be7097af890505",     # Nottingham day / fog / night / custom
+        "759b475d9852e1d2", "8eef9fd5a7a5784a", "ce004d47aaea21c6")]),                      # York day / fog / night
     ("aomr", "SherwoodHD-wariant-aomr.zip", ["hd/maps/aomr", "hd/sprites/aomr", "hd/menu/aomr"]),
     ("sgi", "SherwoodHD-wariant-sgi.zip", ["hd/maps/sgi", "hd/sprites/sgi", "hd/menu/sgi"]),
     ("ultrasharp", "SherwoodHD-wariant-ultrasharp.zip", ["hd/maps/ultrasharp", "hd/sprites/ultrasharp", "hd/menu/ultrasharp"]),

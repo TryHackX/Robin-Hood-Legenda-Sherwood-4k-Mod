@@ -44,6 +44,25 @@ function Stop-TestInstance([string]$why) {
     exit 1
 }
 
+# The hidden instance plays on the player's profile. If the player played since the last copy of the saves
+# (2026-11-22: a test started right after the player's session and wrote into it), a new copy is made first -
+# what the test changes can then be put back with save_backup.ps1 -Restore without undoing the player's game.
+$backup = Join-Path $PSScriptRoot 'save_backup.ps1'
+if ((powershell -NoProfile -ExecutionPolicy Bypass -File $backup -Check | Out-String) -notmatch 'unchanged') {
+    Write-Output ("saves changed since the last copy - new copy: " +
+                  ((powershell -NoProfile -ExecutionPolicy Bypass -File $backup | Select-Object -Last 1) -replace '^backup: ', ''))
+}
+# The game writes SherwoodFix.log anew at every start: the log of the player's own session (no "TEST MODE" in it)
+# goes to backups\ first - 2026-11-22 one was lost that way (it could have shown the dialog the player reported).
+$gameLog = Join-Path (Split-Path $PSScriptRoot -Parent) 'SherwoodFix.log'
+if ((Test-Path $gameLog) -and -not (Select-String -Path $gameLog -Pattern 'TEST MODE:' -SimpleMatch -Quiet)) {
+    $kept = Join-Path (Split-Path $PSScriptRoot -Parent) ('backups\SherwoodFix_player_' + (Get-Item $gameLog).LastWriteTime.ToString('yyyy-MM-dd_HHmmss') + '.log')
+    if (-not (Test-Path $kept)) {
+        Copy-Item $gameLog $kept
+        Write-Output "the player's log kept: $kept"
+    }
+}
+
 $startArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $ctl, '-Start', '-Headless')
 if ($Ini) { $startArgs += @('-Ini', $Ini) }
 Write-Output (powershell @startArgs)

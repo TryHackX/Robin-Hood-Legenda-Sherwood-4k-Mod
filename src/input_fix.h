@@ -26,6 +26,8 @@ namespace InputFix {
     // UiScale, main thread: a dialog loop of the game starts (its own key screen too) - the game's quick
     // save / load keys are back until a level ticks again.
     void OnDialogLoop(bool entering);
+    // The game window closes (WM_CLOSE / WM_DESTROY): the game's own quick keys back before it may save the profile.
+    void RestoreQuickKeys();
 
     // The game's own key of quick save (false) / quick load (true), DirectInput code; -1 = not known yet.
     int GameQuickKey(bool load);

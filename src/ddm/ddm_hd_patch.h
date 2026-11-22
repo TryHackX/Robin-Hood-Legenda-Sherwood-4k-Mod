@@ -35,15 +35,15 @@ namespace DDM::HD::Patch {
     struct Op {
         Buf dst{};
         int x = 0, y = 0, w = 0, h = 0;     // destination rectangle (surface pixels)
-        int kind = 0;                       // 1 glyph, 2 picture, 3 something without an HD version
+        int kind = 0;                       // 1 glyph, 2 picture, 3 something without an HD version,
+                                            // 4 the game's cursor (see GetCursor)
         bool glyph = false;                 // a letter (its HD edge may reach into pixels it leaves alone)
         const uint16_t* src = nullptr;      // source pixels (top-left of the drawn part)
         int srcPitch = 0;                   // bytes
         const uint16_t* alpha = nullptr;    // alpha glyph: its alpha strip (else nullptr)
         int alphaPitch = 0;
         uint32_t key = 0xFFFFFFFFu;         // transparent source colour (0xFFFFFFFF: none)
-        uint32_t marker = 0xFFFFFFFFu;      // source colour that darkens the destination (shadows)
-        uint32_t factor = 256;              // ... by factor / 256
+        uint32_t factor = 256;              // shadow: the destination is darkened by factor / 256
         // HD glyph: its strip and the HD pixel of the 1x top-left
         const uint16_t* hdColour = nullptr;
         const uint8_t*  hdAlpha = nullptr;

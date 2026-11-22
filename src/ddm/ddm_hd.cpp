@@ -177,10 +177,14 @@ namespace {
     }
 
     // the copy of the level picture the current HD picture belongs to (see g_base)
+    unsigned g_levelPicturesSerial = 0;     // LevelPicturesNow: changes with the pictures it gives
+
+    // (also without an HD picture for it: another variant may have one - see the lookup in TryBackgroundBlit)
     void TakeBase(const Buf& src, uint64_t key, const HdMap* hd) {
+        ++g_levelPicturesSerial;
         g_baseMap = nullptr;
+        g_baseKey = 0;
         g_base.clear();
-        if (!hd) return;
         try {
             g_base.resize(static_cast<size_t>(src.w) * src.h);
         } catch (...) {
@@ -919,9 +923,10 @@ namespace {
     }
 
     // ---------------------------------------------------------------------------------------
-    // Test mode only: the game's general blitter (0x005E6900, thiscall, 6 arguments - text,
-    // selection rings, light effects ...) writes its arguments into a running draw trace, so
-    // that it can be seen which of its many modes draws what.
+    // The game's general blitter (0x005E6900, thiscall, 6 arguments - text, selection rings, light
+    // effects ...): with the interface scale x2 it draws the windows' text and pictures twice as large
+    // and clipped to the frame (below); in test mode it also writes its arguments into a running draw
+    // trace, so that it can be seen which of its many modes draws what.
     using PFN_GeneralBlit = uint32_t(__fastcall*)(void* self, void* edx, int srcId, const float* srcRect, int dstId,
                                                   const float* dstRect, int srcId2, uint32_t flags);
     PFN_GeneralBlit o_GeneralBlit = nullptr;
@@ -1043,9 +1048,24 @@ bool TryBackgroundBlit(const Buf& dst, const RECT& d, const RECT& clip,
                 }
             }
             if (!keep && (!sameSurface || key != g_lookupKey || !g_current)) {
-                g_current = Resolve(g_variant, key, src.w, src.h);
-                g_groundAnims.clear(); // another level (or another state of it)
-                TakeBase(src, key, g_current);
+                // Another variant for the same level, whose picture the game has changed in part since (the carriage
+                // mission draws its carriage into it): the changed picture has no file of its own. The new variant's
+                // HD picture by the key of the level's own picture, whose copy stays (2026-11-22: after F6/F7 the
+                // carriage mission was shown in the original pixels to its end).
+                double share = -1.0;
+                if (g_lookupVariant != g_variant && g_baseKey != 0 && key != g_baseKey && (share = ChangedShare(src)) >= 0.0 &&
+                    share < 0.5) {
+                    g_current = Resolve(g_variant, g_baseKey, src.w, src.h);
+                    g_groundAnims.clear();
+                    ++g_levelPicturesSerial;
+                    g_baseMap = g_current;
+                    Logger::Info("HD: variant switched on a level picture the game has changed in part (%.1f %%) - its HD picture "
+                                 "by the level's own key %016llx.", share * 100.0, static_cast<unsigned long long>(g_baseKey));
+                } else {
+                    g_current = Resolve(g_variant, key, src.w, src.h);
+                    g_groundAnims.clear(); // another level (or another state of it)
+                    TakeBase(src, key, g_current);
+                }
             }
             g_identity = identity;
             g_lookupVariant = g_variant;
@@ -1601,6 +1621,47 @@ namespace {
     }
 }
 
+bool LevelOrigin(int& x, int& y) {
+    x = g_originX;
+    y = g_originY;
+    return g_originValid && g_current != nullptr;
+}
+
+bool LevelPicturesNow(LevelPictures& out) {
+    const HdMap* hd = g_current;
+    if (!SherwoodConfig::Get().hdBackgrounds || g_variant < 0 || !hd || !hd->px || g_baseMap != hd || g_srcW <= 0 || g_srcH <= 0 ||
+        g_base.size() != static_cast<size_t>(g_srcW) * g_srcH || hd->w != 2 * g_srcW || hd->h != 2 * g_srcH) {
+        return false;
+    }
+    out.hd = hd->px;
+    out.hdW = hd->w;
+    out.hdH = hd->h;
+    out.level = g_base.data();
+    out.levelW = g_srcW;
+    out.levelH = g_srcH;
+    out.serial = g_levelPicturesSerial * 64u + static_cast<unsigned>(g_variant & 63);
+    out.key = hd->key;
+    out.variant = g_variant < static_cast<int>(g_variants.size()) ? g_variants[static_cast<size_t>(g_variant)].c_str() : "";
+    return true;
+}
+
+std::string GameFolder() {
+    return GameDir();
+}
+
+const std::string& WorkFolder() {
+    // with the tools that use what is collected (tools\hd): earlier versions created hd\work for every player
+    static const std::string work = [] {
+        auto isDir = [](const std::string& p) {
+            const DWORD a = GetFileAttributesA(p.c_str());
+            return a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY);
+        };
+        const std::string dir = GameDir() + "hd\\work\\";
+        return (isDir(dir) && isDir(GameDir() + "tools\\hd")) ? dir : std::string();
+    }();
+    return work;
+}
+
 // Ground animations: large sprites that repaint the ground they lie on, frame after frame - the
 // level picture of that spot plus ripples (water) or smoke, low-resolution and heavily block-
 // compressed. Magnified over an HD background such a frame shows as a blurry, blocky patch.
@@ -1613,12 +1674,6 @@ namespace {
 //    picture; HDWater=2 / 3 (the player's wish of 2026-11-15: "rób wodę") the HD water moved by
 //    waves (see "animated HD water" above); HDWater=0 the game's frames as they are.
 // Returns true when the sprite was handled here (drawn or left out).
-bool LevelOrigin(int& x, int& y) {
-    x = g_originX;
-    y = g_originY;
-    return g_originValid && g_current != nullptr;
-}
-
 bool DrawGroundAnimation(const Buf& dst, const RECT& d, const RECT& clip, const Buf& src, const RECT& s) {
     const auto& cfg = SherwoodConfig::Get();
     const HdMap* hd = g_current;
@@ -1894,8 +1949,24 @@ bool BetweenOn() {
     return Sprites::BetweenOn();
 }
 
+namespace {
+void InstallBackgroundHooks();
+void InstallInterfaceHooks(bool hdView);
+}
+
 void InstallHooks() {
-    if (!SherwoodConfig::Get().hdBackgrounds) return;
+    // Hooks of features the settings panel (F10) can switch on later go in whenever the frame is large enough
+    // (each checks its setting at run time); before 2026-11-22 several went in only when the feature was on at the
+    // start, and switching it on in the panel did nothing (audit). The HD background's own hooks need HD backgrounds.
+    const auto& cfg = SherwoodConfig::Get();
+    const bool hdView = cfg.width >= 2048;
+    if (cfg.hdBackgrounds) InstallBackgroundHooks();
+    InstallInterfaceHooks(hdView);
+    if (cfg.hdBackgrounds) Sprites::InstallHooks();
+}
+
+namespace {
+void InstallBackgroundHooks() {
     // push ebp / mov ebp,esp / pushal / mov ecx,[ebp+0x14] / or ecx,ecx
     static const uint8_t kProlog[] = { 0x55, 0x89, 0xE5, 0x60, 0x8B, 0x4D, 0x14, 0x09, 0xC9 };
     if (std::memcmp(reinterpret_cast<const void*>(kAddrTintSpan2x), kProlog, sizeof(kProlog)) == 0 &&
@@ -1916,14 +1987,20 @@ void InstallHooks() {
                                    reinterpret_cast<void**>(&o_Sprite2xPlain));
     Logger::Info("HD: 2x sprite routines replaced (shadows darken every pixel of an HD background): keyed=%d plain=%d.",
                  keyed ? 1 : 0, plain ? 1 : 0);
-    if (SherwoodConfig::Get().hdSprites) {
+    {
+        // (HD sprites only: TryBlendBlit finds no record of a decoded frame while they are off)
         // push ebp / mov ebp,esp / and esp,-8 / sub esp,0x44 / mov eax,[ebp+0x1C] / push ebx / push esi / xor esi,esi
         static const uint8_t kBlendStretch[] = { 0x55, 0x8B, 0xEC, 0x83, 0xE4, 0xF8, 0x83, 0xEC, 0x44, 0x8B, 0x45, 0x1C, 0x53, 0x56, 0x33, 0xF6 };
         const bool blend = HookRoutine(0x005E8B10, kBlendStretch, sizeof(kBlendStretch), reinterpret_cast<void*>(&Hook_BlendStretch),
                                        reinterpret_cast<void**>(&o_BlendStretch));
         Logger::Info("HD: stretched alpha blit @ 0x005E8B10 (selection ring, light effects) draws upscaled frames: %d.", blend ? 1 : 0);
     }
-    if (TestHarness::Enabled() || (SherwoodConfig::Get().uiScale >= 2 && SherwoodConfig::Get().width >= 2048)) {
+}
+
+void InstallInterfaceHooks(bool hdView) {
+    const auto& cfg = SherwoodConfig::Get();
+    if (TestHarness::Enabled() || hdView) {
+        // (the interface scale x2: the general blitter passes everything through while UiScale::Drawing() is false)
         // push -1 / push 0x6728F8 / mov eax, fs:[0] / push eax / mov fs:[0], esp / sub esp, 0x84
         static const uint8_t kGeneralBlit[] = { 0x6A, 0xFF, 0x68, 0xF8, 0x28, 0x67, 0x00, 0x64, 0xA1, 0x00, 0x00, 0x00, 0x00,
                                                 0x50, 0x64, 0x89, 0x25, 0x00, 0x00, 0x00, 0x00, 0x81, 0xEC, 0x84, 0x00, 0x00, 0x00 };
@@ -1936,7 +2013,7 @@ void InstallHooks() {
                                       reinterpret_cast<void**>(&o_AlphaText2x));
         Logger::Info("HD: 2x text with an alpha picture @ 0x00622FD4 blended per pixel: %d.", text ? 1 : 0);
     }
-    if (SherwoodConfig::Get().menuZoom && SherwoodConfig::Get().hdMenu) {
+    if (cfg.menuZoom && hdView) {       // (each looks at HDMenu when called: Patch BaseOn)
         // push ebp / mov ebp,esp / pushal / mov edx,[ebp+0x18] / mov ecx,[ebp+0x14] / or ecx,ecx
         static const uint8_t kAlphaText1x[] = { 0x55, 0x89, 0xE5, 0x60, 0x8B, 0x55, 0x18, 0x8B, 0x4D, 0x14, 0x09, 0xC9 };
         // push ebp / mov ebp,esp / pushal / mov ecx,[ebp+0x10] / mov edx,[ebp+0x14] / or ecx,ecx
@@ -1969,7 +2046,7 @@ void InstallHooks() {
                                                      reinterpret_cast<void**>(&o_Colorize));
         Logger::Info("Dialogs: the backdrop colouring @ 0x0053B330 through a colour table: %d.", colorize ? 1 : 0);
     }
-    Sprites::InstallHooks();
 }
+} // namespace
 
 } // namespace DDM::HD

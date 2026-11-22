@@ -70,34 +70,6 @@ namespace Memory {
         return 0;
     }
 
-    std::vector<uintptr_t> FindAllPatterns(HMODULE hModule, const char* pattern) {
-        std::vector<uintptr_t> results;
-        uintptr_t base = 0;
-        size_t size = 0;
-        if (!GetModuleBounds(hModule, base, size)) return results;
-
-        auto pat = ParsePattern(pattern);
-        if (pat.empty() || size < pat.size()) return results;
-
-        const auto* scanBytes = reinterpret_cast<const uint8_t*>(base);
-        const size_t patLen = pat.size();
-        const size_t limit = size - patLen;
-
-        for (size_t i = 0; i <= limit; ++i) {
-            bool found = true;
-            for (size_t j = 0; j < patLen; ++j) {
-                if (!pat[j].wildcard && scanBytes[i + j] != pat[j].value) {
-                    found = false;
-                    break;
-                }
-            }
-            if (found) {
-                results.push_back(base + i);
-            }
-        }
-        return results;
-    }
-
     bool PatchBytes(uintptr_t address, const void* data, size_t size) {
         DWORD oldProtect = 0;
         if (!VirtualProtect(reinterpret_cast<void*>(address), size, PAGE_EXECUTE_READWRITE, &oldProtect)) {

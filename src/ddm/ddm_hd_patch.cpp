@@ -18,6 +18,7 @@
 #include <new>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 // See ddm_hd_patch.h.
@@ -80,7 +81,10 @@ namespace {
         uint64_t key = 0;
         const Picture* pic = nullptr;
     };
-    std::unordered_map<uint64_t, std::unique_ptr<Picture>> g_pics;    // by content key; null: no file
+    std::unordered_map<uint64_t, std::unique_ptr<Picture>> g_pics;    // by content key: the pictures that have a file
+    // ... the keys without one (emptied when it grows large - a key that comes back is asked again; a cap on the whole
+    // cache switched the interface's HD pictures off for the session after 50,000 keys, audit 2026-11-22)
+    std::unordered_set<uint64_t> g_picMissing;
     std::unordered_map<uint64_t, PicSeen> g_picSeen;                  // by place (pixels + rectangle)
 
     unsigned g_glyphs = 0, g_glyphsNoHd = 0, g_pictures = 0, g_picturesNoHd = 0, g_copies = 0, g_created = 0, g_resets = 0;
@@ -205,6 +209,7 @@ namespace {
     const Picture* LoadPicture(uint64_t key, int w, int h) {
         auto it = g_pics.find(key);
         if (it != g_pics.end()) return it->second.get();
+        if (g_picMissing.count(key)) return nullptr;
         char name[64];
         std::snprintf(name, sizeof(name), "%016llx.hdp", static_cast<unsigned long long>(key));
         const std::string path = GameDir() + "hd\\menu_parts\\" + name;
@@ -235,15 +240,19 @@ namespace {
                 Logger::Warn("HD menu parts: %s could not be read.", name);
             }
         }
+        if (!p) {
+            if (g_picMissing.size() >= 20000) g_picMissing.clear();
+            g_picMissing.insert(key);
+            return nullptr;
+        }
         return (g_pics[key] = std::move(p)).get();
     }
 
     // a picture without an HD version: kept for tools\hd\upscale_menu_parts.py (like the fonts) -
     // only where the HD work folder exists
     void Collect(uint64_t key, const Buf& src, const RECT& r, uint32_t colourKey, uint32_t marker) {
-        static const std::string work = GameDir() + "hd\\work\\";
-        static const bool collect = GetFileAttributesA(work.c_str()) != INVALID_FILE_ATTRIBUTES;
-        if (!collect) return;
+        const std::string& work = DDM::HD::WorkFolder();
+        if (work.empty()) return;
         const std::string dir = work + "menu_parts\\";
         char name[64];
         std::snprintf(name, sizeof(name), "part_%016llx.raw", static_cast<unsigned long long>(key));
@@ -875,7 +884,6 @@ bool BeginShadowPicture(const uint16_t* src, uint16_t* dst, int w, int h, uint32
     op.src = src;
     op.srcPitch = sb.pitch;
     op.key = keyed ? 0x07C0u : 0xFFFFFFFFu;
-    op.marker = marker & 0xFFFF;
     op.factor = factor;
     KeepBefore(op);
     return true;
@@ -905,7 +913,6 @@ void End(Op& op) {
         const int sx = (std::min)((std::max)(op.x + qx, 0), op.dst.w - 1), sy = (std::min)((std::max)(op.y + qy, 0), op.dst.h - 1);
         return reinterpret_cast<const uint16_t*>(op.dst.bits + static_cast<size_t>(sy) * op.dst.pitch)[sx];
     };
-    unsigned changed = 0;
     for (int y = t; y < b; ++y) {
         const int py = y - op.y, cy = y - c.top;
         const auto* drow = reinterpret_cast<const uint16_t*>(op.dst.bits + static_cast<size_t>(y) * op.dst.pitch);
@@ -994,7 +1001,6 @@ void End(Op& op) {
                 }
             }
             ref = 0x10000u | (drawn ? A : B);
-            ++changed;
         }
     }
     AddDirty(*sh, l - c.left, t - c.top, r - c.left, b - c.top);
@@ -1003,7 +1009,6 @@ void End(Op& op) {
     } else {
         if (op.kind == 2) ++g_pictures; else ++g_picturesNoHd;
     }
-    (void)changed;
 }
 
 bool GetPatch(const uint8_t* frameBits, const RECT& crop, Menu::Layer& out, uintptr_t& identity) {
@@ -1046,7 +1051,7 @@ bool InterfacePicture(const Buf& src, const RECT& r, int& w2, int& h2, const uin
     // (health, numbers) gets a new key at every change - the lookups stay few: the caller asks only
     // when it builds its cached 2x version, and the answer per key is kept (LoadPicture)
     if (w < 4 || h < 4 || static_cast<int64_t>(w) * h > 640 * 480 || r.left < 0 || r.top < 0 || r.right > src.w ||
-        r.bottom > src.h || g_pics.size() > 50000) {
+        r.bottom > src.h) {
         return false;
     }
     ++g_uiAsked;

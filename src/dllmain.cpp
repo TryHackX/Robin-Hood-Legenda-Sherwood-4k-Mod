@@ -1,4 +1,5 @@
 #include <windows.h>
+#include <intrin.h>
 #include <string>
 #include <algorithm>
 #include <cstring>
@@ -74,18 +75,31 @@ namespace {
         }
 
         const uintptr_t eip = reinterpret_cast<uintptr_t>(ep->ExceptionRecord->ExceptionAddress);
-        // This handler sees every exception first, also the ones caught afterwards: the mod's own
-        // guarded reads (__try around game memory that may be gone) are expected and never logged,
-        // and the first few others are (one of them used to be the only report - a later real
-        // crash went unlogged, code review 2026-11-17).
-        {
-            HMODULE self = nullptr;
-            if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                                   reinterpret_cast<LPCSTR>(&CrashVectoredHandler), &self) &&
-                self && code == EXCEPTION_ACCESS_VIOLATION) {
-                HMODULE at = nullptr;
-                if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                                       reinterpret_cast<LPCSTR>(eip), &at) && at == self) {
+        // This handler sees every exception first, also the ones caught afterwards. Expected ones are not logged:
+        // those the innermost exception frame of the faulting code will take - a __try of this DLL (its guarded
+        // reads of game memory that may be gone, also around calls into the game), or of the module that faulted
+        // itself (IsBadReadPtr in KernelBase, which the game imports). Everything else is, the first few times: a
+        // fault in this DLL outside its __try blocks too (before 2026-11-22 every fault inside it was skipped, so a
+        // crash in a hook left no trace - audit).
+        if (code == EXCEPTION_ACCESS_VIOLATION) {
+            auto moduleOf = [](uintptr_t a) {
+                HMODULE m = nullptr;
+                GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                   reinterpret_cast<LPCSTR>(a), &m);
+                return m;
+            };
+            // x86 frame-based SEH: fs:[0] -> { next, handler } records on the stack; those below the faulting ESP were
+            // registered by the dispatch itself
+            struct Reg { const Reg* next; uintptr_t handler; };
+            const auto* r = reinterpret_cast<const Reg*>(__readfsdword(0));
+            const uintptr_t esp = ep->ContextRecord->Esp;
+            while (r && reinterpret_cast<uintptr_t>(r) != 0xFFFFFFFFu && reinterpret_cast<uintptr_t>(r) < esp) r = r->next;
+            if (r && reinterpret_cast<uintptr_t>(r) != 0xFFFFFFFFu) {
+                const HMODULE handlerModule = moduleOf(r->handler);
+                const HMODULE self = moduleOf(reinterpret_cast<uintptr_t>(&CrashVectoredHandler));
+                const HMODULE faulting = moduleOf(eip);
+                if (handlerModule && (handlerModule == self ||
+                                      (handlerModule == faulting && faulting != GetModuleHandleA(nullptr)))) {
                     return EXCEPTION_CONTINUE_SEARCH;
                 }
             }

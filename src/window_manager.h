@@ -7,7 +7,6 @@ namespace WindowManager {
     void ShutdownHooks();
 
     HWND GetGameWindow();
-    bool IsAppActive();
     bool IsReallyMinimised(); // what Windows says; the game itself is always told "not minimised"
 
     // Makes `hWnd` a borderless window covering the primary monitor (used by the in-memory
@@ -21,6 +20,4 @@ namespace WindowManager {
     void SetInternalResolution(int width, int height);
     void GetInternalResolution(int& outWidth, int& outHeight);
     void GetMonitorResolution(int& outWidth, int& outHeight);
-    RECT GetScaledViewportRect();
-    void UpdateCursorClipping(bool active);
 }

@@ -32,6 +32,10 @@ original DirectDraw wrapper, plus optional HD graphics prepared with AI models f
 - **HD map backgrounds**, **HD characters and objects**, **HD icons**, **HD menu backgrounds** — from pictures
   prepared with AI models (4 variants, switchable while playing), colours matched to the original. Download them as
   ready-made packs — see "HD graphics" below.
+- **Level in HD at every zoom** (1.3.0): below zoom 2.0 the map background is no longer enlarged original pixels but
+  the HD picture (`HDLevelLayer=1` in the INI). Above 2.0, and already at 2.0 on a 4K monitor, the map background can
+  be shown from **native 4K pictures** (4× the original, optional packs, `HDMaps4k=1`): blades of grass instead of
+  enlarged pixels. Characters, objects and the interface are still drawn by the game in its 2× picture.
 - Optional in-between frames for character animations (RIFE model) — animations 2× smoother. Since 2026-11-15 the
   frames are **sharp** (every pixel taken from one of the two moved frames instead of mixing them), so all accepted
   ones are shown — about 3× more transitions than before (`SherwoodHD-3-klatki-posrednie.zip`, updated in HD graphics
@@ -131,11 +135,13 @@ whether to replace files, answer yes.
 | `SherwoodHD-2-tla-dat2.zip` | 0.7 GB | 1.1 GB | all 20 map backgrounds, roofs, trees, objects, menu backgrounds (default variant `dat2`) | **required** |
 | `SherwoodHD-3-klatki-posrednie.zip` | 1.6 GB | 3.0 GB | in-between frames: character animations 2× smoother (F9); new sharp frames since 2026-11-15 | recommended |
 | `SherwoodHD-4-klatki-posrednie-2.zip` | 0.1 GB | 0.2 GB | in-between frames of the level's animations (birds, flags, smoke…) with a smooth flight path, and a second try for the characters (mod 1.2.9 or newer) | recommended |
+| `SherwoodHD-5-mapy-4k-a.zip` | 1.16 GB | 1.7 GB | native 4K map backgrounds: crossroads, Sherwood camp, Derby, Leicester, Lincoln (mod 1.3.0 or newer) | optional |
+| `SherwoodHD-5-mapy-4k-b.zip` | 1.19 GB | 1.7 GB | native 4K map backgrounds: Nottingham, York (mod 1.3.0 or newer) | optional |
 | `SherwoodHD-wariant-aomr.zip` | 0.7 GB | 1.1 GB | another look of the backgrounds (F6 / F7) | optional |
 | `SherwoodHD-wariant-sgi.zip` | 0.7 GB | 1.4 GB | another look of the backgrounds (F6 / F7) | optional |
 | `SherwoodHD-wariant-ultrasharp.zip` | 0.7 GB | 1.1 GB | another look of the backgrounds (F6 / F7) | optional |
 
-Required only: 2.9 GB to download, 5.1 GB on disk. Everything: 6.5 GB to download, 11.8 GB on disk.
+Required only: 2.9 GB to download, 5.1 GB on disk. Everything: 8.9 GB to download, 15.1 GB on disk.
 
 Unpack **each** archive into the game folder (see above). Afterwards the game folder holds `hd\maps\…`,
 `hd\sprites\…` and `hd\menu\…`. Check: `hd\sprites\_common\` must contain `sprites.idx`, `sprites.dat` **and**
@@ -249,8 +255,11 @@ the `ultrasharp` variant and the icons are for non-commercial use), RIFE by hzwe
 ## Known limitations
 
 - The engine itself has only three zoom levels (0.5 / 1 / 2); the smooth zoom magnifies its 1.0 or 2.0 picture. Below
-  2.0 the original pixels are shown (HD pictures need 2.0; since 1.1.7 they are enlarged with a sharper filter), above
-  2.0 the HD picture is magnified further.
+  2.0 the level's background is shown from the HD picture (since 1.3.0, `HDLevelLayer=1`; before, original pixels), while
+  characters and objects, drawn by the engine at 1.0, are magnified. Above 2.0 the background comes from the native 4K
+  picture when the optional 4K map packs are installed (`HDMaps4k=1`: on a 2560×1440 monitor from zoom about 2.2,
+  on a 4K monitor from 2.0; 0 = off, 2 = also below that, for comparison) and from the magnified HD picture otherwise.
+  Characters, trees, shadows and the interface cannot be native 4K — the game draws them into its 2× picture.
 - Behind the game's questions and briefings in a mission the level is shown from the game's own picture, magnified
   — a little softer than the HD view around it while the question is up.
 

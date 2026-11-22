@@ -128,9 +128,8 @@ namespace {
             } else if (!seen.hd) {
                 // a font without an HD version: kept for tools\hd\upscale_fonts.py (like the icons) -
                 // only where the HD work folder exists (the machine the HD pictures are made on)
-                static const std::string work = GameDir() + "hd\\work\\";
-                static const bool collect = GetFileAttributesA(work.c_str()) != INVALID_FILE_ATTRIBUTES;
-                if (collect) {
+                const std::string& work = DDM::HD::WorkFolder();
+                if (!work.empty()) {
                     char name[64];
                     std::snprintf(name, sizeof(name), "fonts\\font_%016llx.raw", static_cast<unsigned long long>(key));
                     if (GetFileAttributesA((work + name).c_str()) == INVALID_FILE_ATTRIBUTES) {

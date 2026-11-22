@@ -16,8 +16,6 @@
 
 namespace RenderDDraw {
     namespace {
-        std::atomic<uint64_t> g_totalFrames{ 0 };
-        std::atomic<uint64_t> g_locksThisFrame{ 0 };
         bool g_ddrawVtableHooked = false;
         bool g_surfaceVtableHooked = false;
         bool g_isGogD3DWrapper = false;
@@ -227,7 +225,6 @@ namespace RenderDDraw {
 
         HRESULT STDMETHODCALLTYPE Hook_DDS7_Lock(void* pThis, LPRECT lpDestRect, LPDDSURFACEDESC2 lpDDSurfaceDesc, DWORD dwFlags, HANDLE hEvent) {
             Diag::Scope diagScope(Diag::C_DD_LOCK);
-            g_locksThisFrame.fetch_add(1, std::memory_order_relaxed);
             // Enforce DDLOCK_NOSYSLOCK | DDLOCK_WAIT to eliminate Win16/DDraw global lock contention on Windows 11
             dwFlags |= (DDLOCK_NOSYSLOCK | DDLOCK_WAIT);
             HRESULT hr = o_DDS7_Lock(pThis, lpDestRect, lpDDSurfaceDesc, dwFlags, hEvent);
@@ -248,8 +245,6 @@ namespace RenderDDraw {
                 const bool srcFull = (!lpSrcRect || (lpSrcRect->right - lpSrcRect->left) >= 320);
                 const bool dstFull = (!lpDestRect || (lpDestRect->right - lpDestRect->left) >= 320);
                 if (srcFull && dstFull) {
-                    g_totalFrames.fetch_add(1, std::memory_order_relaxed);
-                    g_locksThisFrame.store(0, std::memory_order_relaxed);
                     Diag::Add(Diag::C_PRESENT);
                     if (SherwoodConfig::Get().showFPSOverlay) {
                         DrawFPSOverlayOnSurface(lpDDSrcSurface);
@@ -345,9 +340,6 @@ namespace RenderDDraw {
         }
 
         HRESULT STDMETHODCALLTYPE Hook_DDS7_Flip(void* pThis, LPDIRECTDRAWSURFACE7 lpDDSurfaceTargetOverride, DWORD dwFlags) {
-            g_totalFrames.fetch_add(1, std::memory_order_relaxed);
-            g_locksThisFrame.store(0, std::memory_order_relaxed);
-
             if (lpDDSurfaceTargetOverride) {
                 DrawFPSOverlayOnSurface(lpDDSurfaceTargetOverride);
             } else {
@@ -765,13 +757,5 @@ namespace RenderDDraw {
         // Top centre: the game prints its own lines (money, clover) in the top-left corner and
         // keeps the minimap buttons in the top-right one.
         DrawTextLine565(base, pitch, width, height, text, 8, (height >= 900) ? 2 : 1, 0x07E0u, src, srcPitch);
-    }
-
-    uint64_t GetTotalFramesPresented() {
-        return g_totalFrames.load(std::memory_order_relaxed);
-    }
-
-    uint64_t GetSurfaceLocksThisFrame() {
-        return g_locksThisFrame.load(std::memory_order_relaxed);
     }
 }

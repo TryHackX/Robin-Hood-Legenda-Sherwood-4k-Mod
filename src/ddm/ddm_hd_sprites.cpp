@@ -13,9 +13,11 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <list>
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace DDM::HD::Sprites {
@@ -300,12 +302,40 @@ namespace {
     struct Ready {
         std::vector<uint16_t> px;
         int      w = 0, h = 0;
-        uint32_t lastUse = 0;
+        std::list<uint64_t>::iterator lru;  // its place in g_lru
         mutable int figX = -1, figY = -1;   // centre of the figure's opaque pixels (FigureCentre; -1 = not yet)
     };
-    std::unordered_map<uint64_t, Ready> g_ready;   // key: frame | shadow colour << 32
+    std::unordered_map<uint64_t, Ready> g_ready;   // frames with an HD version; key: frame | shadow colour << 32
+    std::list<uint64_t> g_lru;                     // their keys, the one used longest ago first
     size_t   g_readyBytes = 0;
-    uint32_t g_useCounter = 0;
+    // keys without an HD version: no file access on every draw (emptied when large - a key that comes back is asked
+    // again). Kept apart from g_ready: as zero-byte entries there they made every eviction scan them (audit 2026-11-22).
+    std::unordered_set<uint64_t> g_readyMissing;
+
+    void ForgetReady() {
+        g_ready.clear();
+        g_lru.clear();
+        g_readyBytes = 0;
+        g_readyMissing.clear();
+    }
+
+    // a frame used now: last in the eviction order
+    const Ready* Touch(Ready& r) {
+        g_lru.splice(g_lru.end(), g_lru, r.lru);
+        return &r;
+    }
+
+    const Ready* AddReady(uint64_t key, Ready&& r) {
+        g_readyBytes += r.px.size() * 2;
+        Ready& e = g_ready.insert_or_assign(key, std::move(r)).first->second;
+        e.lru = g_lru.insert(g_lru.end(), key);
+        return &e;
+    }
+
+    void NoteMissing(uint64_t key) {
+        if (g_readyMissing.size() > 60000) g_readyMissing.clear();
+        g_readyMissing.insert(key);
+    }
     std::atomic<unsigned> g_drawn{ 0 };
     bool g_cutKnown = false; // the routines that cut occluded parts out of a sprite are hooked
 
@@ -357,8 +387,7 @@ namespace {
     }
 
     void DropFrames() {
-        g_ready.clear();
-        g_readyBytes = 0;
+        ForgetReady();
         for (auto& kv : g_decoded) kv.second.checked = 0;
     }
 
@@ -511,15 +540,16 @@ namespace {
     bool  g_wantedFailed = false;
 
     void NoteWanted(uint32_t frame, uint64_t content) {
-        if (g_wantedFailed || !g_bank || std::find(g_wantedSeen.begin(), g_wantedSeen.end(), content) != g_wantedSeen.end()) return;
+        if (g_wantedFailed || !g_bank || DDM::HD::WorkFolder().empty() ||       // only where hd\work exists
+            std::find(g_wantedSeen.begin(), g_wantedSeen.end(), content) != g_wantedSeen.end()) return;
         if (g_wantedSeen.size() >= 20000) return;
         g_wantedSeen.push_back(content);
         BankFrame e{};
         uint32_t count = 0, bytes = 0;
         if (!ReadTableEntry(g_bank, frame, &e, &count, &bytes) || bytes == 0) return;
         if (!g_wantedFile) {
-            const std::string dir = GameDir() + "hd\\work";
-            CreateDirectoryA(dir.c_str(), nullptr);
+            std::string dir = DDM::HD::WorkFolder();
+            dir.pop_back();     // without the trailing backslash (the names below start with one)
             CreateDirectoryA((dir + "\\runtime_frames").c_str(), nullptr);
             SYSTEMTIME t{};
             GetLocalTime(&t);
@@ -583,13 +613,12 @@ namespace {
     }
 
     void Evict(size_t needed) {
-        while (g_readyBytes + needed > kCacheBudget && !g_ready.empty()) {
-            auto oldest = g_ready.begin();
-            for (auto it = g_ready.begin(); it != g_ready.end(); ++it) {
-                if (it->second.lastUse < oldest->second.lastUse) oldest = it;
-            }
-            g_readyBytes -= oldest->second.px.size() * 2;
-            g_ready.erase(oldest);
+        while (g_readyBytes + needed > kCacheBudget && !g_lru.empty()) {
+            const auto it = g_ready.find(g_lru.front());
+            g_lru.pop_front();
+            if (it == g_ready.end()) continue;
+            g_readyBytes -= it->second.px.size() * 2;
+            g_ready.erase(it);
         }
     }
 
@@ -626,10 +655,8 @@ namespace {
         // keeps these keys apart from those of the bank's frames, which fit in 51 bits)
         const uint64_t key = runTime ? ((rec.content * 0x9E3779B97F4A7C15ull) ^ state) | (1ull << 63) : (rec.frame | state);
         auto it = g_ready.find(key);
-        if (it != g_ready.end()) {
-            it->second.lastUse = ++g_useCounter;
-            return it->second.px.empty() ? nullptr : &it->second;
-        }
+        if (it != g_ready.end()) return Touch(it->second);
+        if (g_readyMissing.count(key)) return nullptr;
         Ready r;
         r.w = rec.fw * 2;
         r.h = rec.fh * 2;
@@ -637,14 +664,7 @@ namespace {
                                    : (ReadFrame(g_stores[0], rec.frame, r.w, r.h, r.px) || ReadFrame(g_stores[1], rec.frame, r.w, r.h, r.px));
         if (!found) {
             if (runTime) NoteWanted(rec.frame, rec.content);
-            // remember that it is missing: no file access on every draw
-            if (g_ready.size() > 60000) {
-                g_ready.clear();
-                g_readyBytes = 0;
-            }
-            r.px.clear();
-            r.lastUse = ++g_useCounter;
-            g_ready.emplace(key, std::move(r));
+            NoteMissing(key);
             return nullptr;
         }
         Evict(r.px.size() * 2);
@@ -659,9 +679,7 @@ namespace {
         if (rec.tone == 1 || rec.tone == 2) {
             TintFrame(r.px, rec.tone, shadowColor, rec.flag != 0);
         }
-        r.lastUse = ++g_useCounter;
-        g_readyBytes += r.px.size() * 2;
-        return &g_ready.emplace(key, std::move(r)).first->second;
+        return AddReady(key, std::move(r));
     }
 
     // One store of in-between frames: its sorted index and data, and - for exactly this index - its quality
@@ -772,11 +790,6 @@ namespace {
         OpenBetweenStore("_between_anim", "the level's animations", g_betweenAnim, g_betweenAnimDat, g_betweenAnimQ, g_betweenAnimHold);
     }
 
-    // The frame half-way between `prev` and `cur` (either order), and where its top-left corner
-    // lies relative to that of `cur`. nullptr = none, or not any more: `elapsed` = game ticks since the
-    // sprite changed to `cur` (with the phase of the tick); the in-between belongs to the first half of the
-    // step `cur` stays - its length from between.t, else `heldPrev` (how long `prev` stayed), else 1 tick.
-    // The entry of the pair whose in-between frame is due now (no data read; -1 = none).
     // The entry of the pair (prev, cur) in a store (either order; any entry, also one the generator rejected), or -1.
     ptrdiff_t PairIn(const std::vector<BetweenEntry>& entries, uint32_t prev, uint32_t cur) {
         if (entries.empty()) return -1;
@@ -843,23 +856,18 @@ namespace {
         *dy = cur == it->a ? it->dyA : it->dyB;
         const uint64_t key = (1ull << 62) | (static_cast<uint64_t>(tone & 3) << 40) | static_cast<uint64_t>(index);
         auto hit = g_ready.find(key);
-        if (hit != g_ready.end()) {
-            hit->second.lastUse = ++g_useCounter;
-            return hit->second.px.empty() ? nullptr : &hit->second;
-        }
+        if (hit != g_ready.end()) return Touch(hit->second);
+        if (g_readyMissing.count(key)) return nullptr;
         Ready r;
         r.w = it->w;
         r.h = it->h;
-        r.lastUse = ++g_useCounter;
         if (!ReadEntry(dat, IndexEntry{ it->offset, it->size, it->w, it->h }, r.w, r.h, r.px)) {
-            r.px.clear();
-            g_ready.emplace(key, std::move(r));
+            NoteMissing(key);
             return nullptr;
         }
         Evict(r.px.size() * 2);
         if (tone == 1 || tone == 2) TintFrame(r.px, tone, 0, false);
-        g_readyBytes += r.px.size() * 2;
-        return &g_ready.emplace(key, std::move(r)).first->second;
+        return AddReady(key, std::move(r));
     }
 
     // Which frame did this sprite object show before it changed to `frame`, how many ticks ago was that,
@@ -1273,7 +1281,8 @@ namespace {
 }
 
 void InstallHooks() {
-    if (!SherwoodConfig::Get().hdBackgrounds || !SherwoodConfig::Get().hdSprites) return;
+    // also with HDSprites=0 at the start: the settings panel can switch them on (the look-ups check it each time)
+    if (!SherwoodConfig::Get().hdBackgrounds) return;
     static const uint8_t kDecode[]  = { 0x53, 0x55, 0x56, 0x57, 0x8B, 0x7C, 0x24, 0x18, 0x8B, 0xF1, 0x57, 0xE8 };
     static const uint8_t kMaskedA[] = { 0x83, 0xEC, 0x08, 0x56, 0x57, 0x8B, 0x7C, 0x24, 0x18, 0x8B, 0xF1, 0x57, 0xE8 };
     static const uint8_t kMaskedB[] = { 0x83, 0xEC, 0x08, 0x53, 0x8B, 0x5C, 0x24, 0x14, 0x55, 0x56, 0x57, 0x8B, 0xF1, 0x53, 0xE8 };

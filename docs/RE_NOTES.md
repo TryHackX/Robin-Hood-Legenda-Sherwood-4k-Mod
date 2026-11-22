@@ -402,3 +402,10 @@ plus stan generatora, dziennik każdego `rand()` (tick, kontekst, wołający, wa
 - Kamera, kursor, HUD, dźwięk i klatki pośrednie są lokalne i mogą się różnić (zmierzone), pod warunkiem że cel
   akcji jest wysyłany, a nie liczony z widoku odbiorcy.
 
+
+## Pauza, licznik tików silnika, obraz poziomu (2026-11-22, 1.3.0)
+- **Flaga pauzy**: `[[0x006C0C4C] + 0x1B]` (singleton translatora wejścia, bajt +0x1B). Zapisy do +0x1B znalezione tylko w `0x00545C20` i `0x0054757B` — oba ją zerują [K].
+- **Pętla `RHGame::Run`**: gałąź w `0x005100DB` (`8A 43 1B 84 C0 75 44`: `mov al,[ebx+1B]; test al,al; jnz`) skacze do `0x00510126`, pomijając tik silnika i ogranicznik klatek (`0x005100DB..0x005100E0`) — w pauzie nie jest rysowana żadna klatka, pętla kręci się bez ograniczenia (~47 000 przebiegów/s) [Z]. Mod wstawia tu hak: najwyżej jeden przebieg na odświeżenie + praca moda na tik.
+- **Licznik tików silnika**: `[silnik + 0x4A94]`, zwiększany w `0x004C7254`; klatka liczy się jako tik gry tylko gdy się zmienił.
+- **Obraz poziomu zmieniają misje** (powóz rysowany w obrazie poziomu), więc klucz obrazu się zmienia; wyszukiwanie HD używa klucza własnego obrazu poziomu.
+- **`HD::LevelOrigin`** = piksel HD odpowiadający pikselowi (0,0) powierzchni świata = 2 × kamera.

@@ -7,7 +7,6 @@
 // scaling shader, GDI StretchDIBits as a fallback. All calls are serialised internally.
 namespace DDM::Present {
     void SetWindow(HWND hwnd);
-    void Shutdown();
 
     // Presents `bits` (w x h, RGB565, `pitch` bytes per row) scaled to the window, aspect preserved.
     void Frame(const uint8_t* bits, int pitch, int w, int h);
@@ -19,4 +18,8 @@ namespace DDM::Present {
     bool ReadWorld(std::vector<uint16_t>& out, int& w, int& h);
 
     const char* BackendName();
+
+    // Test harness ("presentlog N"): the next N presented frames write how they were composed to the log
+    // (menu crop, which layers) - for a wrong frame too short to catch with a screenshot.
+    void LogNextFrames(int count);
 }

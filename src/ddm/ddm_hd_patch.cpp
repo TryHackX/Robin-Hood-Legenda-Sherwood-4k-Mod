@@ -424,9 +424,60 @@ namespace {
     }
 }
 
+namespace {
+    // the mission's cursor (NoteMissionCursor), in the same form as a menu's
+    CursorRec      g_missionCursor;
+    const void*    g_missionPicture = nullptr;
+}
+
+void NoteMissionCursor(const Buf& frame, const RECT& d, const uint32_t* bgra, const uint8_t* shade, int w2, int h2,
+                       const uint16_t* under) {
+    CursorRec& r = g_missionCursor;
+    const int w = d.right - d.left, h = d.bottom - d.top;
+    if (!frame.bits || !bgra || !shade || !under || w != w2 || h != h2 || w <= 0 || h <= 0 || w > 500 || h > 500 ||
+        d.left < 0 || d.top < 0 || d.right > frame.w || d.bottom > frame.h) {
+        r.bits = nullptr;
+        return;
+    }
+    const bool changed = bgra != g_missionPicture || r.w != w || r.h != h || r.overlay.empty();
+    r.bits = frame.bits;
+    r.x = d.left;
+    r.y = d.top;
+    r.w = w;
+    r.h = h;
+    r.under.assign(under, under + static_cast<size_t>(w) * h);
+    r.after.resize(static_cast<size_t>(w) * h);
+    for (int y = 0; y < h; ++y) {
+        std::memcpy(r.after.data() + static_cast<size_t>(y) * w, frame.bits + static_cast<size_t>(d.top + y) * frame.pitch +
+                    static_cast<size_t>(d.left) * 2, static_cast<size_t>(w) * 2);
+    }
+    if (changed) {
+        // the HD picture covers the frame's rectangle 1:1; the presenter's overlay has twice its size (a menu cursor's
+        // HD picture over its 1x pixels): every HD pixel twice, the presenter filters. As ddm.cpp HdCursor draws it:
+        // colour by its alpha, and the shadow at most half dark (the game's factor 128)
+        const int tw = w * 2 + 2, th = h * 2 + 2;
+        r.overlay.assign(static_cast<size_t>(tw) * th, 0u);
+        for (int y = 0; y < 2 * h; ++y) {
+            for (int x = 0; x < 2 * w; ++x) {
+                const size_t k = static_cast<size_t>(y >> 1) * w2 + static_cast<size_t>(x >> 1);
+                const uint32_t c = bgra[k], a = c >> 24, s = shade[k];
+                const uint32_t m = 256 - ((256 - 128) * s + 127) / 255;
+                const uint32_t keep = a ? 255 - a : (m * 255 + 128) / 256;
+                const uint32_t b = ((c & 0xFF) * a + 127) / 255, g = (((c >> 8) & 0xFF) * a + 127) / 255,
+                               rr = (((c >> 16) & 0xFF) * a + 127) / 255;
+                r.overlay[static_cast<size_t>(y + 1) * tw + static_cast<size_t>(x + 1)] = ((255 - keep) << 24) | (rr << 16) | (g << 8) | b;
+            }
+        }
+        g_missionPicture = bgra;
+        r.generation = ++g_cursorGen;
+    }
+}
+
 bool GetCursor(const uint8_t* frameBits, int pitch, Cursor& out) {
     if (!frameBits || pitch <= 0) return false;
-    for (const CursorRec& r : g_cursorRecs) {
+    const CursorRec* recs[3] = { &g_cursorRecs[0], &g_cursorRecs[1], &g_missionCursor };
+    for (const CursorRec* rp : recs) {
+        const CursorRec& r = *rp;
         if (r.bits != frameBits || r.overlay.empty() || r.w <= 0 || r.h <= 0) continue;
         // the frame must still hold the cursor exactly as it was drawn (else it moved on, or something covered it)
         for (int y = 0; y < r.h; ++y) {

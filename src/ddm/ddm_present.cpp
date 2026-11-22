@@ -183,8 +183,17 @@ namespace {
         "  return Pack565(tex.Load(int3(p, 0)).rgb) == (o & 0xFFFF) ? 1 : 2;\n"
         "}\n"
         "int CountPatchOther(int2 t) { int n = 0; [unroll] for (int dy = -1; dy <= 1; ++dy) [unroll] for (int dx = -1; dx <= 1; ++dx) if ((dx != 0 || dy != 0) && PatchState(t + int2(dx, dy)) == 2) ++n; return n; }\n"
+        // smaller than the texture (a 2560x1440 game on a 1920x1080 screen, a 3840x2160 one on 2560x1440): four
+        // bilinear taps over the output pixel's footprint - one tap skipped texels, leaves and edges flickered and
+        // looked jagged (user report 2026-11-22, the game set to 3840x2160 on a 1440p screen)
+        "float3 Minified(Texture2D t, float2 texel, float2 scale) {\n"
+        "  float2 d = 0.25 / scale; float2 inv = 1.0 / texSize;\n"
+        "  return 0.25 * (t.Sample(smpLinear, (texel + float2(-d.x, -d.y)) * inv).rgb + t.Sample(smpLinear, (texel + float2(d.x, -d.y)) * inv).rgb +\n"
+        "                 t.Sample(smpLinear, (texel + float2(-d.x, d.y)) * inv).rgb + t.Sample(smpLinear, (texel + float2(d.x, d.y)) * inv).rgb);\n"
+        "}\n"
         "float3 Filtered(Texture2D t, float2 texel, float2 scale) {\n"
         "  if (mode < 0.5) return t.Sample(smpPoint, texel / texSize).rgb;\n"
+        "  if (scale.x < 0.99 || scale.y < 0.99) return Minified(t, texel, scale);\n"
         "  if (mode > 1.5) return t.Sample(smpLinear, texel / texSize).rgb;\n"
         "  float2 s = max(floor(scale), 1.0);\n"
         "  float2 i = floor(texel); float2 f = texel - i;\n"
@@ -273,6 +282,7 @@ namespace {
         "    if (fp.y < lvl2.y && LevelHd(fp, lc)) return float4(lc, 1.0);\n"
         "  }\n"
         "  if (mode < 0.5) return float4(tex.Sample(smpPoint, uv).rgb, 1.0);\n"
+        "  if (outSize.x < texSize.x * 0.99 || outSize.y < texSize.y * 0.99) return float4(Minified(tex, uv * texSize, outSize / texSize), 1.0);\n"
         "  if (mode > 1.5) return float4(tex.Sample(smpLinear, uv).rgb, 1.0);\n"
         "  float2 texel = uv * texSize;\n"
         "  float2 scale = max(floor(outSize / texSize), 1.0);\n"
@@ -1386,6 +1396,10 @@ namespace {
             cursorOn = !(dbg & 512u) && DDM::HD::Patch::GetCursor(frameBits, pitch, cursor) && PrepareCursor(cursor);
         } else if (lupaFrame && g_snapValid && g_snapTex && g_snapW == w && g_snapH == h) {
             lupaOn = true;      // the world went to its texture before the windows were drawn
+        }
+        if (crop.right <= crop.left) {
+            // a mission's cursor (NoteMissionCursor): over the output, its shadow over the (magnified) world shown there
+            cursorOn = !(DDM::HD::DebugFlags() & 512u) && DDM::HD::Patch::GetCursor(frameBits, pitch, cursor) && PrepareCursor(cursor);
         }
         // the level from a picture of its own where the world shows its pixels (LevelUse: HD at 1.0, 4x beyond)
         int vx, vy, vw, vh;

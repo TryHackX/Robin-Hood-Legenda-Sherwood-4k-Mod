@@ -405,6 +405,22 @@ wczytaniu (11:56:21, 11:56:26) i jedna bez przypisanej przyczyny (11:56:52–57;
 jednym rdzeniu — przez wcześniejsze 45 s eksportu gra szła równo). Do obserwacji. Klawisze F6/F7/F8 nadal
 niepotwierdzone (w logu brak „background variant switched").
 
+### 1.3.2 (2026-11-22) — celownik łuku, skalowanie w dół
+- **Celownik łuku** (zgłoszenie: „lupa łuku nie pokazuje postaci”, potem „czarne kółko”): to kursor gry —
+  pierścień ze strzałkami i duży cień w środku. Gra kopiuje tło spod kursora, rysuje w kopii kursor i oddaje ją
+  (mod: ×2). Cień przyciemniał piksele klatki w miejscu kursora, a przy płynnym zoomie to nie jest miejsce, które
+  pokazuje wyjście (inny fragment poziomu albo czarny pas za nim przy silniku 1,0). Teraz `HdCursor` (ddm.cpp)
+  zapisuje kursor misji (`Patch::NoteMissionCursor`: prostokąt, piksele przed, obraz HD), prezenter oddaje klatce
+  piksele spod kursora i kładzie jego obraz na wyjściu (jak kursor w menu, t8) — cień przyciemnia powiększony świat,
+  cel widać w środku [Z]. `dbg 512` wyłącza też tę nakładkę.
+- **Gra większa niż ekran** (3840×2160 w opcjach gry na monitorze 1440p, 2560×1440 na 1080p): prezenter zmniejszał
+  jedną próbką na piksel — liście migotały i były poszarpane. Teraz cztery próbki na ślad piksela (`Minified`).
+- Wyjaśnione: mapa 4K jest ostra (`tools\hd\compare_4k_sharpness.py`: 3,4× więcej drobnych szczegółów niż
+  powiększony obraz HD, 11× niż oryginał) — wrażenie miękkości to „malarski” charakter skalowania AI. Czarne tło
+  opcji tuż po zmianie rozdzielczości w grze — do pierwszego wejścia na poziom (gra nie przerysowuje ekranu po zmianie
+  trybu). Niedostępny pas trawy przy dolnej krawędzi poziomu: w oryginale zasłaniał go pasek interfejsu (80 px),
+  projektanci nie dali tam ścieżek; `FullHeightView=1` go pokazuje.
+
 ### 1.3.1 (2026-11-22) — ostatnie dwa elementy interfejsu w HD
 - Róg ekranu z rogiem myśliwskim (29×95, prawy dolny) i czerwona pieczęć po prawej (41×41) gra powiększa własną
   procedurą sprite'ów 2× (`0x0062261C`, z cieniem: kolor klucza 0x07C0, marker 0x001F, czynnik 128). Gdy rysują się okna

@@ -61,6 +61,17 @@ bool HdCursor(const Buf& dst, const RECT& d, const RECT& clip, const Buf& src, c
     const uint32_t* bgra = nullptr;
     const uint8_t* shade = nullptr;
     if (!HD::Patch::InterfacePicture(src, s, w2, h2, bgra, shade) || w2 != 2 * sw || h2 != 2 * sh) return false;
+    // the frame there before: the presenter lays the cursor over the output instead (NoteMissionCursor)
+    static std::vector<uint16_t> s_under;
+    const bool whole = clip.left == d.left && clip.top == d.top && clip.right == d.right && clip.bottom == d.bottom &&
+                       d.right - d.left == w2 && d.bottom - d.top == h2;
+    if (whole) {
+        s_under.resize(static_cast<size_t>(w2) * h2);
+        for (int y = 0; y < h2; ++y) {
+            std::memcpy(s_under.data() + static_cast<size_t>(y) * w2,
+                        dst.bits + static_cast<size_t>(d.top + y) * dst.pitch + static_cast<size_t>(d.left) * 2, static_cast<size_t>(w2) * 2);
+        }
+    }
     for (int y = clip.top; y < clip.bottom; ++y) {
         const int hy = y - d.top;
         if (hy < 0 || hy >= h2) continue;
@@ -88,6 +99,7 @@ bool HdCursor(const Buf& dst, const RECT& d, const RECT& clip, const Buf& src, c
             out[x] = static_cast<uint16_t>((r << 11) | (g << 5) | b);
         }
     }
+    if (whole) HD::Patch::NoteMissionCursor(dst, d, bgra, shade, w2, h2, s_under.data());
     return true;
 }
 

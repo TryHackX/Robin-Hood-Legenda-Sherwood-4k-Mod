@@ -81,6 +81,13 @@ namespace DDM::HD::Patch {
         unsigned generation = 0;            // changes with the overlay's content
     };
     bool GetCursor(const uint8_t* frameBits, int pitch, Cursor& out);
+    // The mission's cursor (2026-11-22, user: "the bow's circle is black"): ddm.cpp drew it twice as large from its HD
+    // picture (w2 x h2 = rect `d` of `frame`, 1:1) over `under` (the frame there before, w2 x h2). Its shadow darkened
+    // the frame's pixels - with the smooth zoom not the place the output shows there (the bow's sight is one large
+    // shadow: another part of the level, or the black band beside it). GetCursor gives it to the presenter, which lays
+    // it over the magnified world instead.
+    void NoteMissionCursor(const Buf& frame, const RECT& d, const uint32_t* bgra, const uint8_t* shade, int w2, int h2,
+                           const uint16_t* under);
 
     // Text the game draws with GDI (TextOutA / TextOutW into a surface's DC: lists of saved games, key
     // bindings, Arial): drawn again with the same font twice as large, smoothed. Import slots of Game.exe.

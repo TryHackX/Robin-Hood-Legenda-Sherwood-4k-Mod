@@ -545,6 +545,66 @@ namespace {
         return true;
     }
 
+    // A picture of the mission's windows magnified by this routine at the 2x interface scale (2026-11-22, the last two
+    // pieces of the interface without HD: the screen's corner at the bottom right, 29x95, and a seal of the buttons at
+    // the top right, 41x41): drawn from its HD picture (hd\menu_parts, found by content like the other window
+    // pictures) - its colour over what lies below, and its shadow as the game's darkening.
+    template <bool Keyed>
+    bool Sprite2xWindowHd(const uint16_t* src, uint16_t* dst, uint32_t cols, uint32_t rows, int srcPitch, int dstPitch,
+                          uint32_t factor, uint32_t marker) {
+        // The pictures are kept by the game's window manager, not in a surface locked just before (FindLockedBuf finds
+        // none): the picture is taken where the routine reads it - the HD file is found by content anyway - and drawn
+        // where the routine would write (the game has cut the rectangle to the frame).
+        if (!src || !dst || srcPitch <= 0 || dstPitch <= 0 || (srcPitch & 1) || (dstPitch & 1)) return false;
+        const Buf sb{ const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(src)), srcPitch, static_cast<int>(cols), static_cast<int>(rows) };
+        const RECT sr{ 0, 0, static_cast<LONG>(cols), static_cast<LONG>(rows) };
+        if (TestHarness::Enabled() && (g_debugFlags.load(std::memory_order_relaxed) & 16384u)) {
+            // test: the picture as the game has it -> tools\out\harness\sprite2x_<w>x<h>.raw (u32 w, h, marker, RGB565)
+            static std::vector<uint64_t> s_dumped;
+            const uint64_t id = (static_cast<uint64_t>(cols) << 32) | rows;
+            if (std::find(s_dumped.begin(), s_dumped.end(), id) == s_dumped.end()) {
+                s_dumped.push_back(id);
+                char name[96];
+                std::snprintf(name, sizeof(name), "tools\\out\\harness\\sprite2x_%ux%u.raw", cols, rows);
+                if (FILE* f = std::fopen((GameDir() + name).c_str(), "wb")) {
+                    const uint32_t hdr[3] = { cols, rows, marker };
+                    std::fwrite(hdr, sizeof(hdr), 1, f);
+                    for (uint32_t y = 0; y < rows; ++y) std::fwrite(sb.bits + static_cast<size_t>(y) * sb.pitch, 2, cols, f);
+                    std::fclose(f);
+                }
+            }
+        }
+        int w2 = 0, h2 = 0;
+        const uint32_t* bgra = nullptr;
+        const uint8_t* shade = nullptr;
+        if (!Patch::WindowPicture(sb, sr, Keyed ? 0x07C0u : 0xFFFFFFFFu, marker, w2, h2, bgra, shade) ||
+            w2 != static_cast<int>(cols) * 2 || h2 != static_cast<int>(rows) * 2) {
+            return false;
+        }
+        const auto* mask = reinterpret_cast<const uint16_t*>(kAddrSpanMask);
+        const uint32_t mB = mask[0], mG = mask[1], mR = mask[2];
+        const int32_t mul = static_cast<int16_t>(static_cast<uint16_t>(factor << 6));
+        auto mix = [](uint32_t a, uint32_t b, uint32_t t) {   // a -> b by t / 255, RGB565
+            const uint32_t r = (((a >> 11) * (255 - t) + (b >> 11) * t + 127) / 255);
+            const uint32_t g = ((((a >> 5) & 63) * (255 - t) + ((b >> 5) & 63) * t + 127) / 255);
+            const uint32_t bl = (((a & 31) * (255 - t) + (b & 31) * t + 127) / 255);
+            return (r << 11) | (g << 5) | bl;
+        };
+        for (int y = 0; y < h2; ++y) {
+            auto* out = reinterpret_cast<uint16_t*>(reinterpret_cast<uint8_t*>(dst) + static_cast<size_t>(y) * static_cast<size_t>(dstPitch));
+            const size_t row = static_cast<size_t>(y) * static_cast<size_t>(w2);
+            for (int x = 0; x < w2; ++x) {
+                const uint32_t c = bgra[row + x], a = c >> 24, s = shade[row + x];
+                if (a == 0 && s == 0) continue;
+                uint32_t o = out[x];
+                if (s && a < 255) o = mix(o, Darken565(o, mul, mB, mG, mR), s);
+                if (a) o = mix(o, (((c >> 19) & 31) << 11) | (((c >> 10) & 63) << 5) | ((c >> 3) & 31), a);
+                out[x] = static_cast<uint16_t>(o);
+            }
+        }
+        return true;
+    }
+
     template <bool Keyed>
     void Sprite2x(const uint16_t* src, uint16_t* dst, uint32_t dstW, uint32_t dstH,
                   int srcPitch, int dstPitch, uint32_t factor, uint32_t marker) {
@@ -552,6 +612,16 @@ namespace {
         if (cols == 0 || rows == 0) return;
         if (Sprites::TryShadowBlit(src, dst, cols, rows, srcPitch, dstPitch, factor, marker, Keyed)) {
             return; // the upscaled frame was drawn
+        }
+        if (TraceActive()) {
+            char text[120];
+            std::snprintf(text, sizeof(text), "SPRITE2X %ux%u keyed=%d windows=%d marker=%04X factor=%u", cols, rows, Keyed ? 1 : 0,
+                          UiScale::Drawing() ? 1 : 0, marker & 0xFFFF, factor);
+            TraceMark(text);
+        }
+        if (UiScale::Drawing() && !(g_debugFlags.load(std::memory_order_relaxed) & 8192u) &&
+            Sprite2xWindowHd<Keyed>(src, dst, cols, rows, srcPitch, dstPitch, factor, marker)) {
+            return; // a window picture from its HD version
         }
         if (Sprites::MissActive()) { // test harness: what is still magnified
             Buf sb{};

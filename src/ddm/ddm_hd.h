@@ -105,7 +105,9 @@ namespace DDM::HD {
     // Bit 5 (32): ground overlays (chimney smoke) are drawn as animated water (HDWater=2/3).
     // The presenter's bits: 64 HD patches off, 128 HD menu layer off, 256 dialog backdrop layer off,
     // 512 HD menu cursor off, 1024 test: the vision-cone span clip sees a shorter level, 2048 level
-    // layer (HD / 4x) off, 4096 level layer pixels tinted (test).
+    // layer (HD / 4x) off, 4096 level layer pixels tinted (test), 8192 the windows' pictures the game's 2x sprite
+    // routine magnifies not from their HD versions (Sprite2xWindowHd), 16384 (test mode) each such picture, once per
+    // size, written to tools\out\harness\sprite2x_<w>x<h>.raw as the game has it.
     void SetDebugFlags(unsigned flags);
     unsigned DebugFlags();
 

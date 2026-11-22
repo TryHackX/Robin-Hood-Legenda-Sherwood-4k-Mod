@@ -103,6 +103,12 @@ namespace DDM::HD::Patch {
     // tools\hd\res_pictures.py, sides >= 4): 2w x 2h BGRA (alpha = coverage) and the shadow coverage.
     // Main thread only, HDMenu=1; false = none.
     bool InterfacePicture(const Buf& src, const RECT& r, int& w2, int& h2, const uint32_t*& bgra, const uint8_t*& shade);
+    // ... the same for a picture of the mission's windows the game magnifies with its own 2x sprite routine (ddm_hd.cpp
+    // Sprite2x - the screen's corner at the bottom right, 29x95, and a seal of the buttons at the top right, 41x41):
+    // `colourKey` transparent, `marker` its shadow colour (0xFFFFFFFF: none). Without a file the picture is collected
+    // for tools\hd\upscale_menu_parts.py (only where hd\work exists).
+    bool WindowPicture(const Buf& src, const RECT& r, uint32_t colourKey, uint32_t marker, int& w2, int& h2,
+                       const uint32_t*& bgra, const uint8_t*& shade);
 
     // A picture of the opened map at its own size (DDM::ScaledPicture16): by [Display] MinimapHD - 3 the one made
     // from the level's HD background and tinted like the game's parchment (hd\minimap\parchment\<key>.hdp), 2 the

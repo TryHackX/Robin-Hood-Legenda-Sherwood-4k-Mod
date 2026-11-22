@@ -1069,6 +1069,30 @@ bool InterfacePicture(const Buf& src, const RECT& r, int& w2, int& h2, const uin
     return true;
 }
 
+bool WindowPicture(const Buf& src, const RECT& r, uint32_t colourKey, uint32_t marker, int& w2, int& h2,
+                   const uint32_t*& bgra, const uint8_t*& shade) {
+    if (!SherwoodConfig::Get().hdMenu || !Diag::IsMainThread()) return false;
+    const int w = r.right - r.left, h = r.bottom - r.top;
+    if (w < 4 || h < 4 || static_cast<int64_t>(w) * h > 640 * 480 || r.left < 0 || r.top < 0 || r.right > src.w ||
+        r.bottom > src.h) {
+        return false;
+    }
+    const uint64_t key = Fnv(src, r);
+    const Picture* p = LoadPicture(key, w, h);
+    if (!p) {
+        static std::unordered_set<uint64_t> s_collected;        // asked once per key (the collector checks a file)
+        if (!DDM::HD::WorkFolder().empty() && s_collected.size() < 1000 && s_collected.insert(key).second) {
+            Collect(key, src, r, colourKey, marker);
+        }
+        return false;
+    }
+    w2 = p->w2;
+    h2 = p->h2;
+    bgra = p->bgra.data();
+    shade = p->shade.data();
+    return true;
+}
+
 namespace {
     // the opened map's pictures (tools\hd\make_all_minimaps.ps1): 0 = clean, 1 = parchment (made from the levels'
     // HD backgrounds), 2 = classic (a game picture kept as it is, upscaled - the Sherwood camp's); by content key,

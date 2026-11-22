@@ -60,6 +60,8 @@ namespace {
     std::atomic<int> g_mainCmd{ 0 };
     float g_zoneqPt[2]{};           // cmd 4 "zoneq": the point asked about, and the answer
     char  g_zoneqOut[1024]{};
+    int   g_gridArgs[5]{};          // cmd 6 "pointergrid": x0 y0 x1 y1 step, and the file it writes
+    std::string g_gridPath;
     // the last calls of the zone-under-a-point routine and of the cursor's choice (InstallZoneProbe)
     struct ZoneCall { uint32_t caller; float x, y; uint32_t zone, cc; uint16_t c4; uint8_t alt; uint32_t charZone; float cx, cy; };
     struct CursorCall { uint32_t caller; float x, y; uint32_t zoneIn; uint16_t id; };
@@ -419,6 +421,22 @@ namespace {
             while (g_mainCmd.load() != 0 && GetTickCount() - t0 < 3000) Sleep(5);
             if (g_mainCmd.exchange(0) != 0) { Ack(seq, "err no game tick in 3 s"); return; }
             Ack(seq, "ok %.0f,%.0f %s", x, y, g_zoneqOut);
+        } else if (!std::strcmp(cmd, "pointergrid")) {
+            // pointergrid X0 Y0 X1 Y1 STEP NAME: UiScale::ClassifyPointer over a grid of screen points -> NAME.csv
+            // (x, y, class, seeThrough; tools\hd\plot_pointer.py), on the main thread
+            char name[128]{};
+            if (std::sscanf(args, "%d %d %d %d %d %127s", &g_gridArgs[0], &g_gridArgs[1], &g_gridArgs[2], &g_gridArgs[3],
+                            &g_gridArgs[4], name) != 6 || g_gridArgs[4] < 2) {
+                Ack(seq, "err usage: pointergrid X0 Y0 X1 Y1 STEP NAME");
+                return;
+            }
+            g_gridPath = g_dir + name + ".csv";
+            g_zoneqOut[0] = 0;
+            g_mainCmd.store(6);
+            const DWORD t0 = GetTickCount();
+            while (g_mainCmd.load() != 0 && GetTickCount() - t0 < 5000) Sleep(5);
+            if (g_mainCmd.exchange(0) != 0) { Ack(seq, "err no game tick in 5 s"); return; }
+            Ack(seq, "ok %s %s", g_gridPath.c_str(), g_zoneqOut);
         } else if (!std::strcmp(cmd, "zonelog")) {
             // the last calls of the zone-under-a-point routine and of the cursor's choice (newest first)
             std::string s;
@@ -934,6 +952,27 @@ void OnGameTick() {
             reinterpret_cast<PFN_ConsoleCommand>(0x0045CDA0)(console, 0, 0);
             Logger::Warn("TEST MODE: console command WIN - the mission counts as won.");
         }
+        g_mainCmd.store(0);
+        return;
+    }
+    if (cmd == 6) {
+        FILE* f = _fsopen(g_gridPath.c_str(), "w", _SH_DENYNO);
+        unsigned counts[5]{}, see = 0;
+        if (f) {
+            std::fprintf(f, "x,y,class,seeThrough\n");
+            for (int y = g_gridArgs[1]; y <= g_gridArgs[3]; y += g_gridArgs[4]) {
+                for (int x = g_gridArgs[0]; x <= g_gridArgs[2]; x += g_gridArgs[4]) {
+                    int st = 0;
+                    const int c = UiScale::ClassifyPointer(static_cast<float>(x), static_cast<float>(y), &st);
+                    std::fprintf(f, "%d,%d,%d,%d\n", x, y, c, st);
+                    if (c >= 0 && c < 5) ++counts[c];
+                    if (st) ++see;
+                }
+            }
+            std::fclose(f);
+        }
+        std::snprintf(g_zoneqOut, sizeof(g_zoneqOut), "world=%u window=%u worldOffPoint=%u interface=%u seeThroughSkipped=%u",
+                      counts[0], counts[1], counts[2], counts[4], see);
         g_mainCmd.store(0);
         return;
     }

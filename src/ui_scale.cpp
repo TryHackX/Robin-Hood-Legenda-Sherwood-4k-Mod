@@ -182,8 +182,12 @@ namespace {
     uint8_t* g_camDragMap = nullptr;    // the drag started on the map's picture: it moves the camera
     uint8_t* g_winDragMap = nullptr;    // the drag moves the window
 
+    // The two windows of the hedge strip along the bottom edge (RHGame+0x1970 / +0x1A10, rectangle (0,H-80)-(W,H)).
+    constexpr uint32_t kHudVtable = 0x0067AD9C;
+
     // A point in the game's own coordinates lies on one of the mission's shown windows (rectangle +0x70, valid
     // +0x80, shown +0x5C): a window takes the pointer there whatever the pixel (the game's hit tests are rectangles).
+    // Not the hedge strip's two windows: since the full-height view only their children are hit (WidescreenPatch).
     bool OnMissionWindow(float x, float y) {
         auto* game = *reinterpret_cast<uint8_t* const*>(0x006C0B3C);
         if (!game || !Readable(game + 0x68, 0x10)) return false;
@@ -193,6 +197,7 @@ namespace {
         for (void** it = begin; it != end; ++it) {
             const auto* win = static_cast<const uint8_t*>(*it);
             if (!win || !Readable(win, 0x84) || !win[0x80] || !win[0x5C]) continue;
+            if (*reinterpret_cast<const uint32_t*>(win) == kHudVtable) continue;
             const float* rc = reinterpret_cast<const float*>(win + 0x70);
             if (x >= rc[0] && x < rc[2] && y >= rc[1] && y < rc[3]) return true;
         }
@@ -231,44 +236,145 @@ namespace {
         return nullptr;
     }
 
-    void MapBack(float x, float y, float w, float h, float& ox, float& oy) {
+    // Where the pointer at (x, y) goes: the point the game's windows see (ox, oy), the anchor it was mapped with, and
+    // whether the interface must take it although none of the game's windows lies there (block).
+    struct Mapping {
+        float ox = 0.0f, oy = 0.0f, ax = 0.0f, ay = 0.0f;
+        int   kind = 0;         // 0 the world, 1 an enlarged picture, 2 the dragged map, 3 the moved map's old place
+        bool  block = false;
+        int   skipped = 0;      // see-through pictures skipped
+    };
+
+    Mapping Resolve(float x, float y, float w, float h) {
         // Over the world (no enlarged picture under the mouse) the windows see the real position:
         // edge scrolling, the selection frame and the like work as without the scale.
+        Mapping m;
         float ax = x, ay = y;
         float f = static_cast<float>(g_factor);
-        bool found = false;
         if ((g_camDragMap || g_winDragMap) && g_mapAnchorValid) {
             // the map is being dragged: the pointer belongs to it wherever the cursor is (next to
             // the window the mapping changed, and the dragged window jumped back and forth)
             ax = g_mapAx;
             ay = g_mapAy;
             f = g_mapFactorUsed;
-            found = true;
+            m.kind = 2;
         }
-        if (!found) {
-            if (const Piece* p = PieceUnder(x, y, nullptr)) {
+        if (m.kind == 0) {
+            if (const Piece* p = PieceUnder(x, y, &m.skipped)) {
                 ax = p->ax;
                 ay = p->ay;
                 f = p->f;
-                found = true;
+                m.kind = 1;
             }
         }
-        if (!found && g_mapOrigValid && x >= g_mapOrig[0] && x < g_mapOrig[2] && y >= g_mapOrig[1] && y < g_mapOrig[3]) {
+        if (m.kind == 0 && g_mapOrigValid && x >= g_mapOrig[0] && x < g_mapOrig[2] && y >= g_mapOrig[1] && y < g_mapOrig[3]) {
             ax = w * 0.5f;      // where the moved map would be for the game: away from it, about the centre
             ay = h * 0.5f;
+            m.kind = 3;
         }
-        ox = ax + (x - ax) / f;
-        oy = ay + (y - ay) / f;
+        m.ox = ax + (x - ax) / f;
+        m.oy = ay + (y - ay) / f;
         const float g = static_cast<float>(g_factor);
         if (f != g && g > 1.0f) {
             // over the map at its own size: a tooltip drawn after the windows (at the interface's factor) must
             // still appear at the cursor - the anchor that maps the pointer's point there with that factor
-            ax = (ox * g - x) / (g - 1.0f);
-            ay = (oy * g - y) / (g - 1.0f);
+            ax = (m.ox * g - x) / (g - 1.0f);
+            ay = (m.oy * g - y) / (g - 1.0f);
         }
-        g_pointerAx = ax;
-        g_pointerAy = ay;
+        m.ax = ax;
+        m.ay = ay;
+        // Visible interface outside the game's windows (user 2026-11-22: "block it"): the enlarged pictures cover
+        // twice as much as the game's windows - the curled leaves of the hedge's ends, the top row of its middle
+        // pieces, the corners' ornaments - and the hedge strip along the bottom edge (black, rows from the band's
+        // top) is twice as high as the game's own interface window. The point the game gets there lies on none of
+        // its windows: the world took it - a click on the leaves walked a character behind the hedge or, from a
+        // middle piece, hundreds of pixels to the left. The interface takes such a pointer now (Hook_HitTest); its
+        // position stays as it was, so edge scrolling and the selection frame see the same point as before.
+        if (m.kind == 1) {
+            m.block = !OnMissionWindow(m.ox, m.oy);
+        } else if (m.kind == 0) {
+            const int band = DDM::LastHudBandTop();
+            m.block = band > 0 && y >= static_cast<float>(band) && !OnMissionWindow(m.ox, m.oy);
+        }
+        return m;
+    }
+
+    // the interface takes the pointer at this point although no window of the game lies there (main thread: set by
+    // the mission pointer's update, read by the window hit tests right after it)
+    bool  g_blockArmed = false;
+    float g_blockPt[2] = {};
+
+    void MapBack(float x, float y, float w, float h, float& ox, float& oy) {
+        const Mapping m = Resolve(x, y, w, h);
+        ox = m.ox;
+        oy = m.oy;
+        g_pointerAx = m.ax;
+        g_pointerAy = m.ay;
         g_pointerAnchor = true;
+        g_blockArmed = m.block;
+        g_blockPt[0] = m.ox;
+        g_blockPt[1] = m.oy;
+    }
+
+    // The window manager's input step (0x006193B0..): Pointer::Update, then every window's hit test (vtable +0x0C,
+    // the base 0x0061A6E0: the window's rectangle +0x70 and its children) with the pointer's position; the hit nodes
+    // form a list (a window's own node +0x90, next +0x9C). At 0x006194B4 the tests are done, ebp = the list - none: the
+    // world gets the event. The two hedge strip windows (vtable 0x0067AD9C, rectangle (0,H-80)-(W,H)) take no pointer
+    // themselves since the full-height view (WidescreenPatch: only their children are hit), so a pointer over the
+    // interface's visible pictures outside the game's windows reached the world. Then (g_blockArmed, set for exactly
+    // this position by MapBack) the first strip window takes it as on its own background - as in the unmodified game
+    // (0x0061A70F: its node, nothing after it). Only when no window was hit: the game's windows keep every pointer.
+    uint8_t* __cdecl ClaimForInterface(uint8_t* mgr) {
+        if (!g_blockArmed || !mgr) return nullptr;
+        auto* game = *reinterpret_cast<uint8_t* const*>(0x006C0B3C);
+        if (!game || mgr != game + 0x68 || !Readable(mgr, 0x1760)) return nullptr;
+        const uint8_t* ptr = *reinterpret_cast<uint8_t* const*>(mgr + 0x1758);
+        if (!ptr || !Readable(ptr + 0x80, 8)) return nullptr;
+        const float* pos = reinterpret_cast<const float*>(ptr + 0x80);
+        if (pos[0] != g_blockPt[0] || pos[1] != g_blockPt[1]) return nullptr;
+        void** begin = *reinterpret_cast<void***>(mgr + 8);
+        void** end = *reinterpret_cast<void***>(mgr + 0xC);
+        const uint8_t* enabled = *reinterpret_cast<uint8_t* const*>(mgr + 0x28);
+        if (!begin || end <= begin || end - begin > 256 || !enabled) return nullptr;
+        for (void** it = begin; it != end; ++it) {
+            auto* win = static_cast<uint8_t*>(*it);
+            if (enabled[it - begin] != 1 || !win || !Readable(win, 0xA0)) continue;
+            if (*reinterpret_cast<const uint32_t*>(win) != kHudVtable || !win[0x5C] || !win[0x5D]) continue;
+            *reinterpret_cast<uint32_t*>(win + 0x9C) = 0;
+            return win + 0x90;
+        }
+        return nullptr;
+    }
+
+    // The end of the hit tests' loop, 0x006194AF: inc ebx / cmp ebx, eax / jb 0x0061945D (5 bytes, no jump lands
+    // inside). 0x006194B4 and 0x006194B8 are also reached from the captured-window paths and with the tests skipped
+    // (0x0061941B, 0x00619437, 0x0061944F, 0x00619457) - those are left alone: only the loop over all windows claims.
+    constexpr uintptr_t kAddrLoopEnd = 0x006194AF;
+    void* g_loopBack = reinterpret_cast<void*>(0x0061945D);
+    void* g_hitsDoneBack = reinterpret_cast<void*>(0x006194B4);
+
+    // the manager is [esp+10h] there
+    __declspec(naked) void LoopEndStub() {
+        __asm {
+            inc  ebx
+            cmp  ebx, eax
+            jb   again
+            test ebp, ebp
+            jnz  done
+            pushad
+            pushfd
+            mov  eax, dword ptr [esp + 0x34]    // [esp+10h] past pushad (20h) and pushfd (4)
+            push eax
+            call ClaimForInterface
+            add  esp, 4
+            mov  dword ptr [esp + 0x0C], eax    // pushad's ebp
+            popfd
+            popad
+        done:
+            jmp  dword ptr [g_hitsDoneBack]
+        again:
+            jmp  dword ptr [g_loopBack]
+        }
     }
 
     // ---- menu zoom (see ui_scale.h)
@@ -508,6 +614,7 @@ namespace {
     uint32_t PointerUpdate(void* ptr, void* edx, int16_t* state);
 
     uint32_t __fastcall Hook_PointerUpdate(void* ptr, void* edx, int16_t* state) {
+        g_blockArmed = false;   // MapBack sets it again for the mission's pointer
         const uint32_t r = PointerUpdate(ptr, edx, state);
         if (IsMissionPointer(ptr)) AfterMissionPointer(static_cast<const uint8_t*>(ptr));
         return r;
@@ -1791,17 +1898,31 @@ void NoteSource(const void* surface, unsigned serial, const RECT& s, bool keyed,
     g_lastPiece = -1;
 }
 
+int ClassifyPointer(float x, float y, int* seeThrough) {
+    if (g_factor <= 1) return 0;
+    float w, h;
+    ScreenSize(w, h);
+    const Mapping m = Resolve(x, y, w, h);
+    if (seeThrough) *seeThrough = m.skipped;
+    if (m.block) return 4;
+    if (m.kind == 0) return 0;
+    return OnMissionWindow(m.ox, m.oy) ? 1 : 2;
+}
+
 int DescribePointer(float x, float y, char* out, int size) {
     if (!out || size < 64) return 0;
+    float w, h;
+    ScreenSize(w, h);
+    const Mapping m = Resolve(x, y, w, h);
     int skipped = 0;
     const Piece* p = PieceUnder(x, y, &skipped);
     if (!p) {
-        return std::snprintf(out, size, "world pieces=%u seeThrough=%d", static_cast<unsigned>(g_pieces[g_piecesCur ^ 1].size()), skipped);
+        return std::snprintf(out, size, "%s -> %.1f,%.1f block=%d band=%d pieces=%u seeThrough=%d", m.kind == 0 ? "world" : "other",
+                             m.ox, m.oy, m.block ? 1 : 0, DDM::LastHudBandTop(), static_cast<unsigned>(g_pieces[g_piecesCur ^ 1].size()), skipped);
     }
-    const float ox = p->ax + (x - p->ax) / p->f, oy = p->ay + (y - p->ay) / p->f;
-    return std::snprintf(out, size, "piece %.0f,%.0f,%.0f,%.0f anchor=%.0f,%.0f f=%.2f keyed=%d src=%p s=%.0f,%.0f,%.0f,%.0f -> %.1f,%.1f onWindow=%d seeThroughHere=%d skipped=%d",
-                         p->l, p->t, p->r, p->b, p->ax, p->ay, p->f, p->keyed ? 1 : 0, p->src, p->sl, p->st, p->sr, p->sb, ox, oy,
-                         OnMissionWindow(ox, oy) ? 1 : 0, SeeThrough(*p, x, y) ? 1 : 0, skipped);
+    return std::snprintf(out, size, "piece %.0f,%.0f,%.0f,%.0f anchor=%.0f,%.0f f=%.2f keyed=%d src=%p s=%.0f,%.0f,%.0f,%.0f -> %.1f,%.1f onWindow=%d block=%d seeThroughHere=%d skipped=%d",
+                         p->l, p->t, p->r, p->b, p->ax, p->ay, p->f, p->keyed ? 1 : 0, p->src, p->sl, p->st, p->sr, p->sb, m.ox, m.oy,
+                         OnMissionWindow(m.ox, m.oy) ? 1 : 0, m.block ? 1 : 0, SeeThrough(*p, x, y) ? 1 : 0, skipped);
 }
 
 int DescribeWindows(char* out, int size) {
@@ -1966,6 +2087,20 @@ void Install() {
         }
     }
     finishMenuZoom();
+    if (ok) {
+        // the interface takes the pointer over its visible pictures outside the game's windows (see Resolve and
+        // ClaimForInterface): mov eax, [esp+4Ch] / inc ebx / cmp ebx, eax / jb 0x0061945D / mov [esp+48h], ebp
+        static const uint8_t kLoopEnd[] = { 0x8B, 0x44, 0x24, 0x4C, 0x43, 0x3B, 0xD8, 0x72, 0xA9, 0x89, 0x6C, 0x24, 0x48 };
+        bool claim = false;
+        if (std::memcmp(reinterpret_cast<const void*>(kAddrLoopEnd - 4), kLoopEnd, sizeof(kLoopEnd)) == 0) {
+            uint8_t jmp[5] = { 0xE9, 0, 0, 0, 0 };
+            const int32_t rel = static_cast<int32_t>(reinterpret_cast<uintptr_t>(&LoopEndStub) - (kAddrLoopEnd + 5));
+            std::memcpy(&jmp[1], &rel, 4);
+            claim = Memory::PatchBytes(kAddrLoopEnd, jmp, sizeof(jmp));
+        }
+        Logger::Info("UiScale: the interface's visible pictures outside the game's windows take the pointer: %s.",
+                     claim ? "on" : "NOT installed (bytes differ)");
+    }
     {
         static const uint8_t kLine[] = { 0x6A, 0xFF, 0x68, 0x78, 0x29, 0x67, 0x00, 0x64, 0xA1, 0x00, 0x00, 0x00, 0x00, 0x50 };
         Hook(0x005ECBD0, kLine, sizeof(kLine), reinterpret_cast<void*>(&Hook_DrawLine), reinterpret_cast<void**>(&o_DrawLine));

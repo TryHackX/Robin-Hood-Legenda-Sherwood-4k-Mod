@@ -418,3 +418,20 @@ plus stan generatora, dziennik każdego `rand()` (tick, kontekst, wołający, wa
 - **Wybór kursora**: `0x004CC100` thiscall(silnik, bool*, pt) ret 8 → id (wołana z `0x004DD53D`): 0x11 (0x1C) = idź, gdy strefa pod kursorem jest strefą postaci; 0x23 (0x1D) = nie da się — punkt poza siatką (`[silnik+0x3FB4]`×64, `[silnik+0x3FB6]`×64) albo brak strefy; strefy różne: flagi 0x01|0x02 i sieć +0x64 obu stref, 0x1000 → `0x004CC970` (kursor obszaru: 0x10E/0x10F/0x60), 0x8000 → droga `0x004E2150` (0x42/0x43), bez drogi — rodzic +0x98 i wywołanie od nowa. Strefa postaci: `[[[silnik+0x49FC]]+8]+0x50` → +0xE0 (pozycja +0x24, piętro +0xDE) [Z]. Obrazki: 32×23 = krzyżyk, 28×32 = idź.
 - **Róg mapy wozu (Croisement02)**: trawa pod otwartą bramką leży w strefie ziemi (wielokąt id 0 sięga y 1150; mur z bramą to przeszkoda id 19, ramka 1000..1658 × 857..1084). Krzyżyk był przez moda: prawy koniec żywopłotu (320×165, w 2× od rogu: 1920..2560 × 1110..1440) przeliczał wskaźnik nad swoją przezroczystą górą — świat dostawał (kursor + (2560, 1440)) / 2, za dolną krawędzią mapy (poprawione w 1.3.4).
 - Polecenia testu: `zones NAZWA` (strefy z wielokątami i komórki do pliku), `zoneq X Y` (szukanie gry w punkcie poziomu, w wątku gry), `zonelog` (ostatnie wywołania `0x004DEBF0` i `0x004CC100`), `pointer [X Y]` (co skalowanie interfejsu robi ze wskaźnikiem).
+
+## Menedżer okien: testy trafienia, przewijanie przy krawędzi (2026-11-22, 1.3.5)
+- **Krok wejścia menedżera** `0x006193B0`: `Pointer::Update(state)` na `[mgr+0x1758]` (`0x00628210`), potem kopia pozycji
+  wskaźnika (+0x80) jako punkt testów. `[mgr+0x17F4]` (okno przechwytujące) → jego test (vtable +0x0C); inaczej `[mgr+0x17F0]` →
+  vtable +0x18; inaczej pętla po oknach z flagą `[[mgr+0x28]+i] == 1`: test trafienia → lista węzłów (węzeł okna +0x90,
+  następny +0x9C). Koniec pętli `0x006194AF` (`inc ebx / cmp ebx, eax / jb 0x0061945D`), w `0x006194B4` ebp = lista, brak
+  trafienia → `0x006197AF` (zdarzenie idzie do świata) [Z]. **`0x006194B4` i `0x006194B8` są celami skoków**
+  (`0x00619437`, `0x0061944F` / `0x0061941B`, `0x00619457`) — wstawka 6 bajtów w `0x006194B4` dała PRIV_INSTRUCTION
+  w `0x006194B8` [K].
+- **Bazowy test trafienia** `0x0061A6E0` (vtable +0x0C okien paska HUD, vtable `0x0067AD9C`; portrety `0x005D7EA0`, mapa
+  `0x0054A640`): pokazane +0x5C, aktywne +0x5D, prostokąt +0x70 (`0x00608400`) → węzeł +0x90 (`[+0x9C] = 0`); dzieci przez
+  vtable +0x18 — także poza prostokątem rodzica. WidescreenPatch zakłada tu hak: okna paska (RHGame+0x1970/+0x1A10) są
+  testowane z unieważnionym prostokątem, więc trafiają tylko ich dzieci [Z].
+- **Przewijanie przy krawędzi** idzie po pozycji wskaźnika, także gdy wskaźnik trzyma okno; tylko przy samym brzegu
+  (x = 0 / W−1, y = 0 / H−1 — 2–6 px od brzegu już nie przewija) [Z, test w tle].
+- Obiekt zaznaczonej postaci: `[[[silnik+0x49FC]]+8]+0x50`, pozycja +0x24 (czytanie wprost — `zonelog` zna postać tylko
+  z chwili, gdy wskaźnik był nad światem).

@@ -405,6 +405,26 @@ wczytaniu (11:56:21, 11:56:26) i jedna bez przypisanej przyczyny (11:56:52–57;
 jednym rdzeniu — przez wcześniejsze 45 s eksportu gra szła równo). Do obserwacji. Klawisze F6/F7/F8 nadal
 niepotwierdzone (w logu brak „background variant switched").
 
+### 1.3.5 (2026-11-22) — widoczny interfejs blokuje kliknięcie w świat
+- Pytanie użytkownika: czy przezroczyste części przez skalowanie zachodzą gdzieś jeszcze. Pomiar całego ekranu (polecenie
+  testu `pointergrid`, `tools\hd\plot_pointer.py`, 14 400 punktów): poprawka 1.3.4 działa wszędzie (ok. 640 punktów
+  przezroczystych części — oba końce żywopłotu, środkowe kawałki, ozdoby rogów), ale był stary błąd odwrotny. Widoczne
+  piksele interfejsu poza oknami gry (zawinięte liście w obu dolnych rogach, górny rząd liści nad czarnym paskiem, ozdoby
+  górnych rogów, czerwona pieczęć przy prawej krawędzi) i czarny pasek żywopłotu między widżetami oddawały kliknięcie
+  światu, i to w inny punkt: przy kamerze u góry mapy klik w liście wysyłał postać 60 px niżej, za żywopłot, a ze
+  środkowego kawałka 228 px w lewo; w pasku — w ukryte miejsce pod nim.
+- Teraz (prośba „blokuj”) interfejs przejmuje taki wskaźnik. `UiScale::Resolve` oznacza punkt jako interfejs, gdy piksel
+  powiększonego obrazka jest nieprzezroczysty, a przeliczony punkt nie leży na oknie gry, albo gdy kursor jest w wierszach
+  paska od `DDM::LastHudBandTop`. Po testach trafienia menedżera okien (koniec pętli `0x006194AF`, wstawka `LoopEndStub`),
+  gdy żadne okno nie zostało trafione, okno paska HUD bierze wskaźnik jak w niezmienionej grze (`ClaimForInterface`:
+  węzeł +0x90). Pozycja wskaźnika się nie zmienia: przewijanie przy krawędziach (gra przewija dopiero przy samym brzegu)
+  i ramka zaznaczania działają jak dotąd. Okna gry (portrety, zwój mapy) wygrywają zawsze — blokada działa tylko wtedy,
+  gdy nic nie zostało trafione. Pierwsza próba z wstawką w `0x006194B4` wywróciła grę
+  (`0x006194B8` jest celem skoków — RE_NOTES).
+- Sprawdzone w teście w tle: klik w liście (lewy i prawy koniec, środek) i w pasek — postać stoi (pod liśćmi zwykła
+  ziemia); klik w trawę — idzie; portret — zaznacza; przewijanie w dół, w lewo, w prawo i w obu górnych rogach nad
+  zablokowanym interfejsem; ramka zaznaczania przeciągnięta na żywopłot kończy się normalnie.
+
 ### 1.3.4 (2026-11-22) — trawa pod bramką na mapie wozu
 - **Róg mapy wozu (Croisement02)** (zgłoszenie: „w jednym miejscu wciąż nie mogę wejść, mimo że tam zwykła trawa”,
   „przez bramkę po trawie pod nią powinno się dać chodzić”, „przy samej krawędzi mapy nie pozwalaj”). Diagnoza z 1.3.3

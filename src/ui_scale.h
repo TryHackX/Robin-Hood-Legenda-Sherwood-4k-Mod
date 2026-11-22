@@ -27,6 +27,10 @@ namespace UiScale {
     void NoteSource(const void* surface, unsigned serial, const RECT& s, bool keyed, uint16_t key, bool mirrorX, bool mirrorY);
     // test harness: what the pointer at (x, y) is mapped to and why
     int DescribePointer(float x, float y, char* out, int size);
+    // ... in short: 0 the world gets the real position, 1 a window of the game takes the pointer, 2 a point off the
+    // windows the world gets (the dragged map, the moved map's old place), 4 the interface takes it (its visible
+    // pictures and the hedge strip outside the game's windows); seeThrough = pictures skipped there as see-through
+    int ClassifyPointer(float x, float y, int* seeThrough);
     // ... the last of them belonged to the opened map: drawn at the map's own size ([Display] MapScale,
     // 150..500 %, a tall map no larger than fits above the hedge), its pictures through DDM::ScaledPicture16
     bool LastScaledWasMap();

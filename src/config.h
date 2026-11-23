@@ -53,6 +53,11 @@ struct SherwoodConfig {
     bool hdMenu = true;          // with menuZoom: upscaled menu pictures (hd\menu\<variant>\) where they exist
     bool hdMenuRemake = true;    // ... and remade ones (hd\menu\remake\, tools\hd\import_menu_remake.py) before those
     int hdKeyBetween = 0x78;     // virtual key that switches them on and off (F9); 0 = none
+    // the mod's own keys as DirectInput scan codes (ModKeys::Action: settings panel, HD background original / HD,
+    // next and previous HD variant, in-between frames; 0 = none) - the virtual keys above follow them (ModKeys::Set).
+    // In the INI: a key's name (F10, Insert, A ...), its scan code (0x44) or, as written before 1.3.6, its decimal
+    // Windows key code (121 = F10).
+    int modKeys[5] = { 0x44, 0x42, 0x41, 0x40, 0x43 };
 
     // [Performance]
     bool highResolutionTimer = true;
@@ -96,4 +101,7 @@ struct SherwoodConfig {
     // scan code of a name or "0x3F" (0 = unknown) and the name of a code (nullptr = none in the list)
     static int KeyFromName(const char* name);
     static const char* KeyName(int code);
+    // DirectInput scan code <-> Windows virtual key (0 = none / unknown)
+    static int VkFromDik(int dik);
+    static int DikFromVk(int vk);
 };

@@ -1,5 +1,6 @@
 #include "widescreen_patch.h"
 #include "config.h"
+#include "key_dialog.h"
 #include "ddm/ddm_hd.h"
 #include "ui_scale.h"
 #include "view_zoom.h"
@@ -112,6 +113,7 @@ namespace {
 
     uint8_t* __cdecl Hook_GetLocalizedString(uint8_t* outStr, uint32_t stringId) {
         uint8_t* res = g_OrigGetLocalizedString(outStr, stringId);
+        if (res && KeyDialog::ApplyRowLabel(res, stringId, _ReturnAddress())) return res;   // the mod's rows in the key screen
         if (res && SherwoodConfig::Get().replace1024x768) {
             const wchar_t* customLabel = nullptr;
             if (stringId == 0x2B) {        // 43: originally "640 * 480"
@@ -620,6 +622,10 @@ namespace {
 // the game's own keys still works where the level is large enough.
 float CameraStrip() {
     return g_cameraStrip;
+}
+
+bool TextHookInstalled() {
+    return g_OrigGetLocalizedString != nullptr;
 }
 
 void OnGameTick(unsigned char* engine) {

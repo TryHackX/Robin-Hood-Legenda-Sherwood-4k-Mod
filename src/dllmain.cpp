@@ -21,6 +21,7 @@
 #include "input_fix.h"
 #include "test_harness.h"
 #include "coop_probe.h"
+#include "key_dialog.h"
 #include "settings_menu.h"
 #include "ui_scale.h"
 #include "view_zoom.h"
@@ -380,6 +381,7 @@ namespace {
         UiScale::Install();
         ViewZoom::Install();        // after UiScale: it checks the original bytes of CenterCameraOn
         SettingsMenu::Install();
+        KeyDialog::Install();       // the mod's keys in the game's key screen (Options -> Keyboard)
         CpuOptimizer::Initialize();
         MemoryOpt::Initialize();
         InputFix::Initialize();

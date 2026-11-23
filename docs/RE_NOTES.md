@@ -435,3 +435,22 @@ plus stan generatora, dziennik każdego `rand()` (tick, kontekst, wołający, wa
   (x = 0 / W−1, y = 0 / H−1 — 2–6 px od brzegu już nie przewija) [Z, test w tle].
 - Obiekt zaznaczonej postaci: `[[[silnik+0x49FC]]+8]+0x50`, pozycja +0x24 (czytanie wprost — `zonelog` zna postać tylko
   z chwili, gdy wskaźnik był nad światem).
+
+## Ekran Opcje → Klawiatura (2026-11-23, 1.3.6)
+- **Okno** vtable `0x006798E8` (konstruktor do `0x0053FC9A`, OnCreate `0x0053FDD0`, destruktor `0x0053FCC0`, przyciski
+  `0x0053FB00`): +0x140 OK (`0x005405E0`: kopia +0x868 → profil +0x34 (i +0x3C), zapis profilu `0x0055E160`, zastosowanie
+  w grze `[0x006C0B54]` → `0x00518700`), +0x240 Domyślne 1 (`0x00540540`, `keyset1.cfg`), +0x340 Domyślne 2
+  (`0x00540590`, `keyset2.cfg`), +0x440 Wybór (`0x00540650`: zestaw gracza z profilu +0x3C), +0x540 Anuluj; lista +0x640;
+  robocza kopia klawiszy (RHKeyConfig) +0x868; profil +0x870 (= `[0x006C0E48+0x28]`, `0x0055DBB0`) [Z].
+- **RHKeyConfig**: +0 u16* (0x3A bajtów = 29 kodów DirectInput), +4 u16. Count `0x0051EBB0` (`mov ax, 1Ch` — zawsze 28),
+  FindKey `0x0051EBC0` (akcja z klawiszem, 0xFFFF brak), KeyAt `0x0051EC20` (&kody[i]), przypisanie `0x0051EBF0`, wczytanie
+  zestawu `0x0051ECE0` (KEYSET1/2.CFG: 16 B nagłówka, u16, 29 kodów), destruktor `0x0051EBA0` [Z].
+- **Lista klawiszy**: SetConfig `0x005CF1C0` (+0x20C = kopia, Refresh), Refresh `0x005CED90` (Count wierszy: tekst
+  `0x97+i` — wywołanie z `0x005CEE58`, powrót `0x005CEE5D` — + „ :”, `|`, nazwa klawisza `0x005CD010` (teksty od 0xE9; te
+  same numery 0xB3.. to strzałki i lewy Shift)), wiersz czekający na klawisz +0x214 (0xFFFF brak), +0x188 zaznaczony;
+  naciśnięty klawisz: `0x005CE660` mówi, które tylko czyszczą wiersz (Esc 01, F10 44, F11 57, Home C7, ScrollLock 46,
+  NumEnter 9C, PrtSc B7, Win DB/DC, Apps DD), inaczej FindKey czyści akcję, która go miała („Puste!”), i KeyAt(wiersz)
+  dostaje kod; tekst wiersza `0x005CF010` [Z].
+- **Teksty gry**: `0x005E23D0` cdecl(std::wstring* out, id) — prawdziwe UTF-16 („Przybliż” kończy U+017C); VC6
+  std::wstring: +0 bajt alokatora, +4 wchar_t* (bajt licznika przed buforem), +8 długość, +0xC pojemność; _Grow
+  `0x004239E0` thiscall(n, trim), _Tidy `0x004238C0`. Hak WidescreenPatch (etykiety rozdzielczości) jest tu jedynym [Z].

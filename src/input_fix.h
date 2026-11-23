@@ -36,4 +36,8 @@ namespace InputFix {
     // own keys (F6..F10), the other quick key, or a key of another action in the game's key settings;
     // nullptr = free. The F10 panel skips such keys, a clash set in the INI is logged.
     const char* QuickKeyClash(int dik, bool load);
+
+    // Who in the game has this DirectInput key: one of its actions in its key settings, or the quick save / load
+    // key as the mod uses it; nullptr = nobody. The mod's own keys must not sit on such a key (ModKeys).
+    const char* GameKeyUse(int dik);
 }

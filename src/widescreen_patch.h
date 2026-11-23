@@ -10,4 +10,7 @@ namespace WidescreenPatch {
     // Full-height view: the bottom rows the hedge covers, in frame pixels (80 x interface scale; 0 off) -
     // the camera may bring the level's bottom edge above them.
     float CameraStrip();
+
+    // the game's text routine (0x005E23D0) is hooked here (the resolution labels; KeyDialog's row labels go through it)
+    bool TextHookInstalled();
 }

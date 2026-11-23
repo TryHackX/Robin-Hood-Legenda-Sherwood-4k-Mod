@@ -1,7 +1,9 @@
 #include "settings_menu.h"
 #include "config.h"
 #include "input_fix.h"
+#include "key_dialog.h"
 #include "logger.h"
+#include "mod_keys.h"
 #include "ui_scale.h"
 #include "view_zoom.h"
 #include "window_manager.h"
@@ -14,6 +16,7 @@
 #include <cctype>
 #include <cstdio>
 #include <cstring>
+#include <string>
 #include <vector>
 
 // See settings_menu.h.
@@ -39,15 +42,41 @@ namespace {
     enum Item {
         kHdBackground, kHdSprites, kBetween, kSmoothSprites, kWater,
         kUiScale, kMap, kMapDrag, kMapSize, kMapPicture, kSmoothZoom, kZoomStep, kZoomMax, kMenuZoom, kHdMenu,
-        kVSync, kFilter, kScroll, kFps, kMouse, kQuickSave, kQuickLoad,
+        kVSync, kFilter, kScroll, kFps, kMouse,
+        kKeyPanel, kKeyHdToggle, kKeyHdNext, kKeyHdPrev, kKeyBetween,     // ModKeys order
+        kQuickSave, kQuickLoad, kKeyReset,
         kItemCount
     };
 
+    // the mod's key a row sets (-1: none)
+    int KeyAction(int id) {
+        return (id >= kKeyPanel && id <= kKeyBetween) ? id - kKeyPanel : -1;
+    }
+
+    std::string KeyText(int dik) {
+        char name[32];
+        ModKeys::Name(dik, name, sizeof(name));
+        return name;
+    }
+
+    // a key row waiting for its key (the panel's own capture), and a short word on a row after a refused key
+    std::atomic<int> g_capture{ -1 };        // row id; set and cleared on the main thread
+    std::atomic<int> g_captured{ -1 };       // the scan code pressed meanwhile (input thread -> main thread)
+    int   g_msgRow = -1;
+    char  g_msg[64] = {};
+    DWORD g_msgUntil = 0;
+
     const char* Label(int id) {
+        static char hd[64], between[64];
         switch (id) {
-            case kHdBackground:  return "TLO HD - WARIANT (F6 F7 F8)";
+            case kHdBackground:
+                std::snprintf(hd, sizeof(hd), "TLO HD - WARIANT (%s %s %s)", KeyText(ModKeys::Dik(ModKeys::kHdPrev)).c_str(),
+                              KeyText(ModKeys::Dik(ModKeys::kHdNext)).c_str(), KeyText(ModKeys::Dik(ModKeys::kHdToggle)).c_str());
+                return hd;
             case kHdSprites:     return "POSTACIE I OBIEKTY HD";
-            case kBetween:       return "KLATKI POSREDNIE ANIMACJI (F9)";
+            case kBetween:
+                std::snprintf(between, sizeof(between), "KLATKI POSREDNIE ANIMACJI (%s)", KeyText(ModKeys::Dik(ModKeys::kBetween)).c_str());
+                return between;
             case kSmoothSprites: return "WYGLADZANIE OBIEKTOW BEZ HD";
             case kWater:         return "WODA NA TLE HD";
             case kUiScale:       return "INTERFEJS W MISJI";
@@ -65,8 +94,14 @@ namespace {
             case kScroll:        return "PLYNNE PRZEWIJANIE MAPY";
             case kFps:           return "LICZNIK FPS";
             case kMouse:         return "PREDKOSC KURSORA";
+            case kKeyPanel:
+            case kKeyHdToggle:
+            case kKeyHdNext:
+            case kKeyHdPrev:
+            case kKeyBetween:    return ModKeys::PanelLabel(KeyAction(id));
             case kQuickSave:     return "KLAWISZ SZYBKIEGO ZAPISU";
             case kQuickLoad:     return "KLAWISZ SZYBKIEGO ODCZYTU";
+            case kKeyReset:      return "KLAWISZE - PRZYWROC DOMYSLNE";
             default:             return "";
         }
     }
@@ -125,16 +160,6 @@ namespace {
         const char* name = SherwoodConfig::KeyName(value);
         if (name) std::snprintf(out, n, "%s", name);
         else std::snprintf(out, n, "KOD 0X%02X", value);
-    }
-
-    void WriteQuickKey(const char* key, int value) {
-        char text[24];
-        const char* name = value > 0 ? SherwoodConfig::KeyName(value) : nullptr;
-        if (value < 0) text[0] = 0;
-        else if (value == 0) std::snprintf(text, sizeof(text), "none");
-        else if (name) std::snprintf(text, sizeof(text), "%s", name);
-        else std::snprintf(text, sizeof(text), "0x%02X", value);
-        WritePrivateProfileStringA("Input", key, text, SherwoodConfig::Get().iniPath.c_str());
     }
 
     // the next key of the list that clashes with nothing (the mod's F6..F10, the other quick key, the game's
@@ -217,9 +242,53 @@ namespace {
                 break;
             case kQuickSave:     QuickKeyText(cfg.quickSaveKey, false, out, n); break;
             case kQuickLoad:     QuickKeyText(cfg.quickLoadKey, true, out, n); break;
+            case kKeyPanel:
+            case kKeyHdToggle:
+            case kKeyHdNext:
+            case kKeyHdPrev:
+            case kKeyBetween:    std::snprintf(out, n, "%s", KeyText(ModKeys::Dik(KeyAction(id))).c_str()); break;
+            case kKeyReset:      std::snprintf(out, n, "ENTER LUB KLIK"); break;
             default: out[0] = 0; break;
         }
+        if (g_capture.load() == id) {
+            std::snprintf(out, n, "NACISNIJ KLAWISZ (ESC - ANULUJ)");
+        } else if (g_msgRow == id && GetTickCount() < g_msgUntil) {
+            std::snprintf(out, n, "%s", g_msg);
+        }
         for (char* p = out; *p; ++p) *p = static_cast<char>(std::toupper(static_cast<unsigned char>(*p)));
+    }
+
+    void ShowMessage(int row, const char* text) {
+        g_msgRow = row;
+        std::snprintf(g_msg, sizeof(g_msg), "%s", text);
+        g_msgUntil = GetTickCount() + 2500;
+    }
+
+    // a key for one of the mod's actions, if nothing else has it (another of the mod's keys, one of the game's
+    // actions; for the panel also not its own keys)
+    void SetModKey(int id, int dik) {
+        const int action = KeyAction(id);
+        if (action < 0) return;
+        if (dik == 0) {
+            if (action == ModKeys::kPanel) { ShowMessage(id, "PANEL MUSI MIEC KLAWISZ"); return; }
+            ModKeys::Set(action, 0);
+            return;
+        }
+        if (ModKeys::ActionOf(dik, action) >= 0) { ShowMessage(id, "ZAJETY - INNY KLAWISZ MODA"); return; }
+        if (InputFix::GameKeyUse(dik)) { ShowMessage(id, "ZAJETY - STEROWANIE GRY"); return; }
+        if (action == ModKeys::kPanel && (dik == 0xC8 || dik == 0xD0 || dik == 0xCB || dik == 0xCD || dik == 0x1C)) {
+            ShowMessage(id, "TEN KLAWISZ OBSLUGUJE PANEL");
+            return;
+        }
+        ModKeys::Set(action, dik);
+    }
+
+    // the key pressed for a waiting row (main thread)
+    void ApplyCapture(int dik) {
+        const int id = g_capture.exchange(-1);
+        if (id < 0 || dik <= 0) return;
+        if (dik == 0x01) return;                    // Esc: as it was
+        SetModKey(id, dik == 0xD3 ? 0 : dik);       // Delete: no key
     }
 
     void WriteIni(const char* section, const char* key, int value) {
@@ -365,12 +434,27 @@ namespace {
                 break;
             }
             case kQuickSave:
-                cfg.quickSaveKey = NextQuickKey(cfg.quickSaveKey, dir, false);
-                WriteQuickKey("QuickSaveKey", cfg.quickSaveKey);
+                ModKeys::SetQuickKey(false, NextQuickKey(cfg.quickSaveKey, dir, false));
                 break;
             case kQuickLoad:
-                cfg.quickLoadKey = NextQuickKey(cfg.quickLoadKey, dir, true);
-                WriteQuickKey("QuickLoadKey", cfg.quickLoadKey);
+                ModKeys::SetQuickKey(true, NextQuickKey(cfg.quickLoadKey, dir, true));
+                break;
+            case kKeyPanel:
+            case kKeyHdToggle:
+            case kKeyHdNext:
+            case kKeyHdPrev:
+            case kKeyBetween:
+                if (dir > 0) {
+                    // the next key pressed (Hook_ProcessInputEvent) - Esc cancels, Delete leaves the action without one
+                    g_captured.store(-1);
+                    g_capture.store(id);
+                    return;
+                }
+                SetModKey(id, ModKeys::Default(KeyAction(id)));     // back to its default
+                break;
+            case kKeyReset:
+                ModKeys::ResetDefaults();
+                ShowMessage(id, "PRZYWROCONO");
                 break;
             default: break;
         }
@@ -381,6 +465,7 @@ namespace {
 
     void Open(bool open) {
         if (open == g_open.load()) return;
+        g_capture.store(-1);
         g_open.store(open);
         g_leftClicks.store(0);
         g_rightClicks.store(0);
@@ -440,6 +525,9 @@ namespace {
     uint8_t __cdecl Hook_ProcessInputEvent(uint32_t type, const DiRecord* rec) {
         if ((type & 0xFF) == 1 && rec && (rec->data & 0x80)) {
             if (g_open.load(std::memory_order_relaxed)) {
+                // a key row waiting for its key takes the first one going down
+                int none = -1;
+                if (g_capture.load(std::memory_order_relaxed) >= 0) g_captured.compare_exchange_strong(none, static_cast<int>(rec->ofs & 0xFF));
                 return 0;   // a key going down: the panel's (released keys still reach the game)
             }
             const DWORD closed = g_escClosedAt.load(std::memory_order_relaxed);
@@ -568,12 +656,14 @@ namespace {
     void DrawPanel(uint8_t* dst, LONG dstPitch, bool wide, int w, int h, int originX, int originY,
                    const uint8_t* src, int srcPitch) {
         if (!g_open.load() || !dst || !src || w < 320 || h < 240) return;
-        const int s = h >= 1080 ? 4 : (h >= 600 ? 2 : 1);
+        const bool running = InMission() && !UiScale::DialogShown();
+        const int lines = kItemCount + 6 + (running ? 1 : 0);
+        // letters 4x at 1080 lines and more, smaller when the rows (9 letter pixels at least) would not fit
+        int s = h >= 1080 ? 4 : (h >= 600 ? 2 : 1);
+        while (s > 1 && lines * 9 * s + 36 * s > h) --s;
         const int ch = 6 * s;                   // letter advance
         const int cols = 62;
         const int pad = 3 * ch;
-        const bool running = InMission() && !UiScale::DialogShown();
-        const int lines = kItemCount + 6 + (running ? 1 : 0);
         // rows of 12 letter pixels - closer together when they would not fit (22 options at 1440 lines)
         const int rowH = (std::max)(9 * s, (std::min)(12 * s, (h - 2 * pad) / lines));
         const int pw = (std::min)(cols * ch + 2 * pad, w);
@@ -603,7 +693,7 @@ namespace {
         cv.Fill(pw - bt, 0, pw, ph, kBorder);
 
         int y = pad;
-        const char* title = "USTAWIENIA SHERWOODFIX";
+        const char* title = "USTAWIENIA SHERWOODENGINEFIX " SHERWOODFIX_VERSION;
         cv.Text((pw - TextWidth(title, s)) / 2, y, title, s, kTitle);
         y += rowH * 2;
 
@@ -629,14 +719,21 @@ namespace {
             y += rowH;
         }
         y += rowH;
-        const char* hint1 = "KLIK LUB STRZALKI: ZMIANA   F10 / ESC: ZAMKNIJ";
+        const std::string panelKey = KeyText(ModKeys::Dik(ModKeys::kPanel));
+        char hint1[96];
+        if (KeyAction(g_sel) >= 0) {
+            std::snprintf(hint1, sizeof(hint1), "ENTER LUB KLIK: NOWY KLAWISZ   STRZALKA W LEWO: DOMYSLNY");
+        } else {
+            std::snprintf(hint1, sizeof(hint1), "KLIK LUB STRZALKI: ZMIANA   %s / ESC: ZAMKNIJ", panelKey.c_str());
+        }
         const char* hint2 = "ZMIANY DZIALAJA OD RAZU I SA ZAPISYWANE W SHERWOODFIX.INI";
         cv.Text((pw - TextWidth(hint1, s)) / 2, y, hint1, s, kHint);
         y += rowH;
         cv.Text((pw - TextWidth(hint2, s)) / 2, y, hint2, s, kHint);
         if (running) {
             y += rowH;
-            const char* hint3 = "GRA SIE NIE ZATRZYMUJE - PAUZA: NAJPIERW ESC, POTEM F10";
+            char hint3[96];
+            std::snprintf(hint3, sizeof(hint3), "GRA SIE NIE ZATRZYMUJE - PAUZA: NAJPIERW ESC, POTEM %s", panelKey.c_str());
             cv.Text((pw - TextWidth(hint3, s)) / 2, y, hint3, s, kGrey);
         }
 
@@ -661,7 +758,9 @@ namespace {
     // In the menus and the game's dialogs: where the mod's settings are (the player looked for
     // them in the game's own graphics options).
     void DrawHint(uint8_t* dst, LONG dstPitch, bool wide, int w, int h, const uint8_t* src, int srcPitch) {
-        const char* text = "F10 - USTAWIENIA MODA";
+        char text[96];
+        std::snprintf(text, sizeof(text), "SHERWOODENGINEFIX %s   %s - USTAWIENIA MODA", SHERWOODFIX_VERSION,
+                      KeyText(ModKeys::Dik(ModKeys::kPanel)).c_str());
         const int s = h >= 1080 ? 3 : (h >= 600 ? 2 : 1);
         const int pad = 3 * s;
         const int bw = TextWidth(text, s) + 2 * pad - s, bh = 7 * s + 2 * pad;
@@ -716,7 +815,11 @@ void Poll() {
         default: break;
     }
 
-    if (Pressed(cfg.settingsKey, focused, false)) Open(!g_open.load());
+    // the panel's key (not while the game's key screen is up: that key may be the one being bound there, and not
+    // while a key row of the panel waits - the key pressed is that row's)
+    const bool toggle = Pressed(cfg.settingsKey, focused, false);
+    const bool capturing = g_capture.load() >= 0;
+    if (toggle && !capturing && !KeyDialog::Open()) Open(!g_open.load());
     const bool open = g_open.load();
     const bool esc = Pressed(VK_ESCAPE, focused, false);
     const bool up = Pressed(VK_UP, focused, true);
@@ -727,6 +830,12 @@ void Poll() {
     if (!open) {
         g_leftClicks.store(0);
         g_rightClicks.store(0);
+        return;
+    }
+    if (capturing) {
+        const int dik = g_captured.exchange(-1);
+        if (dik >= 0) ApplyCapture(dik);
+        if (g_leftClicks.exchange(0) > 0 || g_rightClicks.exchange(0) > 0) g_capture.store(-1);    // a click: cancelled
         return;
     }
     if (esc) {
@@ -746,7 +855,7 @@ void Draw(uint8_t* dst, LONG dstPitch, bool dst8888, int w, int h, int originX, 
           const uint8_t* src, int srcPitch) {
     if (g_open.load()) {
         DrawPanel(dst, dstPitch, dst8888, w, h, originX, originY, src, srcPitch);
-    } else if (UiScale::DialogShown() && SherwoodConfig::Get().settingsKey == 0x79) {
+    } else if (UiScale::DialogShown() && ModKeys::Dik(ModKeys::kPanel) > 0) {
         DrawHint(dst, dstPitch, dst8888, w, h, src, srcPitch);
     }
 }

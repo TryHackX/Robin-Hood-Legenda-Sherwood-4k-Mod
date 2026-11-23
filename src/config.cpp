@@ -57,6 +57,58 @@ namespace {
         const int code = SherwoodConfig::KeyFromName(s);
         return code > 0 ? code : -1;
     }
+
+    // one of the mod's own keys (ModKeys): a name (F10, Insert, A, 7 ...), a scan code (0x44), "none" / "brak" / "0" =
+    // none, or - as the INI wrote them before 1.3.6 - a decimal Windows key code (121 = F10); empty or unknown = default
+    int ReadModKey(const char* section, const char* key, int defDik, const char* path) {
+        char text[64]{};
+        GetPrivateProfileStringA(section, key, "", text, sizeof(text), path);
+        char* s = text;
+        while (*s == ' ' || *s == '\t') ++s;
+        for (char* e = s + std::strlen(s); e > s && (e[-1] == ' ' || e[-1] == '\t' || e[-1] == ';'); --e) e[-1] = 0;
+        if (!*s) return defDik;
+        if (!_stricmp(s, "none") || !_stricmp(s, "brak") || !std::strcmp(s, "0")) return 0;
+        bool digits = true;
+        for (const char* c = s; *c; ++c) {
+            if (*c < '0' || *c > '9') digits = false;
+        }
+        if (digits && s[1]) {           // "121": a Windows key code (one digit alone is that digit's key)
+            const int dik = SherwoodConfig::DikFromVk(std::atoi(s));
+            return dik > 0 ? dik : defDik;
+        }
+        const int code = SherwoodConfig::KeyFromName(s);
+        return code > 0 ? code : defDik;
+    }
+}
+
+int SherwoodConfig::VkFromDik(int dik) {
+    if (dik <= 0 || dik > 0xFF) return 0;
+    if (dik >= 0x3B && dik <= 0x44) return VK_F1 + (dik - 0x3B);
+    switch (dik) {
+        case 0x57: return VK_F11;      case 0x58: return VK_F12;
+        case 0xC8: return VK_UP;       case 0xD0: return VK_DOWN;     case 0xCB: return VK_LEFT;    case 0xCD: return VK_RIGHT;
+        case 0xD2: return VK_INSERT;   case 0xD3: return VK_DELETE;   case 0xC7: return VK_HOME;    case 0xCF: return VK_END;
+        case 0xC9: return VK_PRIOR;    case 0xD1: return VK_NEXT;     case 0xC5: return VK_PAUSE;   case 0xB5: return VK_DIVIDE;
+        case 0x9C: return VK_RETURN;   case 0x9D: return VK_RCONTROL; case 0xB8: return VK_RMENU;   case 0xB7: return VK_SNAPSHOT;
+        case 0xDB: return VK_LWIN;     case 0xDC: return VK_RWIN;     case 0xDD: return VK_APPS;
+        case 0x2A: return VK_LSHIFT;   case 0x36: return VK_RSHIFT;   case 0x1D: return VK_LCONTROL; case 0x38: return VK_LMENU;
+        case 0x45: return VK_NUMLOCK;  case 0x46: return VK_SCROLL;   case 0x3A: return VK_CAPITAL;
+        case 0x4E: return VK_ADD;      case 0x4A: return VK_SUBTRACT; case 0x37: return VK_MULTIPLY; case 0x53: return VK_DECIMAL;
+        case 0x52: return VK_NUMPAD0;  case 0x4F: return VK_NUMPAD1;  case 0x50: return VK_NUMPAD2;  case 0x51: return VK_NUMPAD3;
+        case 0x4B: return VK_NUMPAD4;  case 0x4C: return VK_NUMPAD5;  case 0x4D: return VK_NUMPAD6;  case 0x47: return VK_NUMPAD7;
+        case 0x48: return VK_NUMPAD8;  case 0x49: return VK_NUMPAD9;
+        default: break;
+    }
+    if (dik & 0x80) return 0;
+    return static_cast<int>(MapVirtualKeyA(static_cast<UINT>(dik), MAPVK_VSC_TO_VK));
+}
+
+int SherwoodConfig::DikFromVk(int vk) {
+    if (vk <= 0 || vk > 0xFF) return 0;
+    for (int dik = 1; dik < 0x100; ++dik) {
+        if (VkFromDik(dik) == vk) return dik;
+    }
+    return 0;
 }
 
 int SherwoodConfig::KeyFromName(const char* s) {
@@ -89,6 +141,13 @@ const char* SherwoodConfig::KeyName(int code) {
         { 0x52, "Num0" }, { 0x4F, "Num1" }, { 0x50, "Num2" }, { 0x51, "Num3" }, { 0x4B, "Num4" }, { 0x4C, "Num5" },
         { 0x4D, "Num6" }, { 0x47, "Num7" }, { 0x48, "Num8" }, { 0x49, "Num9" }, { 0x37, "Num*" }, { 0xB5, "Num/" },
         { 0x9C, "NumEnter" }, { 0x53, "Num." },
+        // more keys the mod's own keys may sit on (ModKeys, 1.3.6)
+        { 0x4E, "Num+" }, { 0x4A, "Num-" }, { 0x45, "NumLock" }, { 0x3A, "CapsLock" }, { 0x01, "Esc" },
+        { 0xC8, "Up" }, { 0xD0, "Down" }, { 0xCB, "Left" }, { 0xCD, "Right" },
+        { 0x2A, "LShift" }, { 0x36, "RShift" }, { 0x1D, "LCtrl" }, { 0x9D, "RCtrl" }, { 0x38, "LAlt" }, { 0xB8, "RAlt" },
+        { 0x0C, "Minus" }, { 0x0D, "Equals" }, { 0x1A, "LBracket" }, { 0x1B, "RBracket" }, { 0x27, "Semicolon" },
+        { 0x28, "Apostrophe" }, { 0x29, "Grave" }, { 0x2B, "Backslash" }, { 0x33, "Comma" }, { 0x34, "Period" },
+        { 0x35, "Slash" }, { 0xB7, "PrintScreen" }, { 0xDB, "LWin" }, { 0xDC, "RWin" }, { 0xDD, "Apps" },
     };
     for (const auto& k : kKeys) {
         if (k.code == code) return k.name;
@@ -140,16 +199,12 @@ void SherwoodConfig::Load(const std::string& iniPath) {
         GetPrivateProfileStringA("Display", "HDVariant", "", name, sizeof(name), p);
         hdVariant = name;
     }
-    hdKeyToggle        = ReadInt("Display", "HDKeyToggle", hdKeyToggle, p);
-    hdKeyNext          = ReadInt("Display", "HDKeyNext", hdKeyNext, p);
-    hdKeyPrev          = ReadInt("Display", "HDKeyPrev", hdKeyPrev, p);
     hdView             = ReadBool("Display", "HDView", hdView, p);
     smoothSprites      = ReadBool("Display", "SmoothSprites", smoothSprites, p);
     hdWater            = ReadInt("Display", "HDWater", hdWater, p);
     hdSprites          = ReadBool("Display", "HDSprites", hdSprites, p);
     hdInBetween        = ReadBool("Display", "HDInBetween", hdInBetween, p);
     hdInBetweenQuality = (std::max)(0, (std::min)(255, ReadInt("Display", "HDInBetweenQuality", hdInBetweenQuality, p)));
-    hdKeyBetween       = ReadInt("Display", "HDKeyBetween", hdKeyBetween, p);
     uiScale            = ReadInt("Display", "UIScale", uiScale, p);
     mapPosition        = ReadInt("Display", "MapPosition", mapPosition, p);
     mapDragCamera      = ReadBool("Display", "MapDragCamera", mapDragCamera, p);
@@ -162,7 +217,18 @@ void SherwoodConfig::Load(const std::string& iniPath) {
     zoomStep           = ReadInt("Display", "ZoomStep", zoomStep, p);
     zoomMax            = ReadInt("Display", "ZoomMax", zoomMax, p);
     menuZoom           = ReadBool("Display", "MenuZoom", menuZoom, p);
-    settingsKey        = ReadInt("Display", "SettingsKey", settingsKey, p);
+    // the mod's own keys (ModKeys order) and the virtual keys polled for them
+    modKeys[0]         = ReadModKey("Display", "SettingsKey", 0x44, p);
+    modKeys[1]         = ReadModKey("Display", "HDKeyToggle", 0x42, p);
+    modKeys[2]         = ReadModKey("Display", "HDKeyNext", 0x41, p);
+    modKeys[3]         = ReadModKey("Display", "HDKeyPrev", 0x40, p);
+    modKeys[4]         = ReadModKey("Display", "HDKeyBetween", 0x43, p);
+    if (modKeys[0] <= 0) modKeys[0] = 0x44;     // the panel always has a key (it is where the others are set)
+    settingsKey        = VkFromDik(modKeys[0]);
+    hdKeyToggle        = VkFromDik(modKeys[1]);
+    hdKeyNext          = VkFromDik(modKeys[2]);
+    hdKeyPrev          = VkFromDik(modKeys[3]);
+    hdKeyBetween       = VkFromDik(modKeys[4]);
     hdMenu             = ReadBool("Display", "HDMenu", hdMenu, p);
     hdMenuRemake       = ReadBool("Display", "HDMenuRemake", hdMenuRemake, p);
 

@@ -225,6 +225,11 @@ window too. Display Capture always works, but records the whole screen.
 | F7 / F6 | next / previous HD graphics variant |
 | F9 | in-between frames of animations — characters and the level's own (when installed) |
 
+These keys can be changed in the game's own **Options → Keyboard** (since 1.3.6 the rows "Mod: …" at the end of the
+list — click a row, press a key; "Domyślne 1 / 2" also put the mod's defaults back) or in the F10 panel (rows
+"KLAWISZ: …", Enter or click, then the key; "KLAWISZE - PRZYWROC DOMYSLNE" resets them). The bottom-right corner of
+the menus shows the mod's version and the panel's key.
+
 Quick save and quick load are the game's own keys (F1 and F5, unless changed in the game's Options → Keyboard). The
 F10 panel ("KLAWISZ SZYBKIEGO ZAPISU" / "KLAWISZ SZYBKIEGO ODCZYTU") or `QuickSaveKey=` / `QuickLoadKey=` in
 `SherwoodFix.ini` move them to another key, or leave an action without any key (`none` — for example so that a game

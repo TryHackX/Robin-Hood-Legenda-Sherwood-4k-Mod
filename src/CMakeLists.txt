@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(SherwoodEngineFix VERSION 1.3.5 LANGUAGES C CXX)
+project(SherwoodEngineFix VERSION 1.3.6 LANGUAGES C CXX)
 
 # Enforce 32-bit (x86) architecture
 if(NOT CMAKE_SIZEOF_VOID_P EQUAL 4)
@@ -47,6 +47,8 @@ add_library(winmm SHARED
     coop_probe.cpp
     ui_scale.cpp
     settings_menu.cpp
+    mod_keys.cpp
+    key_dialog.cpp
     view_zoom.cpp
     ddm/ddm.cpp
     ddm/ddm_blit.cpp
@@ -79,6 +81,7 @@ target_compile_definitions(winmm PRIVATE
     WIN32_LEAN_AND_MEAN
     NOMINMAX
     _CRT_SECURE_NO_WARNINGS
+    SHERWOODFIX_VERSION="${PROJECT_VERSION}"
 )
 
 set_target_properties(winmm PROPERTIES

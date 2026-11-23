@@ -1,4 +1,5 @@
 #include "logger.h"
+#include "mod_keys.h"       // SHERWOODFIX_VERSION
 #include <windows.h>
 #include <chrono>
 #include <cstdio>
@@ -44,7 +45,7 @@ namespace Logger {
         g_logFile = _fsopen(filename.c_str(), "w", _SH_DENYNO);
         if (g_logFile) {
             fprintf(g_logFile, "============================================================\n");
-            fprintf(g_logFile, " SherwoodEngineFix (x86 C++20) - Log Initialized\n");
+            fprintf(g_logFile, " SherwoodEngineFix " SHERWOODFIX_VERSION " (x86 C++20) - Log Initialized\n");
             fprintf(g_logFile, "============================================================\n");
             fflush(g_logFile);
         }

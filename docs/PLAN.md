@@ -405,6 +405,32 @@ wczytaniu (11:56:21, 11:56:26) i jedna bez przypisanej przyczyny (11:56:52–57;
 jednym rdzeniu — przez wcześniejsze 45 s eksportu gra szła równo). Do obserwacji. Klawisze F6/F7/F8 nadal
 niepotwierdzone (w logu brak „background variant switched").
 
+### 1.3.6 (2026-11-23) — klawisze moda w Opcje → Klawiatura i w F10, wersja w menu
+- Prośba użytkownika: klawisze moda do przypisania w natywnym menu gry i w panelu F10, przy informacji o F10 wersja
+  moda i przypisany klawisz, przycisk resetu do domyślnych.
+- **Klawisze moda** (`ModKeys`, `mod_keys.cpp`): panel, tło HD / oryginał, następny i poprzedni wariant, klatki pośrednie
+  jako kody DirectInput (`SherwoodConfig::modKeys`), sprawdzane dalej jako klawisze wirtualne (`VkFromDik`). INI zapisuje
+  nazwy (`HDKeyToggle=F8`); stare kody dziesiętne Windows (`119`) czytane jak dawniej (`DikFromVk`).
+- **Natywny ekran** (`key_dialog.cpp`, RE w RE_NOTES): lista gry bierze liczbę akcji z RHKeyConfig::Count (stałe 28),
+  klawisze z KeyAt, a nazwy z tekstów 0x97+i. Dla roboczej kopii otwartego ekranu Count = 28+5, KeyAt 28.. = edytowane
+  klawisze moda, FindKey widzi je też (gra czyści duplikat — „Puste!”), a nazwy wierszy wpisuje hak tekstów
+  WidescreenPatch (`KeyDialog::ApplyRowLabel`, tylko dla wywołania z `0x005CEE5D`: te same numery tekstów nazywają
+  strzałki i lewy Shift). Wiersze moda przyjmują też F10, F11, Home i ScrollLock (gra trzyma je z dala od swoich akcji).
+  OK zapisuje (panel zawsze ma klawisz), Domyślne 1/2 przywracają też klawisze moda, Wybór — zapisane, Anuluj porzuca.
+  Polskie litery: kompilator zrobił z `L"\u0144"` dwa znaki (U+0139 U+201E), więc etykiety są w UTF-8 i zamieniane
+  przy pierwszym użyciu (`MultiByteToWideChar`).
+- **Panel F10**: wiersze „KLAWISZ: …” (Enter/klik → następny klawisz z hooka DirectInput; Esc anuluje, Delete = brak,
+  strzałka w lewo = domyślny), odmowa dla klawiszy akcji gry (w menu z profilu gry `[0x006C0E48+0x28]+0x34`) i innych
+  klawiszy moda, wiersz „KLAWISZE - PRZYWROC DOMYSLNE”. Tytuł z wersją, podpowiedzi z przypisanym klawiszem, litery
+  mniejsze, gdy 28 wierszy się nie mieści.
+- **Wersja**: `SHERWOODFIX_VERSION` z CMake (pierwsza linia logu, panel, podpis w prawym dolnym rogu menu: „SHERWOODENGINEFIX
+  1.3.6   F10 - USTAWIENIA MODA” z klawiszem, jaki panel naprawdę ma). Komunikat startowy misji z przypisanymi klawiszami
+  (i w logu).
+- Test w tle na kopii INI (`htest.ps1 -Ini` — domyślnie test pisze do INI gracza!): wiersze z polskimi literami, przypisanie K →
+  OK → `HDKeyBetween=K`, ponowne otwarcie, Domyślne 1, duplikat (Działanie 2 = F8 → „Mod: tło HD” Puste!), F11 na wierszu
+  moda, Anuluj; panel: przechwycenie, odmowy (q, F1, F8), Esc, reset; podpis w menu; komunikat w misji. Polecenie testu
+  `text ID` (kody znaków tekstu gry).
+
 ### 1.3.5 (2026-11-22) — widoczny interfejs blokuje kliknięcie w świat
 - Pytanie użytkownika: czy przezroczyste części przez skalowanie zachodzą gdzieś jeszcze. Pomiar całego ekranu (polecenie
   testu `pointergrid`, `tools\hd\plot_pointer.py`, 14 400 punktów): poprawka 1.3.4 działa wszędzie (ok. 640 punktów

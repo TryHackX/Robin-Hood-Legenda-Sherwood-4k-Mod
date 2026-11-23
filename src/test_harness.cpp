@@ -437,6 +437,24 @@ namespace {
             while (g_mainCmd.load() != 0 && GetTickCount() - t0 < 5000) Sleep(5);
             if (g_mainCmd.exchange(0) != 0) { Ack(seq, "err no game tick in 5 s"); return; }
             Ack(seq, "ok %s %s", g_gridPath.c_str(), g_zoneqOut);
+        } else if (!std::strcmp(cmd, "text")) {
+            // text ID: the game's text routine (0x005E23D0) for one id, its code units in hex - run on this thread (a
+            // read of the text table; the menus have no game tick)
+            unsigned id = 0;
+            if (std::sscanf(args, "%i", reinterpret_cast<int*>(&id)) != 1) { Ack(seq, "err usage: text ID"); return; }
+            alignas(4) uint8_t str[16]{};
+            using PFN_GetText = void*(__cdecl*)(void* out, uint32_t id);
+            using PFN_Tidy = void(__fastcall*)(void* str, void* edx, uint32_t freeIt);
+            reinterpret_cast<PFN_GetText>(0x005E23D0)(str, id);
+            const auto* p = *reinterpret_cast<const uint16_t* const*>(str + 4);
+            const uint32_t n = *reinterpret_cast<const uint32_t*>(str + 8);
+            char out[1024];
+            int pos = std::snprintf(out, sizeof(out), "len=%u:", n);
+            for (uint32_t i = 0; p && i < n && i < 120 && pos < static_cast<int>(sizeof(out)) - 8; ++i) {
+                pos += std::snprintf(out + pos, sizeof(out) - pos, " %04X", p[i]);
+            }
+            reinterpret_cast<PFN_Tidy>(0x004238C0)(str, nullptr, 1);
+            Ack(seq, "ok %s", out);
         } else if (!std::strcmp(cmd, "zonelog")) {
             // the last calls of the zone-under-a-point routine and of the cursor's choice (newest first)
             std::string s;

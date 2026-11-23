@@ -2,6 +2,7 @@
 #include "ddm_hd_font.h"
 #include "ddm_hd_patch.h"
 #include "ddm_hd_sprites.h"
+#include "../mod_keys.h"
 #include "../config.h"
 #include "../diag.h"
 #include "../logger.h"
@@ -2226,14 +2227,25 @@ void OnGameTick() {
     static bool s_hintShown = false;
     if (!s_hintShown && !g_variants.empty()) {
         s_hintShown = true;
-        char text[128];
-        if (Sprites::BetweenAvailable() && SherwoodConfig::Get().hdKeyBetween == 0x78) {
-            std::snprintf(text, sizeof(text), "GRAFIKA HD: %s   F8 - ORYGINAL   F7 F6 - WARIANT   F9 - KLATKI POSREDNIE (%s)",
-                          g_variantName, Sprites::BetweenOn() ? "WL" : "WYL");
-        } else {
-            std::snprintf(text, sizeof(text), "GRAFIKA HD: %s   F8 - ORYGINAL   F7 F6 - WARIANT", g_variantName);
+        // the keys as they are bound now (ModKeys: the F10 panel, the game's key screen)
+        char text[192], toggle[24], next[24], prev[24], between[24];
+        ModKeys::Name(ModKeys::Dik(ModKeys::kHdToggle), toggle, sizeof(toggle));
+        ModKeys::Name(ModKeys::Dik(ModKeys::kHdNext), next, sizeof(next));
+        ModKeys::Name(ModKeys::Dik(ModKeys::kHdPrev), prev, sizeof(prev));
+        ModKeys::Name(ModKeys::Dik(ModKeys::kBetween), between, sizeof(between));
+        int len = std::snprintf(text, sizeof(text), "GRAFIKA HD: %s", g_variantName);
+        if (ModKeys::Dik(ModKeys::kHdToggle) > 0 && len < static_cast<int>(sizeof(text))) {
+            len += std::snprintf(text + len, sizeof(text) - len, "   %s - ORYGINAL", toggle);
+        }
+        if ((ModKeys::Dik(ModKeys::kHdNext) > 0 || ModKeys::Dik(ModKeys::kHdPrev) > 0) && len < static_cast<int>(sizeof(text))) {
+            len += std::snprintf(text + len, sizeof(text) - len, "   %s %s - WARIANT", ModKeys::Dik(ModKeys::kHdNext) > 0 ? next : "",
+                                 ModKeys::Dik(ModKeys::kHdPrev) > 0 ? prev : "");
+        }
+        if (Sprites::BetweenAvailable() && ModKeys::Dik(ModKeys::kBetween) > 0 && len < static_cast<int>(sizeof(text))) {
+            std::snprintf(text + len, sizeof(text) - len, "   %s - KLATKI POSREDNIE (%s)", between, Sprites::BetweenOn() ? "WL" : "WYL");
         }
         RenderDDraw::ShowNotice(text, 7.0);
+        Logger::Info("HD: start notice \"%s\".", text);
     }
 
     const int req = g_request.exchange(kReqNone);

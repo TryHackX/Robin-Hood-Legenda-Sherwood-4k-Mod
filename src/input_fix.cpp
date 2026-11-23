@@ -1,4 +1,5 @@
 #include "input_fix.h"
+#include "mod_keys.h"
 #include "config.h"
 #include "diag.h"
 #include "logger.h"
@@ -423,18 +424,6 @@ namespace {
         return keys;
     }
 
-    // DirectInput scan code -> virtual key (the mod's own keys are virtual keys in the INI)
-    int VirtualKeyOf(int dik) {
-        if (dik >= 0x3B && dik <= 0x44) return VK_F1 + (dik - 0x3B);
-        switch (dik) {
-            case 0x57: return VK_F11;    case 0x58: return VK_F12;
-            case 0xD2: return VK_INSERT; case 0xD3: return VK_DELETE; case 0xC7: return VK_HOME;
-            case 0xCF: return VK_END;    case 0xC9: return VK_PRIOR;  case 0xD1: return VK_NEXT;
-            case 0xC5: return VK_PAUSE;  case 0xB5: return VK_DIVIDE; case 0x9C: return VK_RETURN;
-            default:   return static_cast<int>(MapVirtualKeyA(static_cast<UINT>(dik), MAPVK_VSC_TO_VK));
-        }
-    }
-
     void RestoreGameKeys() {
         if (g_keysApplied && g_keys && KeysReadable(g_keys)) {
             // only where our value still lies (the game may have written its own meanwhile)
@@ -495,6 +484,39 @@ namespace {
 
 namespace InputFix {
 
+const char* GameKeyUse(int dik) {
+    if (dik <= 0) return nullptr;
+    // the running game's table; in the menus (no level yet) the profile's own, which the key screen edits: the
+    // profile [0x006C0E48 + 0x28] (0x0055DBB0), its keys +0x34 (u16* to 28 scan codes)
+    const uint16_t* keys = CurrentKeys();
+    if (!keys) {
+        const auto* prof = *reinterpret_cast<const uint8_t* const*>(0x006C0E48 + 0x28);
+        MEMORY_BASIC_INFORMATION mbi{};
+        if (prof && VirtualQuery(prof + 0x34, &mbi, sizeof(mbi)) && mbi.State == MEM_COMMIT &&
+            !(mbi.Protect & (PAGE_GUARD | PAGE_NOACCESS))) {
+            auto* candidate = *reinterpret_cast<uint16_t* const*>(prof + 0x34);
+            if (KeysReadable(candidate)) {
+                bool plausible = true;
+                for (int i = 0; i < kKeyCount; ++i) plausible = plausible && candidate[i] <= 0xED;
+                if (plausible) keys = candidate;
+            }
+        }
+    }
+    if (keys) {
+        for (int i = 0; i < kQuickSave; ++i) {
+            if (keys[i] == dik) return "a key of another action in the game's key settings";
+        }
+    }
+    const auto& cfg = SherwoodConfig::Get();
+    int save = cfg.quickSaveKey >= 0 ? cfg.quickSaveKey : GameQuickKey(false);
+    int load = cfg.quickLoadKey >= 0 ? cfg.quickLoadKey : GameQuickKey(true);
+    if (save < 0 && keys && keys != CurrentKeys()) save = keys[kQuickSave];     // the profile's (menus)
+    if (load < 0 && keys && keys != CurrentKeys()) load = keys[kQuickLoad];
+    if (save > 0 && save == dik) return "the quick save key";
+    if (load > 0 && load == dik) return "the quick load key";
+    return nullptr;
+}
+
 void OnDialogLoop(bool entering) {
     if (entering) RestoreGameKeys();            // the next tick of a level applies them again
 }
@@ -509,13 +531,11 @@ int GameQuickKey(bool load) {
 const char* QuickKeyClash(int dik, bool load) {
     if (dik <= 0) return nullptr;
     const auto& cfg = SherwoodConfig::Get();
-    const int vk = VirtualKeyOf(dik);
-    if (vk > 0) {
-        if (vk == cfg.settingsKey)  return "the mod's settings panel key (SettingsKey)";
-        if (vk == cfg.hdKeyBetween) return "the mod's in-between frames key (HDKeyBetween)";
-        if (vk == cfg.hdKeyToggle)  return "the mod's HD background key (HDKeyToggle)";
-        if (vk == cfg.hdKeyNext)    return "the mod's next HD variant key (HDKeyNext)";
-        if (vk == cfg.hdKeyPrev)    return "the mod's previous HD variant key (HDKeyPrev)";
+    static char modKey[64];
+    const int action = ModKeys::ActionOf(dik);
+    if (action >= 0) {
+        std::snprintf(modKey, sizeof(modKey), "the mod's own key %s", ModKeys::IniName(action));
+        return modKey;
     }
     int other = load ? cfg.quickSaveKey : cfg.quickLoadKey;
     if (other < 0) other = GameQuickKey(!load);

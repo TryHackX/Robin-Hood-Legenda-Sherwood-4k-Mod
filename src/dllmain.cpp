@@ -22,6 +22,7 @@
 #include "test_harness.h"
 #include "coop_probe.h"
 #include "key_dialog.h"
+#include "save_thumbs.h"
 #include "settings_menu.h"
 #include "ui_scale.h"
 #include "view_zoom.h"
@@ -382,6 +383,7 @@ namespace {
         ViewZoom::Install();        // after UiScale: it checks the original bytes of CenterCameraOn
         SettingsMenu::Install();
         KeyDialog::Install();       // the mod's keys in the game's key screen (Options -> Keyboard)
+        SaveThumbs::Install();      // the saves' pictures from the world seen, the date on the load screen
         CpuOptimizer::Initialize();
         MemoryOpt::Initialize();
         InputFix::Initialize();

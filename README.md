@@ -86,7 +86,10 @@ original DirectDraw wrapper, plus optional HD graphics prepared with AI models f
   on the screen, tree tops and the hedge included, also at any zoom; the first briefing of a level shows the level at
   the zoom you will play with (no black band beside small levels). The portraits of the selected characters stand in
   an even row along the bottom (all of them, also with four or five selected); the skills tooltip of a merry man
-  sits next to the pointer. Loading a saved game or a mission shows a black screen as in the original. Optional
+  sits next to the pointer. Loading a saved game or a mission shows a black screen as in the original. The pictures
+  of saved games show the world as you saw it (the smooth zoom's view, 4:3, without the interface - the game
+  squeezed the whole screen into them, black bands included), and the load / save screens show the date and time
+  of the save clicked under its picture. Optional
   **remade menu backgrounds** that fill the whole widescreen (`hd\menu\remake\`, made with `tools\hd\menu_remake.py`
   from pictures painted by an image AI; F10 → "MENU W HD"). The in-game menu (Esc) opens in ~0.08 s instead of ~0.4 s.
 - **In-game settings panel — F10** (HD graphics, interface, minimap, smooth zoom, menus, VSync, filter, FPS counter,

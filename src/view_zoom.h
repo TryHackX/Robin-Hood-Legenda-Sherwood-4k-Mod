@@ -64,6 +64,9 @@ namespace ViewZoom {
     // the last frame with the world, if it was magnified: its world copy and the magnification
     // (ddm_hd_menu.cpp: the backdrop of a dialog shows the world the same way)
     bool LastWorld(View& out);
+    // the part of the frame (its pixels) whose world the player saw last, above the hedge: the magnified part, or
+    // without magnification the frame's world within the level (save_thumbs.cpp: the save's picture)
+    bool SeenWorld(float& x, float& y, float& w, float& h);
     // A dialog's backdrop render drew the world (UiScale's Draw hook, before the windows): its copy,
     // numbered with Timing::BackdropRenderCount(). BackdropWorld gives it - with the magnification of
     // the last frame - when it belongs to that render: the level the dialog takes from the back buffer

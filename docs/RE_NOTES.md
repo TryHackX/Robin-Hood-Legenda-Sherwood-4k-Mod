@@ -470,3 +470,20 @@ plus stan generatora, dziennik każdego `rand()` (tick, kontekst, wołający, wa
 - **Tło przy zoomie 2.0 na dole małej mapy**: kamera schodzi do `wysokość mapy − 720 + 80` (pas za żywopłotem), więc
   prostokąt źródła tła sięga pod dolną krawędź obrazu poziomu — DirectDraw odrzuciłby taki Blt; DDM rysuje część, która
   jest, w tej samej skali, resztę na czarno [Z].
+
+## Obrazek zapisu, ekran wczytywania (2026-11-24, 1.3.8)
+- **Obrazek zapisu** `0x004DA2F0` thiscall(silnik) → al: SBPicture silnik +0xE4, jego metoda vtable +0x14 bierze klatkę
+  obiektu `[silnik+0xDC]`, potem SBPicture::Resize `0x00612300`(Vec2(160, 120), 1) — dla RGB565 filtrowane `0x006128B0`
+  (`0x00612350` = najbliższy piksel). Wołane z RHGame `0x0050F37A`, `0x0050F4CE`, `0x00512E43`, `0x00513096` (otwarcie
+  menu Esc, szybki zapis). Zapis `0x00511340` kopiuje obrazek (`0x006134A0`) i zapisuje go (`0x00611960`: nagłówek
+  u16 w, u16 h, u32, u32 rozmiar; bzip2 `0x006272A0`) do `<zapis>_t`; nazwę z „_t” robi konstruktor RHSaveGame
+  `0x0056E2A0` (+0x18) [Z].
+- **SBPicture** (vtable `0x0067A880`): +4 rodzaj (3 = RGB565), +0x14 piksele, +0x18 kolor przezroczysty, +0x1C bajty
+  pikseli, +0x20 u16 szerokość, +0x22 u16 wysokość, +0x24 u16 długość wiersza, +0x30 kompresja w pliku (2 = bzip2)
+  [K, zrzut bajtów w grze].
+- **Ekran wczytywania / zapisu** `0x00531BD0` (thiscall okna): wpis `[okno+0x760]` (u16, 0xFFFF brak) z listy
+  +0x6E8 → RHSaveGame profilu (`0x0056FB30`) → nazwa pliku obrazka (`0x0056E6B0`) → SBPicture wczytaj `0x00611660` →
+  powierzchnia `[okno+0x8C4]` (`0x005E4ED0`), rysowana 1:1; poprzednia zwalniana (`0x005E5160`). Lista od
+  najnowszego zapisu [Z].
+- **Bufory DDM**: Flip obraca pamięć w łańcuchu (przedni ← tylny ← … ← przedni): po nim przedni ma klatkę
+  właśnie pokazaną, tylny klatkę wcześniejszą [Z].

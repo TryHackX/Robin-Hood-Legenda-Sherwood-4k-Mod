@@ -21,6 +21,12 @@ namespace SettingsMenu {
     void Draw(uint8_t* dst, LONG dstPitch, bool dst8888, int w, int h, int originX, int originY,
               const uint8_t* src, int srcPitch);
 
+    // Presenter (main thread): a line of the panel's letters (scale `scale`) on a dark plate into the mapped frame
+    // texture, its middle at column `centreX`, its top at row `top` - kept inside the texture; nothing when it
+    // does not fit. Colour RGB565.
+    void DrawLabel(uint8_t* dst, LONG dstPitch, bool dst8888, int w, int h, int centreX, int top, const char* text,
+                   int scale, uint16_t colour);
+
     // Input thread: a mouse button record (DirectInput offset 0x0C.. and data). True = the panel
     // took it, the game must not see it.
     bool OnMouseButton(uint32_t ofs, uint32_t data);

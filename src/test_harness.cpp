@@ -2,6 +2,7 @@
 #include "coop_probe.h"
 #include "diag.h"
 #include "logger.h"
+#include "save_thumbs.h"
 #include "settings_menu.h"
 #include "ui_scale.h"
 #include "view_zoom.h"
@@ -602,6 +603,17 @@ namespace {
             if (std::sscanf(args, "%d", &count) != 1 || count <= 0) { Ack(seq, "err usage: presentlog N"); return; }
             DDM::Present::LogNextFrames(count);
             Ack(seq, "ok");
+        } else if (!std::strcmp(cmd, "thumbs")) {
+            // the saves' pictures: the last one made, the date shown on the load screen;
+            // "thumbs dump NAME": the engine's save picture -> tools\out\harness\NAME.raw (u32 w, h, RGB565)
+            char what[16]{}, name[96]{};
+            if (std::sscanf(args, "%15s %95s", what, name) == 2 && !std::strcmp(what, "dump")) {
+                const std::string path = g_dir + name + ".raw";
+                if (!SaveThumbs::DumpPicture(path.c_str())) { Ack(seq, "err no save picture"); return; }
+            }
+            char text[320];
+            SaveThumbs::Describe(text, sizeof(text));
+            Ack(seq, "ok %s", text);
         } else if (!std::strcmp(cmd, "levelpic")) {
             // the level picture the world is drawn from now (and the copy the HD picture is compared with)
             // -> tools\out\harness\NAME.raw (DDM::HD::DumpLevelPictures)

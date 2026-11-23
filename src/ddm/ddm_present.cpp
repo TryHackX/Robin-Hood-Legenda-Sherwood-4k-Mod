@@ -3,6 +3,7 @@
 #include "../config.h"
 #include "../logger.h"
 #include "../render_ddraw.h"
+#include "../save_thumbs.h"
 #include "../settings_menu.h"
 #include "../test_harness.h"
 #include "../ui_scale.h"
@@ -1468,6 +1469,7 @@ namespace {
             }
             uncover(true);
             RenderDDraw::DrawOverlayRGB565(dst, static_cast<LONG>(map.RowPitch), w, h, bits, pitch);
+            SaveThumbs::Draw(dst, static_cast<LONG>(map.RowPitch), false, w, h, crop.left, crop.top);
             SettingsMenu::Draw(dst, static_cast<LONG>(map.RowPitch), false, w, h, crop.left, crop.top, bits, pitch);
         } else {
             // the FPS line and notices exist for RGB565 only: drawn into a copy first
@@ -1480,6 +1482,7 @@ namespace {
             RenderDDraw::ConvertRGB565ToXRGB8888_SSE2(s_copy.data(), w * 2,
                                                       reinterpret_cast<uint32_t*>(dst), static_cast<int>(map.RowPitch), w, h);
             uncover(false);
+            SaveThumbs::Draw(dst, static_cast<LONG>(map.RowPitch), true, w, h, crop.left, crop.top);
             SettingsMenu::Draw(dst, static_cast<LONG>(map.RowPitch), true, w, h, crop.left, crop.top, bits, pitch);
         }
         g_ctx->Unmap(g_tex, 0);

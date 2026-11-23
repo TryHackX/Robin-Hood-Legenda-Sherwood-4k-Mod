@@ -11,6 +11,7 @@
 #include "../logger.h"
 #include "../window_manager.h"
 #include "../input_fix.h"
+#include "../save_thumbs.h"
 #include "../test_harness.h"
 #include "../ui_scale.h"
 #include "../watchdog.h"
@@ -886,6 +887,11 @@ HRESULT Surface::DoBlt(const RECT* dstRect, Surface* src, const RECT* srcRect, D
     if (uiScaled) {
         // the enlarged picture's source: the pointer over its colour key is not over the picture (UiScale::MapBack)
         UiScale::NoteSource(src, src->serial, s, keyed, keyColor, mirrorX, mirrorY);
+    }
+    // a save's picture on the load / save screen (the date goes under it)
+    if (src->w == 160 && src->h == 120 && s.left == 0 && s.top == 0 && sw == 160 && sh == 120 && g.primary &&
+        (this == g.primary || this == g.primary->back) && Diag::IsMainThread()) {
+        SaveThumbs::NoteScreenBlit(src->serial, src->w, src->h, d);
     }
     DDM_TRACE("BLT  %p(%dx%d%s) d=(%ld,%ld,%ld,%ld) <- %p(%dx%d) s=(%ld,%ld,%ld,%ld) %s%s%s%s by %s",
               static_cast<void*>(this), w, h, isFront() ? " front" : "", d.left, d.top, d.right, d.bottom,
@@ -1764,6 +1770,17 @@ bool CopyFront(std::vector<uint16_t>& out, int& w, int& h) {
     for (int y = 0; y < b.h; ++y) {
         std::memcpy(out.data() + static_cast<size_t>(y) * b.w, b.bits + static_cast<size_t>(y) * b.pitch, static_cast<size_t>(b.w) * 2);
     }
+    w = b.w;
+    h = b.h;
+    return true;
+}
+
+bool FrontBits(const uint8_t*& bits, int& pitch, int& w, int& h) {
+    std::lock_guard<std::recursive_mutex> lock(g.lock);
+    if (!g.primary || !g.primary->st.bits) return false;
+    const Buf b = g.primary->buf();
+    bits = b.bits;
+    pitch = b.pitch;
     w = b.w;
     h = b.h;
     return true;

@@ -405,6 +405,25 @@ wczytaniu (11:56:21, 11:56:26) i jedna bez przypisanej przyczyny (11:56:52–57;
 jednym rdzeniu — przez wcześniejsze 45 s eksportu gra szła równo). Do obserwacji. Klawisze F6/F7/F8 nadal
 niepotwierdzone (w logu brak „background variant switched").
 
+### 1.3.8 (2026-11-24) — obrazki zapisów z widoku gracza, data i godzina zapisu
+- Zgłoszenie użytkownika (zrzut okna „Wczytaj grę”): „zapisy mają błędną brzydką miniaturkę z pasami czarnymi;
+  mogłoby też pokazywać po kliknięciu godzinę i datę, kiedy był zrobiony”.
+- **Obrazek zapisu**: gra robi go w `0x004DA2F0` (RHEngine): cała klatka (2560×1440, 16:9) do SBPicture silnika
+  +0xE4, zmniejszona do 160×120 (ściśnięta do 4:3). W obozie przy płynnym zoomie 1,33 silnik rysuje w 1.0 — obóz
+  1920×1088 w lewym górnym rogu klatki, obok i pod nim czarny pas (ekran gracza pokazuje to powiększone), na dole
+  żywopłot i portrety. Hak (`save_thumbs.cpp`) po oryginale rysuje obrazek od nowa: przy powiększeniu z kopii
+  świata lupy (bez okien), bez niego z ostatnio pokazanej klatki (bufor PRZEDNI — Flip obraca pamięć, tylny ma klatkę
+  wcześniejszą) poniżej górnego paska interfejsu (50 px interfejsu: pieniądze, tarcze, w obozie portrety drużyny) i
+  nad rogami żywopłotu (165 px), z kursorem gry zakrytym tym, co zasłaniał (`Patch::GetCursor`); środek 4:3,
+  każdy piksel obrazka = średnia pikseli, które pokrywa. Stare zapisy mają stare obrazki do ponownego zapisu.
+- **Data i godzina**: ekran wczytywania/zapisu przy kliknięciu wpisu czyta jego plik `<zapis>_t` (`0x00531BD0`) i
+  rysuje obrazek 1:1 (160×120). Hak `CreateFileA` gry (`diag.cpp`) zgłasza odczyt `…\Savegame\…_t` → czas pliku
+  zapisu (czas lokalny), DDM zgłasza pierwszy rysunek 160×120 na ekranie po nim (ta powierzchnia), prezenter rysuje
+  pod nim „DD.MM.RRRR GG:MM” literami panelu F10 (`SettingsMenu::DrawLabel`), póki ekran go rysuje.
+- Test w tle na kopii zapisów gracza (nowa kopia przed testami, gracz grał): obrazki przy zoomie 1,34 / 2 / 3 i po
+  szybkim zapisie (F1 też woła `0x004DA2F0`), okno „Wczytaj” z menu głównego i z menu pauzy — data pod obrazkiem,
+  nowy szybki zapis z nowym obrazkiem. Polecenie testu `thumbs [dump NAZWA]`.
+
 ### 1.3.7 (2026-11-23) — HD także na mapie z obiektami misji, bez rozciągania na dole małych map
 - Zgłoszenie YouTubera: dwa kadry z lasu (Rozdroże 01) z lekkiego przybliżenia — skała „zmienia kształt”, krzak z
   postaciami ma gruby raster. Dopasowanie kadrów do obrazu poziomu (SIFT, pełne przekształcenie afiniczne): kadr przy

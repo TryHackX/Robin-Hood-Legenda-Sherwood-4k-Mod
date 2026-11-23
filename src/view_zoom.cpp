@@ -610,6 +610,29 @@ bool Magnifying() {
     return g_enabled && g_shown.on && g_shown.m > 1.0005f;
 }
 
+bool SeenWorld(float& x, float& y, float& w, float& h) {
+    const float band = HedgeBand();
+    if (Magnifying() && g_shown.frameW >= 1.0f && g_shown.worldH > band + 1.0f) {
+        x = g_shown.cropX;
+        y = g_shown.cropY;
+        w = g_shown.frameW / g_shown.m;
+        h = (g_shown.worldH - band) / g_shown.m;
+        return true;
+    }
+    const uint8_t* e = Engine();
+    if (!e) return false;
+    const float zr = F(e, kRenderZoom) > 0.01f ? F(e, kRenderZoom) : F(e, kZoom);
+    const float W = F(e, kViewport), H = F(e, kViewport + 4) - Strip();
+    const float lw = F(e, kLevelSize), lh = F(e, kLevelSize + 4);
+    const float camX = F(e, kRenderCam), camY = F(e, kRenderCam + 4);
+    if (zr < 0.01f || W < 1.0f || H < 1.0f || lw < 1.0f || lh < 1.0f) return false;
+    x = 0.0f;
+    y = 0.0f;
+    w = (std::min)(W, (lw - camX) * zr);
+    h = (std::min)((std::min)(H, (lh - camY) * zr), H - band);
+    return w >= 1.0f && h >= 1.0f;
+}
+
 bool ScreenToFrame(float& x, float& y) {
     if (!g_enabled || !g_shown.on || y >= g_shown.worldH) return false;
     x = g_shown.cropX + x / g_shown.m;

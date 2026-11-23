@@ -34,6 +34,8 @@ namespace DDM {
     bool CopyBack(std::vector<uint16_t>& out, int& w, int& h);
     // ... its pixels in place (main thread: valid until the game draws again)
     bool BackBits(const uint8_t*& bits, int& pitch, int& w, int& h);
+    // the frame presented last, its pixels in place (main thread: valid until the next Flip)
+    bool FrontBits(const uint8_t*& bits, int& pitch, int& w, int& h);
     // ... rect `r` of it filled with one colour (main thread)
     bool FillBack(const RECT& r, uint16_t colour);
 }

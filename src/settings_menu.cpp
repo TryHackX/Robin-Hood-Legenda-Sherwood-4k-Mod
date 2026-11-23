@@ -860,6 +860,20 @@ void Draw(uint8_t* dst, LONG dstPitch, bool dst8888, int w, int h, int originX, 
     }
 }
 
+void DrawLabel(uint8_t* dst, LONG dstPitch, bool dst8888, int w, int h, int centreX, int top, const char* text,
+               int scale, uint16_t colour) {
+    const int s = (std::max)(1, scale);
+    const int pad = 2 * s;
+    const int bw = TextWidth(text, s) + 2 * pad - s, bh = 7 * s + 2 * pad;
+    if (!dst || !text || !text[0] || bw > w || top < 0 || top + bh > h) return;
+    const int x0 = (std::max)(0, (std::min)(w - bw, centreX - bw / 2));
+    g_panel.resize(static_cast<size_t>(bw) * bh);
+    std::fill(g_panel.begin(), g_panel.end(), static_cast<uint16_t>(0x10A2));
+    const Canvas cv{ g_panel.data(), bw, bh };
+    cv.Text(pad, pad, text, s, colour);
+    CopyOut(dst, dstPitch, dst8888, x0, top, bw, bh);
+}
+
 bool OnMouseButton(uint32_t ofs, uint32_t data) {
     if (!g_open.load(std::memory_order_relaxed) || ofs < 0x0C || ofs > 0x0F) return false;
     if (!(data & 0x80)) return false;           // releases reach the game (a press before opening)

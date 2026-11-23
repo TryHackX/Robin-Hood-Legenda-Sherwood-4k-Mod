@@ -1,6 +1,7 @@
 #include "diag.h"
 #include "config.h"
 #include "logger.h"
+#include "save_thumbs.h"
 
 #include <MinHook.h>
 #include <algorithm>
@@ -252,6 +253,11 @@ namespace {
     HANDLE WINAPI Hook_CreateFileA(LPCSTR name, DWORD access, DWORD share, LPSECURITY_ATTRIBUTES sa,
                                    DWORD disposition, DWORD flags, HANDLE templ) {
         const HANDLE h = o_CreateFileA(name, access, share, sa, disposition, flags, templ);
+        if (h != INVALID_HANDLE_VALUE) {
+            const DWORD err = GetLastError();
+            SaveThumbs::NoteFileOpened(name, access);   // a save's picture read: the load screen shows its date
+            SetLastError(err);
+        }
         if (h == INVALID_HANDLE_VALUE) {
             const DWORD err = GetLastError();
             if (err != ERROR_FILE_NOT_FOUND && err != ERROR_PATH_NOT_FOUND && err != ERROR_ACCESS_DENIED &&

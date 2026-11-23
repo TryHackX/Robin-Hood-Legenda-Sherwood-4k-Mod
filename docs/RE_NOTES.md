@@ -454,3 +454,19 @@ plus stan generatora, dziennik każdego `rand()` (tick, kontekst, wołający, wa
 - **Teksty gry**: `0x005E23D0` cdecl(std::wstring* out, id) — prawdziwe UTF-16 („Przybliż” kończy U+017C); VC6
   std::wstring: +0 bajt alokatora, +4 wchar_t* (bajt licznika przed buforem), +8 długość, +0xC pojemność; _Grow
   `0x004239E0` thiscall(n, trim), _Tidy `0x004238C0`. Hak WidescreenPatch (etykiety rozdzielczości) jest tu jedynym [Z].
+
+## Podgląd Shift, obiekty w obrazie poziomu (2026-11-23, 1.3.7)
+- **Podgląd miejsc dostępnych (lewy Shift)**: `0x0057D260` thiscall(strefa: wielokąt +4, co najmniej 3 wierzchołki,
+  aktywna +0x34) → `0x00461BC0` thiscall(widok `[0x006C0814]`, lista wielokątów, kolor, alfa, …) ret 0x10. Widok:
+  prostokąt +0..+0xC (lewy górny róg = kamera), zoom +0x14, bufor klatki +0x18, menedżer rysowania +0x1C. Przycięcie do
+  widoku `0x00609AA0`, potem SBDrawManager `0x005EEC00` thiscall(obraz poziomu `[[0x006C0A88]+0x48C4]`, bufor klatki,
+  wielokąt, (int)(2·zoom), kamera x, kamera y, kolor, alfa) ret 0x20: wielokąt rasteryzowany w układzie poziomu (krawędzie
+  +0x134, aktywne +0x13C / liczba +0x138, wiersze +0x144..+0x14C), piksel poziomu (x, y) → bufor ((x − kamera) · zoom);
+  procedury MMX według formatu (565: 1 → `0x00624748`, 2 → `0x006245FC`, inne → `0x0062469C` = każdy piksel 2×2) [Z].
+- **Obiekty misji w obrazie poziomu**: po wczytaniu (Lock całej powierzchni poziomu, `0x006135D0` ← `0x004C2FB1`) gra
+  kopiuje kawałki tła 1:1 do małych powierzchni obiektów (`0x00609130` / `0x004AA2B3`), a potem wkleja te powierzchnie
+  — już z obiektem — z powrotem w obraz poziomu (`0x0060E577` ← `0x004A9E6D` ← `0x0055025C`), wszystko przed pierwszą
+  klatką [Z, ślad wczytania zapisu].
+- **Tło przy zoomie 2.0 na dole małej mapy**: kamera schodzi do `wysokość mapy − 720 + 80` (pas za żywopłotem), więc
+  prostokąt źródła tła sięga pod dolną krawędź obrazu poziomu — DirectDraw odrzuciłby taki Blt; DDM rysuje część, która
+  jest, w tej samej skali, resztę na czarno [Z].

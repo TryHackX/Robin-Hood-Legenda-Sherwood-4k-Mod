@@ -602,6 +602,13 @@ namespace {
             if (std::sscanf(args, "%d", &count) != 1 || count <= 0) { Ack(seq, "err usage: presentlog N"); return; }
             DDM::Present::LogNextFrames(count);
             Ack(seq, "ok");
+        } else if (!std::strcmp(cmd, "levelpic")) {
+            // the level picture the world is drawn from now (and the copy the HD picture is compared with)
+            // -> tools\out\harness\NAME.raw (DDM::HD::DumpLevelPictures)
+            char name[96]{};
+            if (std::sscanf(args, "%95s", name) != 1) { Ack(seq, "err usage: levelpic NAME"); return; }
+            const std::string path = g_dir + name + ".raw";
+            Ack(seq, DDM::HD::DumpLevelPictures(path.c_str()) ? "ok %s" : "err no level picture", path.c_str());
         } else if (!std::strcmp(cmd, "dbg")) {
             // leave out drawing routines (bit mask, see DDM::HD::SetDebugFlags); dbg 0 = everything on
             unsigned flags = 0;

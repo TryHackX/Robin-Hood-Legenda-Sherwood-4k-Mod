@@ -25,6 +25,7 @@
 #include <deque>
 #include <unordered_map>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -199,6 +200,63 @@ namespace {
         }
         g_baseMap = hd;
         g_baseKey = key;
+    }
+
+    // The level picture as the game loaded it, before the mission put its objects into it (2026-11-23, a YouTuber's
+    // forest: after loading a saved game the level's objects - fallen branches, heaps of leaves - are blitted into the
+    // picture before its first frame; that picture's key had no HD picture, so the whole level showed in the original
+    // pixels). NoteBlitInto keeps a copy of a large surface before the first blit into it, for the last two surfaces.
+    struct Pristine {
+        unsigned serial = 0;
+        int w = 0, h = 0;
+        std::vector<uint16_t> px;
+    };
+    std::mutex g_pristineLock;
+    Pristine g_pristine[2];     // [0] the latest
+
+    // the copy of surface `serial` as it was loaded, if it is still the picture `src` shows except for a few objects
+    bool PristineOf(unsigned serial, const Buf& src, std::vector<uint16_t>& out, double& changed) {
+        std::lock_guard<std::mutex> lk(g_pristineLock);
+        for (Pristine& p : g_pristine) {
+            if (p.serial != serial || p.w != src.w || p.h != src.h || p.px.size() != static_cast<size_t>(src.w) * src.h) continue;
+            size_t n = 0, diff = 0;
+            for (int y = 0; y < src.h; y += 4) {
+                const auto* cur = reinterpret_cast<const uint16_t*>(src.bits + static_cast<size_t>(y) * src.pitch);
+                const uint16_t* was = p.px.data() + static_cast<size_t>(y) * src.w;
+                for (int x = (y >> 2) & 3; x < src.w; x += 4) {
+                    ++n;
+                    diff += cur[x] != was[x];
+                }
+            }
+            changed = n ? static_cast<double>(diff) / static_cast<double>(n) : 1.0;
+            if (changed > 0.1) return false;    // another picture in the same surface
+            out = p.px;
+            return true;
+        }
+        return false;
+    }
+
+    // the copy of surface `serial` has served (or was not needed): its memory back - the serial stays, so the next
+    // blit into the surface (an object put in while playing) takes no new one
+    void ForgetPristine(unsigned serial) {
+        std::lock_guard<std::mutex> lk(g_pristineLock);
+        for (Pristine& p : g_pristine) {
+            if (p.serial == serial) std::vector<uint16_t>().swap(p.px);
+        }
+    }
+
+    // pixel (X, Y) of picture `p` magnified 2x: the four nearest pixels' centres weighted 9/3/3/1 of 16
+    inline uint16_t Smooth2xAt(const Buf& p, int X, int Y) {
+        const int x = X >> 1, y = Y >> 1;
+        const int xb = (std::max)(0, (std::min)(p.w - 1, (X & 1) ? x + 1 : x - 1));
+        const int yb = (std::max)(0, (std::min)(p.h - 1, (Y & 1) ? y + 1 : y - 1));
+        const auto* ra = reinterpret_cast<const uint16_t*>(p.bits + static_cast<size_t>(y) * p.pitch);
+        const auto* rb = reinterpret_cast<const uint16_t*>(p.bits + static_cast<size_t>(yb) * p.pitch);
+        const uint32_t a = ra[x], b = ra[xb], c = rb[x], d = rb[xb];
+        const uint32_t r = ((a >> 11) * 9 + (b >> 11) * 3 + (c >> 11) * 3 + (d >> 11) + 8) >> 4;
+        const uint32_t g = (((a >> 5) & 63) * 9 + ((b >> 5) & 63) * 3 + ((c >> 5) & 63) * 3 + ((d >> 5) & 63) + 8) >> 4;
+        const uint32_t bl = ((a & 31) * 9 + (b & 31) * 3 + (c & 31) * 3 + (d & 31) + 8) >> 4;
+        return static_cast<uint16_t>((r << 11) | (g << 5) | bl);
     }
 
     // share of the level picture (sampled) that differs from the copy; -1 = no comparable copy
@@ -625,6 +683,7 @@ namespace {
         uint32_t cols = 0, rows = 0;
     };
     std::unordered_map<uint64_t, OverlaySeen> g_overlays;      // main thread
+    std::atomic<bool> g_overlaysReset{ false };                 // any thread -> OverlayAt: forget the decisions
     unsigned g_overlaysDrawn = 0, g_overlaysLogged = 0;
 
     // the sprite at level pixel (lx, ly): such an overlay? (the decision per sprite and place, again when its pixels
@@ -638,6 +697,7 @@ namespace {
         auto px = [&](uint32_t x, uint32_t y) {
             return reinterpret_cast<const uint16_t*>(reinterpret_cast<const uint8_t*>(src) + static_cast<size_t>(y) * srcPitch)[x];
         };
+        if (g_overlaysReset.exchange(false)) g_overlays.clear();
         // the decision per sprite and place, again when its pixels change (a probe of 32 of them)
         uint32_t probe = 2166136261u;
         for (uint32_t k = 0; k < 32; ++k) probe = (probe ^ px((k * 37u) % cols, (k * 53u) % rows)) * 16777619u;
@@ -713,7 +773,9 @@ namespace {
                     std::fclose(f);
                 }
             }
-            if (g_overlaysLogged < 16 && opaque >= 256) {
+            // the first 16 of a start; in the background test with dbg 65536 all of them
+            const bool dumping = TestHarness::Enabled() && (g_debugFlags.load(std::memory_order_relaxed) & 65536u);
+            if ((g_overlaysLogged < 16 || dumping) && opaque >= 256) {
                 ++g_overlaysLogged;
                 Logger::Info("HD: sprite %ux%u at level %d,%d - %u %% close to the level picture, %u %% holed like a checkerboard%s.",
                              cols, rows, lx, ly, close * 100 / opaque, holes * 100 / opaque,
@@ -736,18 +798,28 @@ namespace {
     template <bool Keyed>
     bool LevelOverlay2x(const uint16_t* src, uint16_t* dst, uint32_t cols, uint32_t rows, int srcPitch, int dstPitch,
                         uint32_t factor, uint32_t marker) {
-        if (!Keyed) return false;
+        // background test, dbg 65536: why a large sprite is not looked at
+        const bool diag = TestHarness::Enabled() && (g_debugFlags.load(std::memory_order_relaxed) & 65536u) && cols * rows >= 4096;
+        auto refuse = [&](const char* why, int x, int y) {
+            static int s_lines = 0;
+            if (diag && s_lines < 200) {
+                ++s_lines;
+                Logger::Info("HD: sprite %ux%u (2x) not looked at as an overlay: %s (%d,%d).", cols, rows, why, x, y);
+            }
+            return false;
+        };
+        if (!Keyed) return refuse("not keyed", 0, 0);
         const HdMap* hd = g_current;
         if (!hd || !hd->px || !g_originValid || g_baseMap != hd || hd->w != 2 * g_srcW || hd->h != 2 * g_srcH || dstPitch <= 0 ||
             (dstPitch & 1)) {
-            return false;
+            return refuse("no HD picture of this level", g_originValid ? 1 : 0, g_baseMap == hd ? 1 : 0);
         }
         Buf db{};
-        if (!FindLockedBuf(dst, db) || db.pitch != dstPitch) return false;
+        if (!FindLockedBuf(dst, db) || db.pitch != dstPitch) return refuse("not drawn into a known surface", 0, 0);
         const size_t dOff = static_cast<size_t>(reinterpret_cast<const uint8_t*>(dst) - db.bits);
         const int hx = g_originX + static_cast<int>((dOff % static_cast<size_t>(db.pitch)) / 2);   // HD pixel of dst
         const int hy = g_originY + static_cast<int>(dOff / static_cast<size_t>(db.pitch));
-        if ((hx | hy) & 1) return false;                        // not on the level's own pixel grid
+        if ((hx | hy) & 1) return refuse("off the level's own pixel grid at HD", hx, hy);
         const OverlaySeen* seen = OverlayAt(src, cols, rows, srcPitch, hx / 2, hy / 2, marker);
         if (!seen) return false;
         auto px = [&](uint32_t x, uint32_t y) {
@@ -1344,10 +1416,50 @@ bool VariantOn() {
 
 void SetDebugFlags(unsigned flags) {
     g_debugFlags.store(flags);
+    g_overlaysReset.store(true);    // the overlay decisions made again (and logged / dumped with 65536)
 }
 
 unsigned DebugFlags() {
     return g_debugFlags.load(std::memory_order_relaxed);
+}
+
+void NoteBlitInto(const Buf& surf, unsigned serial) {
+    if (!surf.bits || serial == 0 || surf.w < 640 || surf.h < 480 || surf.pitch < surf.w * 2) return;
+    std::lock_guard<std::mutex> lk(g_pristineLock);
+    if (g_pristine[0].serial == serial || g_pristine[1].serial == serial) return;
+    std::vector<uint16_t> px;
+    try {
+        px.resize(static_cast<size_t>(surf.w) * surf.h);
+    } catch (...) {
+        return;
+    }
+    for (int y = 0; y < surf.h; ++y) {
+        std::memcpy(px.data() + static_cast<size_t>(y) * surf.w, surf.bits + static_cast<size_t>(y) * surf.pitch,
+                    static_cast<size_t>(surf.w) * 2);
+    }
+    g_pristine[1] = std::move(g_pristine[0]);
+    g_pristine[0].serial = serial;
+    g_pristine[0].w = surf.w;
+    g_pristine[0].h = surf.h;
+    g_pristine[0].px = std::move(px);
+}
+
+bool DumpLevelPictures(const char* path) {
+    const uint8_t* bits = g_srcBits;
+    const int w = g_srcW, h = g_srcH, pitch = g_srcPitch;
+    if (!bits || w <= 0 || h <= 0 || pitch < w * 2) return false;
+    FILE* f = std::fopen(path, "wb");
+    if (!f) return false;
+    const uint32_t hdr[3] = { 0x4350564Cu, static_cast<uint32_t>(w), static_cast<uint32_t>(h) };     // "LVPC"
+    std::fwrite(hdr, sizeof(hdr), 1, f);
+    for (int y = 0; y < h; ++y) std::fwrite(bits + static_cast<size_t>(y) * pitch, 2, static_cast<size_t>(w), f);
+    const bool base = g_base.size() == static_cast<size_t>(w) * h;
+    const std::vector<uint16_t> zero(static_cast<size_t>(w), 0);
+    for (int y = 0; y < h; ++y) {
+        std::fwrite(base ? g_base.data() + static_cast<size_t>(y) * w : zero.data(), 2, static_cast<size_t>(w), f);
+    }
+    std::fclose(f);
+    return true;
 }
 
 bool TryBackgroundBlit(const Buf& dst, const RECT& d, const RECT& clip,
@@ -1413,6 +1525,23 @@ bool TryBackgroundBlit(const Buf& dst, const RECT& d, const RECT& clip,
                     g_current = Resolve(g_variant, key, src.w, src.h);
                     g_groundAnims.clear(); // another level (or another state of it)
                     TakeBase(src, key, g_current);
+                    // no HD picture for it: the picture as the game loaded it, before the mission's objects went in
+                    const unsigned serial = static_cast<unsigned>(reinterpret_cast<uintptr_t>(identity));
+                    std::vector<uint16_t> loaded;
+                    double objects = 0.0;
+                    if ((!g_current || !g_current->px) && PristineOf(serial, src, loaded, objects)) {
+                        const Buf lb{ reinterpret_cast<uint8_t*>(loaded.data()), src.w * 2, src.w, src.h };
+                        const uint64_t loadedKey = HashPixels(lb);
+                        const HdMap* own = loadedKey != key ? Resolve(g_variant, loadedKey, src.w, src.h) : nullptr;
+                        if (own && own->px) {
+                            g_current = own;
+                            TakeBase(lb, loadedKey, own);
+                            Logger::Info("HD: the level picture has the mission's objects drawn into it (%.2f %% of it) - its HD "
+                                         "picture by the key of the picture as loaded %016llx; the objects from the game's picture.",
+                                         objects * 100.0, static_cast<unsigned long long>(loadedKey));
+                        }
+                    }
+                    ForgetPristine(serial);
                 }
             }
             g_identity = identity;
@@ -1478,9 +1607,10 @@ bool TryBackgroundBlit(const Buf& dst, const RECT& d, const RECT& clip,
                 std::memcpy(out + (hx - hx0), row + hx, static_cast<size_t>(run - hx) * 2);
                 hx = run;
             }
-            // changed level pixels: the game's picture, each pixel twice as large
+            // changed level pixels: the game's picture magnified 2x with the smooth filter's weights (as 2x2 blocks
+            // the mission's objects in the picture - heaps of leaves, the carriage - looked coarse in the HD one)
             while (hx < hx0 + (x1 - x0) && cur[hx >> 1] != base[hx >> 1]) {
-                out[hx - hx0] = cur[hx >> 1];
+                out[hx - hx0] = Smooth2xAt(src, hx, hy);
                 ++hx;
             }
         }

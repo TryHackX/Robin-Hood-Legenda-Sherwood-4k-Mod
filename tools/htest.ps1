@@ -1,10 +1,11 @@
-# Background test scenario: start the game hidden (tools\gamectl.ps1 -Start -Headless), skip the
+﻿# Background test scenario: start the game hidden (tools\gamectl.ps1 -Start -Headless), skip the
 # intro videos, and - unless -MenuOnly - press "Graj!" and wait until the mission runs.
 # Nothing appears on the screen and no sound is played. Afterwards drive it with tools\hctl.ps1,
 # and end it with:  tools\hctl.ps1 -Cmd quit
 #   -Ini file     settings for this run (default: the player's SherwoodFix.ini)
 #   -MenuOnly     stop at the main menu
-param([string]$Ini = '', [switch]$MenuOnly)
+#   -NoSaveBackup no copy of the saves here (the caller has one and changed the saves on purpose)
+param([string]$Ini = '', [switch]$MenuOnly, [switch]$NoSaveBackup)
 
 $ctl  = Join-Path $PSScriptRoot 'gamectl.ps1'
 $hctl = Join-Path $PSScriptRoot 'hctl.ps1'
@@ -48,7 +49,9 @@ function Stop-TestInstance([string]$why) {
 # (2026-11-22: a test started right after the player's session and wrote into it), a new copy is made first -
 # what the test changes can then be put back with save_backup.ps1 -Restore without undoing the player's game.
 $backup = Join-Path $PSScriptRoot 'save_backup.ps1'
-if ((powershell -NoProfile -ExecutionPolicy Bypass -File $backup -Check | Out-String) -notmatch 'unchanged') {
+# -NoSaveBackup: the caller made the copy itself and changed the saves on purpose since (tools\save_test.ps1 puts
+# another player's profile in) - a copy of that state would later be put back as the player's (2026-11-23)
+if (-not $NoSaveBackup -and (powershell -NoProfile -ExecutionPolicy Bypass -File $backup -Check | Out-String) -notmatch 'unchanged') {
     Write-Output ("saves changed since the last copy - new copy: " +
                   ((powershell -NoProfile -ExecutionPolicy Bypass -File $backup | Select-Object -Last 1) -replace '^backup: ', ''))
 }

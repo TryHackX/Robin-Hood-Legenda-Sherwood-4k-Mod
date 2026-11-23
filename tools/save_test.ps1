@@ -1,4 +1,4 @@
-# Background test on a chosen save. The hidden game starts at the main menu, "Graj!" continues the profile
+﻿# Background test on a chosen save. The hidden game starts at the main menu, "Graj!" continues the profile
 # (a Continue point opens with the pause menu: "Kontynuuj"), then the given harness steps run and their shots
 # become PNGs in tools\out\. Afterwards the player's saves are put back from the latest backup (make one first:
 # tools\save_backup.ps1) and the instance ends. Nothing appears on the screen.
@@ -49,7 +49,7 @@ if ($Profile) {
 $startLine = 0
 $shots = @()
 try {
-    $start = powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'htest.ps1') -Ini $Ini -MenuOnly
+    $start = powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'htest.ps1') -Ini $Ini -MenuOnly -NoSaveBackup
     if (($start | Select-Object -Last 1) -notmatch '^menu: ok') { Write-Output "RESULT: no menu: $($start | Select-Object -Last 1)"; exit 1 }
     if (Test-Path $log) { $startLine = (Get-Content $log).Count }
     if (-not $NoPlay) {

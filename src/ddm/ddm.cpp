@@ -777,6 +777,12 @@ bool CursorPictureHd(const Buf& dst, const RECT& d, const RECT& clip, const Surf
 
 HRESULT Surface::DoBlt(const RECT* dstRect, Surface* src, const RECT* srcRect, DWORD flags, const DDBLTFX* fx) {
     if (!st.bits) return DDERR_SURFACELOST;
+    // a large surface that is not the screen, drawn into from another one: the first time, its picture is kept - a
+    // level picture as loaded, before the mission puts its objects into it (HD::NoteBlitInto)
+    if (src && src != this && w >= 640 && h >= 480 && g.primary && this != g.primary && this != g.primary->back &&
+        (w != g.primary->w || h != g.primary->h)) {
+        HD::NoteBlitInto(buf(), serial);
+    }
     ++gen; // this surface is being drawn into
     ++genWrite;
     if (w * h < 600000 && Diag::IsMainThread()) {
@@ -1088,13 +1094,42 @@ HRESULT Surface::DoBlt(const RECT* dstRect, Surface* src, const RECT* srcRect, D
         return DD_OK;
     }
 
-    if (s.left < 0) s.left = 0;
-    if (s.top < 0) s.top = 0;
-    if (s.right > src->w) s.right = src->w;
-    if (s.bottom > src->h) s.bottom = src->h;
-    RECT clip = d;
-    if (s.right > s.left && s.bottom > s.top && ClipToBounds(clip, w, h)) {
-        Stretch16(buf(), d, src->buf(), s, clip, keyed, keyColor, mirrorX, mirrorY);
+    // A source reaching past its surface - a level smaller than the view (the bottom rows of a small map behind the
+    // hedge): the destination is cut by the same share and the rest of it is black, as with the copy above. Cutting
+    // only the source stretched what there is over the whole destination: without the level's HD picture (F8, a
+    // picture without one) the level came out up to 9/8 taller than the figures and the game's overlays drawn on
+    // it (2026-11-23, a YouTuber's frames: a rock's Shift highlight and a bush beside their places at a map's bottom).
+    RECT sc = s, dc = d;
+    if (sc.left < 0) {
+        const int n = MulDiv(-sc.left, dw, sw);
+        if (mirrorX) dc.right -= n; else dc.left += n;
+        sc.left = 0;
+    }
+    if (sc.right > src->w) {
+        const int n = MulDiv(sc.right - src->w, dw, sw);
+        if (mirrorX) dc.left += n; else dc.right -= n;
+        sc.right = src->w;
+    }
+    if (sc.top < 0) {
+        const int n = MulDiv(-sc.top, dh, sh);
+        if (mirrorY) dc.bottom -= n; else dc.top += n;
+        sc.top = 0;
+    }
+    if (sc.bottom > src->h) {
+        const int n = MulDiv(sc.bottom - src->h, dh, sh);
+        if (mirrorY) dc.top += n; else dc.bottom -= n;
+        sc.bottom = src->h;
+    }
+    if (!keyed && src != this && (dc.left != d.left || dc.top != d.top || dc.right != d.right || dc.bottom != d.bottom)) {
+        RECT whole = d;
+        if (ClipToBounds(whole, w, h)) {
+            Fill16(buf(), whole, 0);
+            HD::Patch::OnOverwrite(buf(), whole);
+        }
+    }
+    RECT clip = dc;
+    if (sc.right > sc.left && sc.bottom > sc.top && dc.right > dc.left && dc.bottom > dc.top && ClipToBounds(clip, w, h)) {
+        Stretch16(buf(), dc, src->buf(), sc, clip, keyed, keyColor, mirrorX, mirrorY);
         Diag::AddValue(Diag::C_PX_STRETCH, static_cast<uint64_t>(clip.right - clip.left) * (clip.bottom - clip.top));
     }
     return DD_OK;

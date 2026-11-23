@@ -405,6 +405,31 @@ wczytaniu (11:56:21, 11:56:26) i jedna bez przypisanej przyczyny (11:56:52–57;
 jednym rdzeniu — przez wcześniejsze 45 s eksportu gra szła równo). Do obserwacji. Klawisze F6/F7/F8 nadal
 niepotwierdzone (w logu brak „background variant switched").
 
+### 1.3.7 (2026-11-23) — HD także na mapie z obiektami misji, bez rozciągania na dole małych map
+- Zgłoszenie YouTubera: dwa kadry z lasu (Rozdroże 01) z lekkiego przybliżenia — skała „zmienia kształt”, krzak z
+  postaciami ma gruby raster. Dopasowanie kadrów do obrazu poziomu (SIFT, pełne przekształcenie afiniczne): kadr przy
+  1,82 (silnik 1.0) zgadza się z obrazem 1× co do piksela, kadr przy ~2,31 (silnik 2.0) ma tło rozciągnięte w pionie
+  o 8,7 %. Zielone pola to podgląd gry pod lewym Shiftem (miejsca dostępne: płaskie szczyty skał, pnie) — u niego
+  przy silniku 2.0 przesunięty nad skałę.
+- **Rozciąganie** (`ddm.cpp`, ogólna ścieżka powiększenia): źródło wychodzące poza powierzchnię (widok sięga pod dolną
+  krawędź mapy, za żywopłot) było przycinane, cel nie — 640 wierszy na 1440, skala pionowa 2,25 zamiast 2,0. Gra rysuje
+  podgląd Shift (`0x0057D260` → `0x00461BC0` → `0x005EEC00`, RE_NOTES) i postacie z prawdziwą skalą 2,0, więc
+  rozjeżdżały się z tłem do 1/8 wysokości klatki (tylko bez obrazu HD: F8, mapa bez obrazu HD — ścieżka HD rysuje
+  dokładnie 2×). Teraz cel przycięty w tej samej proporcji, reszta czarna (jak w ścieżce 1:1). Test w tle: tło
+  2,0 × 2,0, przesunięcie podświetlenia względem świata 0 na 82 próbkach; F8 też 2,0 × 2,0.
+- **Obiekty misji w obrazie poziomu** (`ddm_hd.cpp`): przy wczytaniu zapisu (i na starcie misji) gra kopiuje kawałki tła
+  pod obiekty i wkleja z powrotem kawałki z obiektami (zwalone gałęzie, kupki liści) — przed pierwszą klatką. Klucz
+  takiego obrazu (zapis 104 YouTubera, Rozdroże 03: `bcc140b26853869b`, 0,44 % pikseli zmienione) nie miał pliku HD:
+  cały poziom w oryginalnych pikselach. DDM przed pierwszym wklejeniem w dużą powierzchnię, która nie jest ekranem,
+  zapamiętuje jej obraz (`HD::NoteBlitInto`, dwie ostatnie); gdy klucz obrazu nie ma pliku HD, a kopia różni się od
+  obrazu najwyżej w 10 %, obraz HD jest szukany po kluczu kopii (`40f626704a738ad6`), a kopia staje się obrazem
+  odniesienia — obiekty idą z obrazu gry. Pamięć kopii wraca po pierwszym wyszukaniu. Zmienione piksele (obiekty,
+  powóz) powiększane wygładzająco (wagi 9/3/3/1) zamiast bloków 2×2.
+- Test w tle na zapisie 104: HD i 4K w użyciu, podświetlenie Shift na skale, liście gładkie; zwykły start misji
+  gracza bez zmian; cisza (`audio_check`). Polecenie testu `levelpic NAZWA` (obraz poziomu i obraz odniesienia),
+  `htest.ps1 -NoSaveBackup` (`save_test.ps1` podmienia zapisy celowo — kopia takiego stanu wróciłaby jako zapisy
+  gracza), log decyzji nakładek przy `dbg 65536`.
+
 ### 1.3.6 (2026-11-23) — klawisze moda w Opcje → Klawiatura i w F10, wersja w menu
 - Prośba użytkownika: klawisze moda do przypisania w natywnym menu gry i w panelu F10, przy informacji o F10 wersja
   moda i przypisany klawisz, przycisk resetu do domyślnych.

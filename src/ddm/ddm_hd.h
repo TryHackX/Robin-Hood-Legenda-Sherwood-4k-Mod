@@ -47,6 +47,11 @@ namespace DDM::HD {
                            const Buf& src, const RECT& s, const void* identity,
                            unsigned lockGeneration, unsigned writeGeneration);
 
+    // DDM, before a blit into `surf` (serial `serial`) - a large surface that is not the screen: the first one into
+    // a surface keeps a copy of it - a level picture as the game loaded it, before the mission put its objects into
+    // it (fallen branches, heaps of leaves). A level picture without an HD picture of its own finds it by that copy.
+    void NoteBlitInto(const Buf& surf, unsigned serial);
+
     // A colour-keyed sprite is about to be magnified 2x onto the frame `dst` (rect `s` of `src`
     // to rect `d`, visible part `clip`). Returns true if it is a ground animation (water, chimney
     // smoke) that was handled here: its difference to the level picture over the HD background,
@@ -110,6 +115,10 @@ namespace DDM::HD {
     // size, written to tools\out\harness\sprite2x_<w>x<h>.raw as the game has it.
     void SetDebugFlags(unsigned flags);
     unsigned DebugFlags();
+
+    // Test harness: the level picture the game draws the world from now and the copy the HD picture is compared
+    // with (g_base) -> path: "LVPC", u32 w, h, then w*h RGB565 of the picture, w*h of the copy (zeros without one).
+    bool DumpLevelPictures(const char* path);
 
     // Main thread: the colour table (RGB565 -> RGB565) of the game's last colouring of a dialog's
     // backdrop (0x0053B330, hue and factor as the game passed them), nullptr when none was made yet.
